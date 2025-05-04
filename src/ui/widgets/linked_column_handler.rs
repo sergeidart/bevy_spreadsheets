@@ -1,174 +1,179 @@
 // src/ui/widgets/linked_column_handler.rs
 use bevy::prelude::*;
 use bevy_egui::egui::{self, Id};
+use bevy_egui::egui::containers::popup::PopupCloseBehavior;
 use std::collections::HashSet;
 
 use crate::sheets::resources::SheetRegistry;
-use crate::ui::elements::editor::state::EditorWindowState;
+// Removed state import as it's no longer needed for cache mutation here
+// use crate::ui::elements::editor::state::EditorWindowState;
 
-// Import sibling modules
-use super::linked_column_cache::{self, CacheResult};
-use super::linked_column_visualization::{
-    self, LinkedEditorVisParams, LinkedEditorVisOutput,
-};
+// Removed sibling cache import as cache lookup happens outside now
+// use super::linked_column_cache::{self, CacheResult};
+// Import the specific function needed from the visualization module
+use super::linked_column_visualization::add_linked_text_edit;
 
 /// Main handler function for the linked column editor widget.
-/// Orchestrates caching, interaction handling, validation, and visualization.
-///
-/// # Arguments
-///
-/// * `ui` - The egui UI context.
-/// * `id` - A unique ID for the widget instance.
-/// * `current_value` - The current persistent string value of the cell.
-/// * `target_sheet_name` - The name of the sheet the link points to.
-/// * `target_column_index` - The index of the column in the target sheet.
-/// * `registry` - Immutable reference to the `SheetRegistry`.
-/// * `state` - Mutable reference to the `EditorWindowState` (for cache).
-///
-/// # Returns
-///
-/// * `Option<String>` - The new string value if it was changed and validated, otherwise `None`.
+/// Orchestrates TextEdit drawing, popup management, validation, and value commitment.
+/// Assumes allowed_values have been fetched previously.
 pub fn handle_linked_column_edit(
     ui: &mut egui::Ui,
     id: egui::Id,
     current_value: &str,
     target_sheet_name: &str,
     target_column_index: usize,
-    registry: &SheetRegistry,
-    state: &mut EditorWindowState,
+    registry: &SheetRegistry, // Still needed for potential future logic? Keep for now.
+    // state: &mut EditorWindowState, // Removed state
+    allowed_values: &HashSet<String>, // Added allowed_values reference
 ) -> Option<String> {
+    trace!(
+        "handle_linked_column_edit START. Original value: '{}', Target: '{}[{}]'",
+        current_value, target_sheet_name, target_column_index
+    );
+
     let mut final_new_value: Option<String> = None;
     let original_string = current_value.to_string();
-    let text_edit_id = id.with("ac_text_edit"); // Consistent ID for temp memory
+    let text_edit_id = id.with("ac_text_edit");
+    let popup_id = id.with("ac_popup");
 
-    // --- 1. Get Allowed Values (from cache or populate) ---
-    let (allowed_values, link_error) = match linked_column_cache::get_or_populate_linked_options(
-        target_sheet_name,
-        target_column_index,
-        registry,
-        state,
-    ) {
-        CacheResult::Success(values) => (values, None),
-        CacheResult::Error(err_msg) => (&HashSet::new(), Some(err_msg)), // Use empty set on error
-    };
+    // --- 1. Get Allowed Values ---
+    // Allowed values are now passed directly into the function.
+    // Visual error state (red background) is handled outside this function in edit_cell_widget
+    // based on whether the current_value is in the allowed_values passed to it.
+    let link_error: Option<String> = None; // Assume link itself is okay if we got valid allowed_values
 
     // --- 2. Manage Input Text (using egui temporary memory) ---
-    // Get or initialize the text in egui's temporary memory for the TextEdit
-    let mut input_text = ui
-        .memory_mut(|mem| {
-            mem.data
-                .get_temp_mut_or_insert_with(text_edit_id, || original_string.clone())
-                .clone()
-        });
+    let mut input_text = ui.memory_mut(|mem| {
+        mem.data
+            .get_temp_mut_or_insert_with::<String>(text_edit_id, || -> String { original_string.clone() })
+            .clone()
+    });
+    trace!("Input text from memory: '{}',", input_text);
 
-    // Reset input_text to original if focus is lost *before* drawing the UI this frame,
-    // but only if the temporary memory differs from the original value.
-    // This prevents stale temporary memory from persisting visually if no interaction happens.
-    if !ui.memory(|mem| mem.has_focus(text_edit_id)) && input_text != original_string {
-        input_text = original_string.clone();
+    // --- 3. Draw the TextEdit and Handle Focus for Popup ---
+    let text_edit_response = add_linked_text_edit(
+        ui,
+        id,
+        &mut input_text,
+        &link_error, // Pass link_error (mostly for hover text if needed)
+        &original_string,
+    );
+
+    // Update temporary memory immediately on change
+    if text_edit_response.changed() {
+        trace!("TextEdit changed, updating temporary memory with: '{}'", input_text);
         ui.memory_mut(|mem| mem.data.insert_temp(text_edit_id, input_text.clone()));
     }
 
-    // --- 3. Prepare Suggestions ---
-    let mut filtered_suggestions: Vec<String> = Vec::new();
-    let show_popup = ui.memory(|mem| mem.has_focus(text_edit_id)) && link_error.is_none();
-    if show_popup {
-        let input_lower = input_text.to_lowercase();
-        if !input_text.is_empty() {
-            filtered_suggestions = allowed_values
-                .iter()
-                .filter(|v| v.to_lowercase().contains(&input_lower))
-                .cloned()
-                .collect::<Vec<_>>();
-        } else {
-            // Show all allowed values if input is empty
-            filtered_suggestions = allowed_values.iter().cloned().collect::<Vec<_>>();
-        }
-        filtered_suggestions.sort_unstable(); // Sort for consistent display
-        filtered_suggestions.truncate(10); // Limit displayed suggestions
+    if text_edit_response.gained_focus() && link_error.is_none() {
+        debug!("TextEdit gained focus, opening popup.");
+        ui.memory_mut(|mem| mem.open_popup(popup_id));
     }
 
-    // --- 4. Render the UI ---
-    let vis_params = LinkedEditorVisParams {
+    // --- 4. Show Popup and Handle Selection ---
+    let mut clicked_suggestion_in_popup: Option<String> = None;
+    egui::containers::popup::popup_below_widget(
         ui,
-        id,
-        input_text: &mut input_text, // Pass mutable ref to allow modification by visualization
-        original_value: &original_string,
-        filtered_suggestions: &filtered_suggestions,
-        show_popup,
-        validation_error: None, // Validation happens after UI interaction
-        link_error: link_error.clone(), // Pass link error for display
-    };
-    let vis_output = linked_column_visualization::show_linked_editor_ui(vis_params);
+        popup_id,
+        &text_edit_response,
+        PopupCloseBehavior::CloseOnClickOutside, // Keep default close behavior
+        |popup_ui| {
+            popup_ui.set_min_width(text_edit_response.rect.width().max(150.0));
+            let frame = egui::Frame::popup(popup_ui.style());
+            frame.show(popup_ui, |frame_ui| {
+                egui::ScrollArea::vertical()
+                    .max_height(200.0)
+                    .auto_shrink([false; 2])
+                    .show(frame_ui, |scroll_ui| {
+                        scroll_ui.vertical(|list_ui| {
+                            // Read current input text directly from memory for filtering
+                            let current_input = list_ui.memory(|mem| {
+                                mem.data
+                                    .get_temp(text_edit_id)
+                                    .unwrap_or_else(|| original_string.clone())
+                            });
+                            let input_lower = current_input.to_lowercase();
 
-    // --- 5. Handle Interaction Results ---
+                            // Filter suggestions based on current input
+                            let suggestions = allowed_values
+                                .iter()
+                                .filter(|v| v.to_lowercase().contains(&input_lower))
+                                .take(20); // Limit suggestions shown
+
+                            let mut any_suggestions = false;
+                            for suggestion in suggestions {
+                                any_suggestions = true;
+                                // Highlight if current input exactly matches suggestion
+                                let is_selected = current_input == *suggestion;
+                                let response = list_ui.selectable_label(is_selected, suggestion);
+
+                                // Handle click on suggestion
+                                if response.clicked() {
+                                    debug!("Suggestion Clicked: '{}'.", suggestion);
+                                    clicked_suggestion_in_popup = Some(suggestion.clone());
+                                    // Update temp memory immediately on click
+                                    list_ui.memory_mut(|mem| mem.data.insert_temp(text_edit_id, suggestion.clone()));
+                                    // Close popup on selection
+                                    list_ui.memory_mut(|mem| mem.close_popup());
+                                }
+                            }
+
+                            // Show message if no suggestions match
+                            if !any_suggestions {
+                                list_ui.label(if allowed_values.is_empty() {
+                                    "(No options available)" // Link might be valid but target column is empty
+                                } else {
+                                    "(No matching options)"
+                                });
+                            }
+                        });
+                    });
+            });
+        },
+    );
+
+    // --- 5. Determine Committed Value ---
     let mut committed_value: Option<String> = None;
 
-    if let Some(clicked_suggestion) = vis_output.clicked_suggestion {
-        // A suggestion was clicked, this is the committed value.
-        committed_value = Some(clicked_suggestion);
-        // The visual input_text was already updated by the visualization function.
-    } else if let Some(response) = vis_output.text_edit_response {
-        // No suggestion click, check for lost focus or Enter key press on TextEdit.
-        if response.lost_focus()
-            || (response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)))
-        {
-            // Commit the value currently in the input_text buffer.
-            committed_value = Some(input_text.clone());
-
-            // Remove focus if Enter was pressed while focused.
-            if response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                ui.memory_mut(|mem| mem.request_focus(Id::NULL));
-            }
-
-            // Ensure the committed text persists in temporary memory after focus loss/Enter.
-            ui.memory_mut(|mem| mem.data.insert_temp(text_edit_id, input_text.clone()));
-        }
+    if let Some(clicked) = clicked_suggestion_in_popup {
+        // Commit value if a suggestion was clicked
+        debug!("Commit via popup click. Value: '{}'", clicked);
+        committed_value = Some(clicked.clone());
+        // Ensure local input_text matches clicked value for consistency this frame
+        // input_text = clicked.clone(); // This line might be redundant now
+    } else if text_edit_response.lost_focus() {
+        // Commit value when focus is lost
+        let buffer = ui.memory(|mem| mem.data.get_temp(text_edit_id).unwrap_or_else(|| original_string.clone()));
+        debug!("Commit on LostFocus: '{}'", buffer);
+        committed_value = Some(buffer);
+    } else if text_edit_response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+         // Commit value on Enter key press while focused
+        let buffer = ui.memory(|mem| mem.data.get_temp(text_edit_id).unwrap_or_else(|| original_string.clone()));
+        debug!("Commit on Enter: '{}'", buffer);
+        committed_value = Some(buffer);
+         // Defocus and close popup on Enter commit
+        ui.memory_mut(|mem| mem.request_focus(Id::NULL));
+        ui.memory_mut(|mem| mem.close_popup());
     }
 
     // --- 6. Validate and Determine Final Output ---
-    let mut validation_error_msg: Option<String> = None;
-    if let Some(ref committed) = committed_value {
-        // Only validate non-empty committed values against the allowed set.
-        // Empty string might be implicitly valid or invalid based on column definition (e.g., OptionString vs String).
-        // For linked columns, we generally treat empty as valid unless specific rules are added.
-        if !committed.is_empty() && !allowed_values.contains(committed) {
-            validation_error_msg = Some(format!(
-                "Invalid: '{}' not in target col {} of '{}'",
-                committed,
-                target_column_index + 1,
-                target_sheet_name
-            ));
+    // Validation (checking if committed_value is in allowed_values) now happens
+    // outside this function in `edit_cell_widget` to determine background color.
+    // Here, we just check if the committed value is different from the original.
+    if let Some(ref val) = committed_value {
+        if *val != original_string {
+            debug!("Change detected: '{}' -> '{}'", original_string, val);
+            final_new_value = Some(val.clone());
         } else {
-            // Value is valid (or empty), check if it differs from the original.
-            if *committed != original_string {
-                final_new_value = Some(committed.clone());
-            }
+            debug!("No change: '{}' matches original.", val);
         }
     }
+    // else: No commit event occurred this frame.
 
-    // --- 7. Re-render UI if Validation Error Occurred (Optional but good UX) ---
-    // If validation failed *after* the initial render, we might want to redraw
-    // the widget immediately with the error indicator. This requires re-calling
-    // the visualization function with the updated validation status.
-    if validation_error_msg.is_some() && link_error.is_none() {
-        // Need to get input_text again as it might have been modified by the first UI pass
-         let mut current_input_text = ui.memory(|mem| mem.data.get_temp(text_edit_id).unwrap_or_else(|| original_string.clone()));
+    // --- 7. Show Validation Error (Visual Only) ---
+    // Visual validation (background color) handled by edit_cell_widget.
 
-        let vis_params_rerender = LinkedEditorVisParams {
-            ui, // ui is already &mut
-            id,
-            input_text: &mut current_input_text, // Pass potentially updated text
-            original_value: &original_string,
-            filtered_suggestions: &filtered_suggestions, // Suggestions remain the same
-            show_popup: false, // Don't show popup during re-render for error
-            validation_error: validation_error_msg, // Pass the error message
-            link_error: link_error, // Pass link error status again
-        };
-        // We don't need the output of the re-render, just the visual effect.
-        linked_column_visualization::show_linked_editor_ui(vis_params_rerender);
-    }
-
-    // --- 8. Return the final validated and changed value ---
+    // --- 8. Return the result ---
+    trace!("handle_linked_column_edit END. Returning: {:?}", final_new_value);
     final_new_value
 }

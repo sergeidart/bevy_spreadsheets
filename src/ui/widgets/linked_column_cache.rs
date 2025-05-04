@@ -6,7 +6,7 @@ use crate::sheets::resources::SheetRegistry;
 use crate::ui::elements::editor::state::EditorWindowState;
 
 /// Represents the result of trying to get or populate the cache.
-pub(super) enum CacheResult<'a> {
+pub(crate) enum CacheResult<'a> {
     /// Successfully retrieved or populated cache, contains reference to allowed values.
     Success(&'a HashSet<String>),
     /// An error occurred during cache population (e.g., target not found).
@@ -26,7 +26,7 @@ pub(super) enum CacheResult<'a> {
 ///
 /// * `CacheResult::Success(&HashSet<String>)` - On success, containing a reference to the set of allowed values.
 /// * `CacheResult::Error(String)` - On failure, containing an error message.
-pub(super) fn get_or_populate_linked_options<'a>(
+pub(crate) fn get_or_populate_linked_options<'a>(
     target_sheet_name: &str,
     target_column_index: usize,
     registry: &SheetRegistry,
