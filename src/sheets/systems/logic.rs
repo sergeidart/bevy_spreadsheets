@@ -1,46 +1,35 @@
 // src/sheets/systems/logic.rs
 use bevy::prelude::*;
-// ADDED IMPORT for save function
-use crate::sheets::systems::io::save::save_single_sheet; // CHANGED IMPORT
-
+use crate::sheets::systems::io::save::save_single_sheet;
 use crate::sheets::{
-    // definitions::SheetGridData, // Keep if needed
     events::{
         AddSheetRowRequest, RequestRenameSheet, RequestDeleteSheet,
         RequestDeleteSheetFile, RequestRenameSheetFile,
         SheetOperationFeedback,
+        RequestUpdateColumnName, // Added Event
     },
     resources::SheetRegistry,
 };
 
-/// Handles the `AddSheetRowRequest` event sent from the UI. Triggers save on success.
 pub fn handle_add_row_request(
     mut events: EventReader<AddSheetRowRequest>,
     mut registry: ResMut<SheetRegistry>,
     mut feedback_writer: EventWriter<SheetOperationFeedback>,
 ) {
-    // No need for 'changed' flag, save inside the loop
     for event in events.read() {
         let sheet_name = &event.sheet_name;
         if let Some(sheet_data) = registry.get_sheet_mut(sheet_name) {
             if let Some(metadata) = &sheet_data.metadata {
                 let num_cols = metadata.column_headers.len();
-                if num_cols > 0 {
-                    sheet_data.grid.push(vec![String::new(); num_cols]);
-                    let msg = format!("Added row to sheet '{}'.", sheet_name);
-                    info!("{}", msg); // Keep internal log
-                    feedback_writer.send(SheetOperationFeedback { // Send user feedback
-                         message: msg,
-                         is_error: false,
-                     });
-                    // Save the specific sheet immediately
-                    info!("Row added to '{}', triggering immediate save.", sheet_name);
-                    save_single_sheet(&registry, sheet_name); // MODIFIED CALL
-                } else {
-                    let msg = format!("Cannot add row to sheet '{}': No columns defined in metadata.", sheet_name);
-                    warn!("{}", msg);
-                    feedback_writer.send(SheetOperationFeedback { message: msg, is_error: true });
-                }
+                sheet_data.grid.push(vec![String::new(); num_cols]);
+                let msg = format!("Added row to sheet '{}'.", sheet_name);
+                info!("{}", msg); // Keep internal log
+                feedback_writer.send(SheetOperationFeedback { // Send user feedback
+                     message: msg,
+                     is_error: false,
+                 });
+                info!("Row added to '{}', triggering immediate save.", sheet_name);
+                save_single_sheet(&registry, sheet_name); // MODIFIED CALL
             } else {
                  let msg = format!("Cannot add row to sheet '{}': Metadata missing.", sheet_name);
                  warn!("{}", msg);
@@ -95,7 +84,10 @@ pub fn handle_rename_request(
         }
 
         // --- EXECUTION (Call registry rename) ---
-        match registry.rename_sheet(old_name, new_name.clone()) {
+        // Perform rename within a scope to manage mutable borrow
+        let rename_result = registry.rename_sheet(old_name, new_name.clone());
+
+        match rename_result {
             Ok(moved_data) => {
                 let success_msg = format!("Successfully renamed sheet '{}' to '{}' in registry.", old_name, new_name);
                 info!("{}", success_msg);
@@ -103,10 +95,11 @@ pub fn handle_rename_request(
 
                 // --- Trigger Save for the NEW sheet name ---
                 info!("Registry renamed to '{}', triggering immediate save.", new_name);
-                save_single_sheet(&registry, new_name); // MODIFIED CALL (save new name)
+                save_single_sheet(&registry, new_name); // Call save with immutable borrow
 
                 // --- Trigger File Rename AFTER saving the new state ---
                 if let Some(old_filename) = old_filename_opt {
+                    // Use filename from the moved data (which should be updated)
                     let new_filename_opt = moved_data.metadata.map(|meta| meta.data_filename);
                     if let Some(new_filename) = new_filename_opt {
                         if !old_filename.is_empty() && !new_filename.is_empty() && old_filename != new_filename {
@@ -144,10 +137,8 @@ pub fn handle_delete_request(
         info!("Handling delete request for sheet: '{}'", sheet_name);
 
         // --- VALIDATION (Check existence before getting filename) ---
-        let filename_to_delete = match registry.get_sheet(sheet_name) {
-            Some(sheet_data) => {
-                 sheet_data.metadata.as_ref().map(|m| m.data_filename.clone())
-            }
+        let metadata_opt = match registry.get_sheet(sheet_name) {
+            Some(sheet_data) => sheet_data.metadata.clone(), // Clone metadata if exists
             None => {
                  let msg = format!("Delete failed: Sheet '{}' not found.", sheet_name);
                  error!("{}", msg);
@@ -163,12 +154,18 @@ pub fn handle_delete_request(
                 info!("{}", msg); // Internal log
                 feedback_writer.send(SheetOperationFeedback { message: msg, is_error: false });
 
-                // Request file deletion if a filename existed
-                if let Some(filename) = filename_to_delete {
-                    if !filename.is_empty() {
-                        file_delete_writer.send(RequestDeleteSheetFile { filename: filename.clone() });
-                        info!("Requested deletion of associated file: '{}'", filename);
-                    }
+                // Request file deletion if a filename existed in the original metadata
+                if let Some(metadata) = metadata_opt {
+                     let filename_to_delete = &metadata.data_filename;
+                     let meta_filename_to_delete = format!("{}.meta.json", metadata.sheet_name); // Get meta filename
+
+                     if !filename_to_delete.is_empty() {
+                         file_delete_writer.send(RequestDeleteSheetFile { filename: filename_to_delete.clone() });
+                         info!("Requested deletion of associated grid file: '{}'", filename_to_delete);
+                     }
+                     // Always request deletion of the metadata file (even if grid filename was empty)
+                     file_delete_writer.send(RequestDeleteSheetFile { filename: meta_filename_to_delete.clone() });
+                     info!("Requested deletion of associated metadata file: '{}'", meta_filename_to_delete);
                 }
             }
             Err(e) => {
@@ -178,5 +175,73 @@ pub fn handle_delete_request(
                 feedback_writer.send(SheetOperationFeedback { message: msg, is_error: true });
             }
         }
+    }
+}
+
+pub fn handle_update_column_name(
+    mut events: EventReader<RequestUpdateColumnName>,
+    mut registry: ResMut<SheetRegistry>,
+    mut feedback_writer: EventWriter<SheetOperationFeedback>,
+) {
+    let mut changed_sheets = Vec::new(); // Track sheets that changed to save later
+
+    for event in events.read() {
+        let sheet_name = &event.sheet_name;
+        let col_index = event.column_index;
+        let new_name = event.new_name.trim(); // Trim whitespace
+
+        if new_name.is_empty() {
+            let msg = format!("Failed to rename column {} for sheet '{}': New name cannot be empty.", col_index + 1, sheet_name);
+            warn!("{}", msg);
+            feedback_writer.send(SheetOperationFeedback { message: msg, is_error: true });
+            continue;
+        }
+
+        let mut success = false;
+        if let Some(sheet_data) = registry.get_sheet_mut(sheet_name) {
+            if let Some(metadata) = &mut sheet_data.metadata {
+                if col_index < metadata.column_headers.len() {
+                    // Check if new name conflicts with existing names in the same sheet (case-insensitive check might be better)
+                    if metadata.column_headers.iter().any(|h| h.eq_ignore_ascii_case(new_name)) {
+                        let msg = format!("Failed to rename column for sheet '{}': Name '{}' already exists (ignoring case).", sheet_name, new_name);
+                        warn!("{}", msg);
+                        feedback_writer.send(SheetOperationFeedback { message: msg, is_error: true });
+                        continue; // Skip this event
+                    }
+
+                    let old_name = std::mem::replace(&mut metadata.column_headers[col_index], new_name.to_string());
+                    let msg = format!("Renamed column {} from '{}' to '{}' for sheet '{}'.", col_index + 1, old_name, new_name, sheet_name);
+                    info!("{}", msg);
+                    feedback_writer.send(SheetOperationFeedback { message: msg, is_error: false });
+                    success = true; // Mark as success
+
+                } else {
+                    let msg = format!("Failed to rename column for sheet '{}': Index {} out of bounds ({} columns).", sheet_name, col_index, metadata.column_headers.len());
+                    error!("{}", msg);
+                    feedback_writer.send(SheetOperationFeedback { message: msg, is_error: true });
+                }
+            } else {
+                let msg = format!("Failed to rename column for sheet '{}': Metadata missing.", sheet_name);
+                warn!("{}", msg);
+                feedback_writer.send(SheetOperationFeedback { message: msg, is_error: true });
+            }
+        } else {
+            let msg = format!("Failed to rename column: Sheet '{}' not found.", sheet_name);
+            warn!("{}", msg);
+            feedback_writer.send(SheetOperationFeedback { message: msg, is_error: true });
+        }
+
+        // If successful, mark the sheet for saving
+        if success {
+             if !changed_sheets.contains(sheet_name) {
+                 changed_sheets.push(sheet_name.clone());
+             }
+        }
+    }
+
+    // Trigger save for all affected sheets after processing events
+    for sheet_name in changed_sheets {
+         info!("Column name updated for '{}', triggering immediate save.", sheet_name);
+         save_single_sheet(&registry, &sheet_name);
     }
 }

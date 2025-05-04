@@ -56,3 +56,11 @@ pub struct RequestInitiateFileUpload;
 pub struct RequestProcessUpload {
     pub path: PathBuf,
 }
+
+// --- Added Event ---
+#[derive(Event, Debug, Clone)]
+pub struct RequestUpdateColumnName {
+    pub sheet_name: String,
+    pub column_index: usize,
+    pub new_name: String,
+}

@@ -1,6 +1,6 @@
 // src/sheets/systems/io/save.rs
 
-use bevy::prelude::{error, info, trace, warn, EventReader}; // Adjusted imports
+use bevy::prelude::{error, info, trace, warn, EventReader, Res, ResMut}; // Adjusted imports
 use std::{
     fs::{self, File},
     io::BufWriter,
@@ -10,67 +10,96 @@ use std::{
 // Import get_default_data_base_path correctly relative to this file's module
 use super::get_default_data_base_path;
 use crate::sheets::{
-    definitions::SheetGridData, // Needed for save_single_sheet
+    definitions::{SheetGridData, SheetMetadata}, // Added SheetMetadata
     events::{RequestDeleteSheetFile, RequestRenameSheetFile},
     resources::SheetRegistry,
 };
 
 
-/// Saves the grid data for a single, specified sheet to its corresponding file.
+/// Saves the grid data AND metadata for a single, specified sheet to their corresponding files.
 /// Takes the registry (read-only) and the sheet name as arguments.
 pub fn save_single_sheet(registry: &SheetRegistry, sheet_name: &str) {
     info!("Attempting to save single sheet: '{}'", sheet_name);
 
-    // 1. Get Sheet Data
     match registry.get_sheet(sheet_name) {
         Some(sheet_data) => {
-            // 2. Get Metadata and Filename
+            let base_path = get_default_data_base_path();
+            if let Err(e) = fs::create_dir_all(&base_path) {
+                error!("Failed to ensure data directory '{:?}' exists for saving sheet '{}': {}. Aborting save.", base_path, sheet_name, e);
+                return;
+            }
+
+            let mut grid_saved_successfully = false;
+
+            // --- Save Grid Data ---
             if let Some(meta) = &sheet_data.metadata {
                 let filename = &meta.data_filename;
                 if filename.is_empty() {
-                    warn!("Skipping save for sheet '{}': Filename in metadata is empty.", sheet_name);
-                    return;
-                }
-
-                // Ensure sheet name in metadata matches (sanity check)
-                if meta.sheet_name != sheet_name {
+                    warn!("Skipping grid save for sheet '{}': Filename in metadata is empty.", sheet_name);
+                } else if meta.sheet_name != sheet_name {
                      error!(
-                         "Save inconsistency: Metadata name ('{}') does not match requested save name ('{}'). Aborting save.",
+                         "Save inconsistency: Metadata name ('{}') does not match requested save name ('{}'). Aborting grid save.",
                          meta.sheet_name, sheet_name
-                    );
-                     return;
-                }
-
-                // 3. Prepare File Path
-                let base_path = get_default_data_base_path();
-                if let Err(e) = fs::create_dir_all(&base_path) {
-                    error!("Failed to create data directory '{:?}' for saving sheet '{}': {}. Aborting save.", base_path, sheet_name, e);
-                    return;
-                }
-                let full_path = base_path.join(filename);
-                trace!("Saving sheet '{}' to '{}'...", sheet_name, full_path.display());
-
-                // 4. Write to File
-                match File::create(&full_path) {
-                    Ok(file) => {
-                        let writer = BufWriter::new(file);
-                        match serde_json::to_writer_pretty(writer, &sheet_data.grid) {
-                            Ok(_) => {
-                                info!("Successfully saved sheet '{}' to '{}'.", sheet_name, full_path.display());
-                            }
-                            Err(e) => {
-                                error!("Failed to serialize sheet '{}' to JSON file '{}': {}", sheet_name, full_path.display(), e);
+                     );
+                } else {
+                    let full_path = base_path.join(filename);
+                    trace!("Saving grid for sheet '{}' to '{}'...", sheet_name, full_path.display());
+                    match File::create(&full_path) {
+                        Ok(file) => {
+                            let writer = BufWriter::new(file);
+                            match serde_json::to_writer_pretty(writer, &sheet_data.grid) {
+                                Ok(_) => {
+                                    info!("Successfully saved grid for sheet '{}' to '{}'.", sheet_name, full_path.display());
+                                    grid_saved_successfully = true; // Mark grid as saved
+                                }
+                                Err(e) => error!("Failed to serialize grid for sheet '{}' to '{}': {}", sheet_name, full_path.display(), e),
                             }
                         }
-                    }
-                    Err(e) => {
-                        error!("Failed to create/open file '{}' for sheet '{}': {}", full_path.display(), sheet_name, e);
+                        Err(e) => error!("Failed to create/open grid file '{}' for sheet '{}': {}", full_path.display(), sheet_name, e),
                     }
                 }
             } else {
-                warn!("Skipping save for sheet '{}': Metadata missing.", sheet_name);
+                warn!("Skipping grid save for sheet '{}': Metadata missing.", sheet_name);
             }
-        }
+
+            // --- Save Metadata ---
+            if let Some(meta) = &sheet_data.metadata {
+                 // Derive metadata filename from the sheet name in metadata (which should match sheet_name)
+                 let meta_filename = format!("{}.meta.json", meta.sheet_name);
+                 let meta_path = base_path.join(&meta_filename);
+
+                 // Sanity check again before saving metadata file
+                 if meta.sheet_name != sheet_name {
+                     error!(
+                         "Save inconsistency: Metadata name ('{}') does not match requested save name ('{}'). Aborting metadata save.",
+                         meta.sheet_name, sheet_name
+                     );
+                 } else {
+                     trace!("Saving metadata for sheet '{}' to '{}'...", sheet_name, meta_path.display());
+                     match File::create(&meta_path) {
+                         Ok(file) => {
+                             let writer = BufWriter::new(file);
+                             match serde_json::to_writer_pretty(writer, meta) { // Serialize the whole SheetMetadata
+                                 Ok(_) => {
+                                     info!("Successfully saved metadata for sheet '{}' to '{}'.", sheet_name, meta_path.display());
+                                     // Metadata saved successfully
+                                 }
+                                 Err(e) => {
+                                     error!("Failed to serialize metadata for sheet '{}' to '{}': {}", sheet_name, meta_path.display(), e);
+                                 }
+                             }
+                         }
+                         Err(e) => {
+                             error!("Failed to create/open metadata file '{}' for sheet '{}': {}", meta_path.display(), sheet_name, e);
+                         }
+                     }
+                 } // End metadata sanity check else
+            } else if grid_saved_successfully { // Only warn if grid was saved but metadata is missing
+                 warn!("Grid data saved for sheet '{}', but metadata was missing, so no metadata file saved.", sheet_name);
+            }
+            // No explicit warning needed if neither grid nor metadata could be saved (prior errors logged).
+
+        } // End Some(sheet_data)
         None => {
             error!("Failed to save sheet '{}': Sheet not found in registry.", sheet_name);
         }
@@ -99,44 +128,18 @@ pub fn save_all_sheets_logic(registry: &SheetRegistry) {
     let mut saved_count = 0;
     let mut error_count = 0;
 
-    for (sheet_name, sheet_data) in registry.iter_sheets() {
-        // Reusing single save logic might be cleaner, but for now, duplicate:
-        if let Some(meta) = &sheet_data.metadata {
-            let filename = &meta.data_filename;
-            if filename.is_empty() {
-                 warn!("Save All: Skipping sheet '{}' due to empty filename.", sheet_name);
-                 continue;
-            }
-            let full_path = base_path.join(filename);
-            trace!("Save All: Saving sheet '{}' to '{}'...", sheet_name, full_path.display());
-            match File::create(&full_path) {
-                Ok(file) => {
-                    let writer = BufWriter::new(file);
-                    match serde_json::to_writer_pretty(writer, &sheet_data.grid) {
-                        Ok(_) => saved_count += 1,
-                        Err(e) => {
-                            error!("Save All: Failed to serialize sheet '{}' to JSON: {}", sheet_name, e);
-                            error_count += 1;
-                        }
-                    }
-                }
-                Err(e) => {
-                    error!("Save All: Failed to create/open file '{}' for sheet '{}': {}", full_path.display(), sheet_name, e);
-                    error_count += 1;
-                }
-            }
-        } else {
-            warn!("Save All: Skipping sheet '{}': No metadata.", sheet_name);
-        }
+    // Iterate using sheet names to call the single save function
+    for sheet_name in registry.get_sheet_names() {
+         // Call the single sheet save logic which now handles both grid and meta
+         // Note: save_single_sheet logs its own errors/successes.
+         // We could potentially capture success/failure here if needed for a summary.
+         save_single_sheet(registry, sheet_name);
+         // For simplicity, we won't track counts meticulously here as save_single_sheet logs.
+         // If detailed summary is needed, save_single_sheet would need to return status.
     }
 
-    if error_count > 0 {
-         error!("Finished Save All with {} errors.", error_count);
-    } else if saved_count > 0 {
-        info!("Successfully saved {} sheets via Save All.", saved_count);
-    } else {
-        trace!("Save All: No sheets requiring saving were processed.");
-    }
+    info!("Finished Save All attempt. Check logs for details of individual sheets.");
+    // Simplified logging for Save All completion
 }
 
 
@@ -156,7 +159,11 @@ pub fn handle_delete_sheet_file_request(
                 Ok(_) => info!("Successfully deleted file: '{}'", full_path.display()),
                 Err(e) => error!("Failed to delete file '{}': {}", full_path.display(), e),
             }
-        } else { warn!("File '{}' not found for deletion.", full_path.display()); }
+        } else {
+            // It's not necessarily an error if the file doesn't exist (e.g., deleted manually)
+            // Change level to info or trace depending on expected behavior
+             info!("File '{}' not found for deletion request (might have been deleted already).", full_path.display());
+        }
     }
 }
 
