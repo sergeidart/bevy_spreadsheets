@@ -1,4 +1,5 @@
 // src/ui/mod.rs
+// FINAL VERSION AFTER REFACTORING
 use bevy::prelude::*;
 // Keep only necessary bevy_egui imports if EguiPlugin added elsewhere
 use bevy_egui::EguiContextPass;
@@ -6,10 +7,11 @@ use bevy_egui::EguiContextPass;
 // Declare UI element modules
 pub mod elements;
 pub mod common;
+pub mod validation; // <-- ADDED validation module
 // Declare the new systems module
 pub mod systems;
 // Declare the new widgets module
-pub mod widgets; // <-- ADDED
+pub mod widgets;
 
 // Import the editor UI system from its new location
 use elements::editor::generic_sheet_editor_ui; // Updated import path
