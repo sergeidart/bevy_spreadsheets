@@ -33,7 +33,9 @@ pub enum ColumnValidator {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SheetMetadata {
     pub sheet_name: String,       // Owned String
-    pub data_filename: String,    // Owned String
+    #[serde(default)] // Handle loading older metadata without category
+    pub category: Option<String>, // <<< --- ADDED CATEGORY FIELD --- >>>
+    pub data_filename: String,    // Owned String (relative to category folder)
     pub column_headers: Vec<String>, // Owned Vec<String>
     // Consider if `column_types` is still the primary source of type info
     // or if it should be derived purely from `column_validators`.
@@ -70,11 +72,17 @@ pub struct SheetGridData {
 
 // --- Helper for creating generic metadata ---
 impl SheetMetadata {
-    // Updated to initialize validators based on default types
-    pub fn create_generic(name: String, filename: String, num_cols: usize) -> Self {
+    // Updated to initialize validators based on default types and accept category
+    pub fn create_generic(
+        name: String,
+        filename: String, // Should be just the filename (e.g., "Sheet1.json")
+        num_cols: usize,
+        category: Option<String>, // <<< --- ADDED CATEGORY PARAMETER --- >>>
+    ) -> Self {
         let default_types = vec![ColumnDataType::String; num_cols];
         SheetMetadata {
             sheet_name: name,
+            category, // <<< --- ASSIGN CATEGORY --- >>>
             data_filename: filename,
             column_headers: (0..num_cols).map(|i| format!("Column {}", i + 1)).collect(),
             // Initialize validators based on the default types

@@ -19,10 +19,11 @@ pub fn validate_file_exists(path: &Path) -> Result<(), String> {
 }
 
 /// Validates a sheet name against the registry for potential collisions or emptiness
-/// during an upload/creation process. Sends warnings via EventWriter.
+/// during an upload/creation process. Checks for existence across all categories.
+/// Sends warnings via EventWriter.
 pub fn validate_sheet_name_for_upload(
     name: &str,
-    registry: &SheetRegistry,
+    registry: &SheetRegistry, // Should be Res<SheetRegistry> typically
     feedback_writer: &mut EventWriter<SheetOperationFeedback> // For warnings
 ) -> Result<(), String> {
     let trimmed_name = name.trim();
@@ -33,11 +34,15 @@ pub fn validate_sheet_name_for_upload(
     if trimmed_name == ".meta" || trimmed_name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|']) {
          return Err(format!("Invalid sheet name derived (contains invalid characters or is reserved): '{}'", name));
     }
-    if registry.get_sheet(trimmed_name).is_some() {
-        // It's not necessarily an error to overwrite, but send feedback
-        let msg = format!("Sheet name '{}' already exists. Upload will overwrite.", trimmed_name);
+
+    // <<< --- FIX: Use does_sheet_exist to check globally --- >>>
+    if registry.does_sheet_exist(trimmed_name) {
+        // It's not necessarily an error to overwrite via upload (upload replaces),
+        // but warn the user that a sheet with this name exists somewhere.
+        let msg = format!("Sheet name '{}' already exists (possibly in another category). Upload will overwrite/update if it's in the Root category, or fail if the name exists elsewhere.", trimmed_name);
          warn!("{}", msg); // Log internally
-         feedback_writer.send(SheetOperationFeedback { message: msg, is_error: false }); // Send to UI
+         // Make this a warning, not an error, as upload logic might handle replacement.
+         feedback_writer.send(SheetOperationFeedback { message: msg, is_error: false });
     }
     Ok(())
 }
@@ -49,6 +54,7 @@ pub fn validate_sheet_name_for_upload(
      metadata: &mut SheetMetadata, // Mutable to allow correction
      expected_sheet_name: &str, // e.g., the registry key or derived name
      expected_data_filename: &str, // e.g., the grid file name it was loaded alongside
+     // Removed expected_category, category correction handled elsewhere (startup_load/scan)
      warnings_only: bool, // If true, log warnings and correct; if false, return Err on mismatch
  ) -> Result<(), String> {
       let mut issues = Vec::new();
@@ -69,16 +75,21 @@ pub fn validate_sheet_name_for_upload(
            }
       }
 
-      // Check Data Filename
-       if metadata.data_filename != expected_data_filename {
+      // Check Data Filename (ensure it's just filename part)
+      let expected_filename_only = std::path::Path::new(expected_data_filename)
+            .file_name()
+            .map(|os| os.to_string_lossy().into_owned())
+            .unwrap_or_else(|| expected_data_filename.to_string()); // Fallback
+
+       if metadata.data_filename != expected_filename_only {
             let issue = format!(
                  "Metadata filename mismatch: Expected '{}', found '{}'",
-                 expected_data_filename, metadata.data_filename
+                 expected_filename_only, metadata.data_filename
             );
             if warnings_only {
                  warn!("Correcting {}", issue);
-                 corrections_made.push(format!("Corrected data_filename to '{}'", expected_data_filename));
-                 metadata.data_filename = expected_data_filename.to_string();
+                 corrections_made.push(format!("Corrected data_filename to '{}'", expected_filename_only));
+                 metadata.data_filename = expected_filename_only.to_string();
             } else {
                  issues.push(issue);
             }
@@ -90,9 +101,25 @@ pub fn validate_sheet_name_for_upload(
                 "Metadata structure inconsistency: {} headers, {} types",
                 metadata.column_headers.len(), metadata.column_types.len()
            );
-           // Correction here is complex, usually better to error out
+           // Correction here is complex, usually better to error out or rely on ensure_validator_consistency
            issues.push(issue);
       }
+       if metadata.column_headers.len() != metadata.column_validators.len() {
+            // This check might be redundant if ensure_validator_consistency runs, but good sanity check
+            let issue = format!(
+                 "Metadata structure inconsistency: {} headers, {} validators",
+                 metadata.column_headers.len(), metadata.column_validators.len()
+            );
+            issues.push(issue);
+       }
+        if metadata.column_headers.len() != metadata.column_filters.len() {
+             let issue = format!(
+                  "Metadata structure inconsistency: {} headers, {} filters",
+                  metadata.column_headers.len(), metadata.column_filters.len()
+             );
+             issues.push(issue);
+        }
+
 
       // --- Final Result ---
       if issues.is_empty() {
@@ -104,6 +131,7 @@ pub fn validate_sheet_name_for_upload(
           // If we are only warning, but there were uncorrectable issues
           error!("Metadata validation for '{}' found uncorrectable issues: {}", expected_sheet_name, issues.join("; "));
           // Return Ok because we are in warnings_only mode, but logged errors
+          // Let ensure_validator_consistency try to fix length issues if possible
           Ok(())
       } else {
            // Errors found and we are not in warnings_only mode
@@ -121,23 +149,21 @@ pub fn validate_grid_structure(
           return Ok(()); // Nothing to validate in an empty grid
      }
      let expected_cols = metadata.column_headers.len();
-     // Check if metadata itself is inconsistent
-     if expected_cols != metadata.column_types.len() {
+     // Check if metadata itself is inconsistent (should be caught by ensure_validator_consistency ideally)
+     if expected_cols != metadata.column_types.len() || expected_cols != metadata.column_validators.len() || expected_cols != metadata.column_filters.len() {
           return Err(format!(
-               "Metadata inconsistency for sheet '{}': {} headers, {} types. Cannot validate grid.",
-               sheet_name, expected_cols, metadata.column_types.len()
+               "Metadata inconsistency for sheet '{:?}/{}': Headers ({}), Types ({}), Validators ({}), Filters ({}). Cannot validate grid.",
+               metadata.category, sheet_name, expected_cols, metadata.column_types.len(), metadata.column_validators.len(), metadata.column_filters.len()
           ));
      }
 
      for (i, row) in grid.iter().enumerate() {
           if row.len() != expected_cols {
                return Err(format!(
-                    "Sheet '{}' row {} column count mismatch: Expected {}, found {}. Grid invalid.",
-                    sheet_name, i, expected_cols, row.len()
+                    "Sheet '{:?}/{}' row {} column count mismatch: Expected {}, found {}. Grid invalid.",
+                    metadata.category, sheet_name, i, expected_cols, row.len()
                ));
           }
      }
      Ok(())
 }
-
-// Add other specific validation functions as needed...

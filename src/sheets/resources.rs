@@ -1,181 +1,251 @@
 // src/sheets/resources.rs
 use bevy::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, BTreeMap}; // Use BTreeMap for sorted categories
 
 use super::definitions::{SheetGridData, SheetMetadata};
 
-/// Core Resource holding all registered sheet data.
-/// Now uses String keys and stores owned metadata.
+/// Core Resource holding all registered sheet data, categorized by folder structure.
 #[derive(Resource, Default, Debug)]
 pub struct SheetRegistry {
-    sheets: HashMap<String, SheetGridData>, // Key is String
-    sheet_names_sorted: Vec<String>,      // Stores String
+    // Key: Category Name (None for root), Value: Map of SheetName -> SheetData
+    categorized_sheets: BTreeMap<Option<String>, HashMap<String, SheetGridData>>,
+    // Store category names separately for UI ordering (BTreeMap keys are already sorted)
 }
 
 impl SheetRegistry {
-    /// Registers sheet metadata. Now takes owned SheetMetadata.
-    /// Returns true if registration was successful (new sheet), false otherwise.
-    pub fn register(&mut self, metadata: SheetMetadata) -> bool {
-        let name = metadata.sheet_name.clone(); // Clone name for separate use
-        if !self.sheets.contains_key(&name) {
+    /// Gets the path relative to the data directory for a given sheet.
+    /// Returns PathBuf("CategoryName/FileName.json") or PathBuf("FileName.json").
+    fn get_relative_path(metadata: &SheetMetadata) -> std::path::PathBuf {
+        let mut path = std::path::PathBuf::new();
+        if let Some(cat) = &metadata.category {
+            path.push(cat);
+        }
+        path.push(&metadata.data_filename);
+        path
+    }
+
+    /// Registers sheet metadata under its category.
+    /// This is typically used for pre-defined sheets at startup.
+    pub fn register(&mut self, mut metadata: SheetMetadata) -> bool {
+        let name = metadata.sheet_name.clone();
+        let category = metadata.category.clone(); // Can be None
+
+        // Ensure data_filename is just the filename part if not already
+        if let Some(filename_only) = std::path::Path::new(&metadata.data_filename).file_name() {
+            metadata.data_filename = filename_only.to_string_lossy().into_owned();
+        } else {
+             warn!("Could not extract filename from '{}' for sheet '{}'. Using full path.", metadata.data_filename, name);
+        }
+
+
+        let category_map = self.categorized_sheets.entry(category.clone()).or_default();
+
+        if !category_map.contains_key(&name) {
             let mut data = SheetGridData::default();
-            // Store the owned metadata directly
-            data.metadata = Some(metadata);
-            self.sheets.insert(name.clone(), data); // Insert cloned name
-            self.sheet_names_sorted.push(name); // Push cloned name
-            self.sheet_names_sorted.sort_unstable(); // Sort owned strings
+            data.metadata = Some(metadata); // Store the owned metadata
+            category_map.insert(name.clone(), data);
             true
         } else {
-            warn!("Sheet '{}' already registered. Registration skipped.", name);
+            warn!("Sheet '{}' in category '{:?}' already registered. Registration skipped.", name, category);
             false
         }
     }
 
-    /// Adds or replaces a sheet directly using SheetGridData (e.g., from upload).
-    /// Ensures metadata exists if grid data is present.
-    pub fn add_or_replace_sheet(&mut self, name: String, mut data: SheetGridData) {
-         // Ensure metadata is present if grid isn't empty
-        if data.metadata.is_none() && !data.grid.is_empty() {
+    /// Adds or replaces a sheet in the specified category.
+    pub fn add_or_replace_sheet(
+        &mut self,
+        category: Option<String>,
+        name: String,
+        mut data: SheetGridData,
+    ) {
+        // Ensure metadata exists and is consistent
+        if data.metadata.is_none() {
             let num_cols = data.grid.first().map_or(0, |row| row.len());
-             // Use a filename derived from the sheet name for saving consistency
+            // Use a filename derived from the sheet name
             let filename = format!("{}.json", name);
-            data.metadata = Some(SheetMetadata::create_generic(name.clone(), filename, num_cols));
+            data.metadata = Some(SheetMetadata::create_generic(
+                name.clone(),
+                filename,
+                num_cols,
+                category.clone(), // Pass category
+            ));
         } else if let Some(meta) = &mut data.metadata {
-             // Ensure metadata name matches the key (important for rename/replace logic)
-             if meta.sheet_name != name {
-                  warn!("Correcting metadata sheet_name ('{}') to match registry key ('{}').", meta.sheet_name, name);
-                  meta.sheet_name = name.clone();
-             }
-             // Ensure filename is consistent if not set properly
-             if meta.data_filename.is_empty() {
-                  meta.data_filename = format!("{}.json", name);
-                  warn!("Generated missing data_filename for sheet '{}': {}", name, meta.data_filename);
-             }
-        }
+            // Ensure metadata name matches the key
+            if meta.sheet_name != name {
+                warn!("Correcting metadata sheet_name ('{}') to match registry key ('{}').", meta.sheet_name, name);
+                meta.sheet_name = name.clone();
+            }
+            // Ensure category matches
+            if meta.category != category {
+                 warn!("Correcting metadata category ('{:?}') to match registry category ('{:?}').", meta.category, category);
+                 meta.category = category.clone();
+            }
+            // Ensure filename is consistent if not set properly or contains path separators
+             let filename_only = std::path::Path::new(&meta.data_filename)
+                .file_name()
+                .map(|os| os.to_string_lossy().into_owned())
+                .unwrap_or_else(|| format!("{}.json", name));
 
-
-        if self.sheets.insert(name.clone(), data).is_none() {
-            // If it was a new insertion, update the sorted list
-            if !self.sheet_names_sorted.contains(&name) {
-                self.sheet_names_sorted.push(name);
-                self.sheet_names_sorted.sort_unstable();
+            if meta.data_filename != filename_only {
+                 warn!("Correcting data_filename for sheet '{}' from '{}' to '{}'.", name, meta.data_filename, filename_only);
+                 meta.data_filename = filename_only;
             }
         }
+
+        // Get or create the category map and insert/replace the sheet
+        self.categorized_sheets
+            .entry(category)
+            .or_default()
+            .insert(name, data);
     }
 
-    /// Returns a sorted list of registered sheet names.
-    pub fn get_sheet_names(&self) -> &Vec<String> { // Returns &Vec<String>
-        &self.sheet_names_sorted
+     /// Returns a sorted list of category names (including None for root).
+     pub fn get_categories(&self) -> Vec<Option<String>> {
+         self.categorized_sheets.keys().cloned().collect()
+     }
+
+     /// Returns a sorted list of sheet names within a specific category.
+     pub fn get_sheet_names_in_category(&self, category: &Option<String>) -> Vec<String> {
+         let mut names = Vec::new();
+         if let Some(category_map) = self.categorized_sheets.get(category) {
+             names = category_map.keys().cloned().collect();
+             names.sort_unstable();
+         }
+         names
+     }
+
+     /// Checks if a sheet exists anywhere across all categories.
+     pub fn does_sheet_exist(&self, sheet_name: &str) -> bool {
+         self.categorized_sheets.values().any(|category_map| category_map.contains_key(sheet_name))
+     }
+
+    /// Gets mutable access to the SheetGridData for a given sheet name within a specific category.
+    pub fn get_sheet_mut(
+        &mut self,
+        category: &Option<String>,
+        sheet_name: &str,
+    ) -> Option<&mut SheetGridData> {
+        self.categorized_sheets
+            .get_mut(category)
+            .and_then(|category_map| category_map.get_mut(sheet_name))
     }
 
-    /// Gets mutable access to the SheetGridData for a given sheet name.
-    pub fn get_sheet_mut(&mut self, sheet_name: &str) -> Option<&mut SheetGridData> {
-        self.sheets.get_mut(sheet_name)
+    /// Gets immutable access to the SheetGridData for a given sheet name within a specific category.
+    pub fn get_sheet(&self, category: &Option<String>, sheet_name: &str) -> Option<&SheetGridData> {
+        self.categorized_sheets
+            .get(category)
+            .and_then(|category_map| category_map.get(sheet_name))
     }
 
-    /// Gets immutable access to the SheetGridData for a given sheet name.
-    pub fn get_sheet(&self, sheet_name: &str) -> Option<&SheetGridData> {
-        self.sheets.get(sheet_name)
+    /// Provides an iterator over all sheets: (CategoryNameOpt, SheetName, SheetData).
+    pub fn iter_sheets(&self) -> impl Iterator<Item = (&Option<String>, &String, &SheetGridData)> {
+        self.categorized_sheets
+            .iter()
+            .flat_map(|(category, sheets_map)| {
+                sheets_map.iter().map(move |(sheet_name, sheet_data)| {
+                    (category, sheet_name, sheet_data)
+                })
+            })
     }
 
-    /// Provides an iterator over all registered sheets (name, data).
-    pub fn iter_sheets_mut(&mut self) -> impl Iterator<Item = (&String, &mut SheetGridData)> {
-        self.sheets.iter_mut() // HashMap iter returns (&K, &mut V)
-    }
+    /// Provides a mutable iterator over all sheets: (CategoryNameOpt, SheetName, SheetDataMut).
+     pub fn iter_sheets_mut(&mut self) -> impl Iterator<Item = (&Option<String>, &String, &mut SheetGridData)> {
+         self.categorized_sheets
+             .iter_mut()
+             .flat_map(|(category, sheets_map)| {
+                 sheets_map.iter_mut().map(move |(sheet_name, sheet_data)| {
+                     // Need to re-borrow category immutably here, which is tricky.
+                     // Let's simplify the mutable iteration API for now or return owned data.
+                     // A simpler approach might be separate iterators for categories and sheets within.
+                     // For now, let's just return the sheet name and mutable data.
+                     // Caller needs to know the category separately if needed.
+                     // TODO: Revisit mutable iteration API if needed.
+                     (category, sheet_name, sheet_data) // This might have lifetime issues, requires careful use.
+                 })
+             })
+     }
 
-    /// Provides an immutable iterator over all registered sheets (name, data).
-    pub fn iter_sheets(&self) -> impl Iterator<Item = (&String, &SheetGridData)> {
-        self.sheets.iter() // HashMap iter returns (&K, &V)
-    }
-
-    // --- NEW Methods ---
-
-    /// Renames a sheet within the registry.
-    /// Updates the internal HashMap key, the sorted name list,
-    /// and the `sheet_name` and `data_filename` within the `SheetMetadata`. // MODIFIED DOC
-    /// Returns the old `SheetGridData` (with updated metadata) if successful, or an error string. // MODIFIED DOC
-    pub fn rename_sheet(&mut self, old_name: &str, new_name: String) -> Result<SheetGridData, String> {
+    /// Renames a sheet *within its current category*.
+    /// Updates the HashMap key and the `sheet_name` and `data_filename` within the `SheetMetadata`.
+    /// Does NOT handle moving between categories.
+    /// Returns the old `SheetGridData` (with updated metadata) if successful, or an error string.
+    pub fn rename_sheet(
+        &mut self,
+        category: &Option<String>,
+        old_name: &str,
+        new_name: String,
+    ) -> Result<SheetGridData, String> {
         if old_name == new_name {
             return Err("New name cannot be the same as the old name.".to_string());
         }
-        if self.sheets.contains_key(&new_name) {
-            return Err(format!("Sheet name '{}' already exists.", new_name));
+        if self.does_sheet_exist(&new_name) { // Check across all categories
+            return Err(format!("A sheet named '{}' already exists (possibly in another category).", new_name));
         }
         if new_name.trim().is_empty() {
             return Err("New sheet name cannot be empty or just whitespace.".to_string());
         }
-        // Make sure filename characters are reasonable (basic check)
+        // Basic filename character check
         if new_name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|']) {
-             return Err("New sheet name contains invalid characters for filenames.".to_string());
+            return Err("New sheet name contains invalid characters for filenames.".to_string());
         }
 
+        // 1. Get mutable access to the specific category map
+        let category_map = match self.categorized_sheets.get_mut(category) {
+            Some(map) => map,
+            None => return Err(format!("Category '{:?}' not found.", category)),
+        };
 
-        // 1. Remove from HashMap
-        if let Some(mut data) = self.sheets.remove(old_name) {
-             // 2. Update metadata name and filename (should always exist if sheet exists)
-             if let Some(meta) = &mut data.metadata {
-                 // Store old filename *before* updating metadata, maybe needed by caller?
-                 // Let's actually do this in the calling system (handle_rename_request)
-                 // as it's cleaner separation of concerns.
-
-                 // Update internal metadata
-                 meta.sheet_name = new_name.clone();
-                 // *** FIX: Update data_filename to match new sheet name ***
-                 meta.data_filename = format!("{}.json", new_name);
-                 info!("Updated metadata: sheet_name='{}', data_filename='{}'", meta.sheet_name, meta.data_filename); // Add log
-
-             } else {
-                 // This case shouldn't happen if registry invariants are maintained
-                 error!("Sheet '{}' found in map but is missing metadata during rename!", old_name);
-                 // Re-insert to avoid data loss and return error
-                 self.sheets.insert(old_name.to_string(), data);
-                 return Err(format!("Internal error: Metadata missing for sheet '{}' during rename.", old_name));
-             }
-
-            // 3. Remove old name from sorted list
-            if let Some(index) = self.sheet_names_sorted.iter().position(|n| n == old_name) {
-                self.sheet_names_sorted.remove(index);
+        // 2. Remove from the category's HashMap
+        if let Some(mut data) = category_map.remove(old_name) {
+            // 3. Update metadata name and filename
+            if let Some(meta) = &mut data.metadata {
+                meta.sheet_name = new_name.clone();
+                // Update data_filename (just the name part)
+                meta.data_filename = format!("{}.json", new_name);
+                info!(
+                    "Updated metadata: sheet_name='{}', data_filename='{}' in category '{:?}'",
+                    meta.sheet_name, meta.data_filename, category
+                );
             } else {
-                 warn!("Old name '{}' not found in sorted list during rename.", old_name);
+                error!("Sheet '{}' found in category '{:?}' but is missing metadata during rename!", old_name, category);
+                // Re-insert to avoid data loss and return error
+                category_map.insert(old_name.to_string(), data);
+                return Err(format!("Internal error: Metadata missing for sheet '{}' during rename.", old_name));
             }
 
             // Capture the modified data before moving ownership
             let updated_data_for_return = data.clone();
 
-            // 4. Insert back into HashMap with new name
-            self.sheets.insert(new_name.clone(), data); // data now has updated metadata
+            // 4. Insert back into the *same category's* HashMap with the new name
+            category_map.insert(new_name.clone(), data); // data now has updated metadata
 
-            // 5. Insert new name into sorted list and re-sort
-            self.sheet_names_sorted.push(new_name); // new_name was already cloned
-            self.sheet_names_sorted.sort_unstable();
-
-            // Return the data with updated metadata
             Ok(updated_data_for_return)
         } else {
-            Err(format!("Sheet '{}' not found for renaming.", old_name))
+            Err(format!("Sheet '{}' not found in category '{:?}' for renaming.", old_name, category))
         }
-        // Note: The decision to update the filename here simplifies the calling code.
-        // The caller (handle_rename_request) is still responsible for *triggering*
-        // the actual file system rename operation.
     }
 
-
-    /// Deletes a sheet from the registry.
-    /// Removes from the internal HashMap and the sorted name list.
+    /// Deletes a sheet from its category in the registry.
     /// Returns the removed `SheetGridData` if successful, or an error string.
-    pub fn delete_sheet(&mut self, sheet_name: &str) -> Result<SheetGridData, String> {
-         // 1. Remove from HashMap
-         if let Some(data) = self.sheets.remove(sheet_name) {
-            // 2. Remove from sorted list
-            if let Some(index) = self.sheet_names_sorted.iter().position(|n| n == sheet_name) {
-                self.sheet_names_sorted.remove(index);
-                // No need to re-sort after removal
+    pub fn delete_sheet(
+        &mut self,
+        category: &Option<String>,
+        sheet_name: &str,
+    ) -> Result<SheetGridData, String> {
+        // 1. Get mutable access to the category map
+        if let Some(category_map) = self.categorized_sheets.get_mut(category) {
+            // 2. Remove from the category's HashMap
+            if let Some(data) = category_map.remove(sheet_name) {
+                // 3. If category map becomes empty, remove the category itself
+                if category_map.is_empty() {
+                    self.categorized_sheets.remove(category);
+                }
+                Ok(data) // Return the removed data
             } else {
-                 warn!("Deleted sheet name '{}' was not found in sorted list.", sheet_name);
+                Err(format!("Sheet '{}' not found in category '{:?}' for deletion.", sheet_name, category))
             }
-            Ok(data) // Return the removed data
-         } else {
-            Err(format!("Sheet '{}' not found for deletion.", sheet_name))
-         }
+        } else {
+            Err(format!("Category '{:?}' not found for deletion.", category))
+        }
     }
 }

@@ -26,8 +26,9 @@ pub fn show_delete_confirm_popup(
         .open(&mut delete_confirm_popup_open) // Bind to the temporary variable
         .show(ctx, |ui| {
             ui.label(format!(
-                "Permanently delete sheet '{}'?",
-                state.delete_target
+                "Permanently delete sheet '{:?}/{}'?", // Show category
+                state.delete_target_category,
+                state.delete_target_sheet
             ));
             ui.label("This will also delete the associated file(s) if they exist.");
             ui.colored_label(egui::Color32::YELLOW, "This action cannot be undone.");
@@ -46,34 +47,28 @@ pub fn show_delete_confirm_popup(
         }); // End .show()
 
     // --- Logic AFTER the window UI ---
-
     let mut close_popup = false;
 
-    // 1. Handle delete action if triggered
     if delete_clicked {
         delete_event_writer.send(RequestDeleteSheet {
-            sheet_name: state.delete_target.clone(),
+            category: state.delete_target_category.clone(), // <<< Send category
+            sheet_name: state.delete_target_sheet.clone(),
         });
-        close_popup = true; // Mark popup for closing
-    }
-
-    // 2. Handle cancel action if clicked
-    if cancel_clicked {
         close_popup = true;
     }
 
-    // 3. Handle closing via 'x' button (if delete/cancel didn't already mark for closing)
+    if cancel_clicked {
+        close_popup = true;
+    }
     if !close_popup && !delete_confirm_popup_open {
-        close_popup = true; // Window was closed via 'x'
+        close_popup = true;
     }
 
-    // 4. Update the actual state variable if closing is needed
     if close_popup {
         state.show_delete_confirm_popup = false;
-        // Reset internal state only when popup actually closes
-        state.delete_target.clear();
+        state.delete_target_category = None; // Clear category
+        state.delete_target_sheet.clear();
     } else {
-        // Ensure state reflects the temporary variable if not closing
         state.show_delete_confirm_popup = delete_confirm_popup_open;
     }
 }

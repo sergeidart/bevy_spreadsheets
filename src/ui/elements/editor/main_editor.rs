@@ -39,14 +39,15 @@ pub fn generic_sheet_editor_ui(
     mut column_validator_writer: EventWriter<RequestUpdateColumnValidator>,
     mut cell_update_writer: EventWriter<UpdateCellEvent>,
     // Resources
-    mut registry: ResMut<SheetRegistry>, // Keep ResMut for popups
+    mut registry: ResMut<SheetRegistry>, // Keep ResMut for popups and cache updates
     ui_feedback: Res<UiFeedbackState>,
 ) {
     let ctx = contexts.ctx_mut();
-    let selected_sheet_name_clone = state.selected_sheet_name.clone();
+    let selected_category_clone = state.selected_category.clone(); // Clone category
+    let selected_sheet_name_clone = state.selected_sheet_name.clone(); // Clone sheet name
 
     // --- Pass state to popups (need mutable access for cache) ---
-    // Note: Popups already took mutable state, but now it's needed for cache too.
+    // Popups now need ResMut<SheetRegistry> if they need to check existence/metadata during init
     show_column_options_popup( ctx, &mut state, &mut column_rename_writer, &mut column_validator_writer, &mut registry );
     show_rename_popup(ctx, &mut state, &mut rename_event_writer, &ui_feedback);
     show_delete_confirm_popup(ctx, &mut state, &mut delete_event_writer);
@@ -56,7 +57,7 @@ pub fn generic_sheet_editor_ui(
         let text_style = egui::TextStyle::Body;
         let row_height = ui.text_style_height(&text_style) + ui.style().spacing.item_spacing.y;
 
-        // --- Pass state to top panel (no cache needed here, immutable registry is fine) ---
+        // --- Pass state to top panel ---
         show_top_panel(ui, &mut state, &registry, &mut add_row_event_writer, &mut upload_req_writer);
 
         if !ui_feedback.last_message.is_empty() {
@@ -65,13 +66,18 @@ pub fn generic_sheet_editor_ui(
         }
         ui.separator();
 
+        // Check if a sheet is selected
         if let Some(selected_name) = &selected_sheet_name_clone {
-             if registry.get_sheet(selected_name).is_none() {
-                 ui.vertical_centered(|ui| { ui.label(format!("Sheet '{}' no longer exists...", selected_name)); });
+             // Use the cloned category and sheet name to check registry
+             let registry_immut = registry.as_ref(); // Immutable borrow for check/read
+             if registry_immut.get_sheet(&selected_category_clone, selected_name).is_none() {
+                 ui.vertical_centered(|ui| { ui.label(format!("Sheet '{:?}/{}' no longer exists...", selected_category_clone, selected_name)); });
              } else {
+                 // Sheet exists, proceed with rendering
                  let sheet_name_ref = selected_name.as_str();
-                 let render_data_opt = registry
-                     .get_sheet(sheet_name_ref)
+                 // Get metadata using category and name
+                 let render_data_opt = registry_immut
+                     .get_sheet(&selected_category_clone, sheet_name_ref)
                      .and_then(|sheet_data| sheet_data.metadata.as_ref().map(|metadata| {
                          (metadata.column_headers.clone(), metadata.column_filters.clone())
                      }));
@@ -91,52 +97,81 @@ pub fn generic_sheet_editor_ui(
 
                              table_builder
                                  .header(20.0, |header_row| {
-                                     // Pass mutable state to header in case it needs cache access later
+                                     // Pass mutable state to header (stores category/sheet info for popup)
+                                     // sheet_table_header needs category info if popup init needs it
+                                     // We'll update the state directly before showing popup
                                      sheet_table_header(header_row, &headers, &filters, sheet_name_ref, &mut state);
+                                     // Store category when header clicked
+                                     if state.show_column_options_popup && state.column_options_popup_needs_init {
+                                         state.options_column_target_category = selected_category_clone.clone();
+                                     }
+
                                  })
                                  .body(|body| {
-                                     // --- MODIFIED: Pass mutable state to sheet_table_body ---
+                                     // Pass immutable registry and mutable state
                                      sheet_table_body(
                                          body,
                                          row_height,
+                                         &selected_category_clone, // Pass category
                                          sheet_name_ref,
                                          &headers,
                                          &filters,
-                                         registry.as_ref(), // Pass &SheetRegistry
+                                         registry_immut, // Pass &SheetRegistry
                                          cell_update_writer,
-                                         &mut state, // Pass mutable state here
+                                         &mut state, // Pass mutable state for cache
                                      );
-                                     // --- End Modification ---
                                  });
                          }); // End ScrollArea
                      }
-                     None => { if registry.get_sheet(sheet_name_ref).is_some() { ui.colored_label(egui::Color32::YELLOW, format!("Metadata missing for sheet '{}'.", sheet_name_ref)); } }
+                     None => {
+                         // Check again if sheet exists but metadata doesn't
+                         if registry_immut.get_sheet(&selected_category_clone, sheet_name_ref).is_some() {
+                             ui.colored_label(egui::Color32::YELLOW, format!("Metadata missing for sheet '{:?}/{}'.", selected_category_clone, sheet_name_ref));
+                         }
+                         // Else: the sheet disappeared between check and render (should be rare)
+                     }
                  }
              }
         } else {
-             ui.vertical_centered(|ui| { ui.label("Select a sheet or upload JSON."); });
+             // No sheet selected
+             if state.selected_category.is_some() {
+                 ui.vertical_centered(|ui| { ui.label("Select a sheet from the category."); });
+             } else {
+                 ui.vertical_centered(|ui| { ui.label("Select a category and sheet, or upload JSON."); });
+             }
         }
 
-        // Deferred State Clear Logic
+        // --- Deferred State Clear Logic ---
         let mut needs_clear = false;
         if let Some(name) = &selected_sheet_name_clone {
-             if registry.get_sheet(name).is_none() { needs_clear = true; }
+             // Check using the selected category clone
+             if registry.get_sheet(&selected_category_clone, name).is_none() {
+                 needs_clear = true; // Selected sheet doesn't exist anymore
+             }
         }
+        // Also clear if category itself becomes invalid (though less likely unless dirs change)
+        // For simplicity, we rely on the sheet check above.
+
         if needs_clear {
-            state.selected_sheet_name = None;
+            state.selected_sheet_name = None; // Clear only sheet name first
+            // Keep category selected? Or clear both? Let's clear only sheet for now.
+            // state.selected_category = None; // Optionally clear category too
+
             state.show_column_options_popup = false;
             state.show_rename_popup = false;
             state.show_delete_confirm_popup = false;
+            // Clear target info in popups
+            state.options_column_target_category = None;
             state.options_column_target_sheet.clear();
-            state.rename_target.clear();
-            state.delete_target.clear();
-            // --- Clear the cache when selection is cleared ---
-            // (Could also clear selectively based on deleted/renamed sheets)
-            state.linked_column_cache.clear();
-            warn!("Selected sheet removed, clearing state and linked column cache.");
+            state.rename_target_category = None;
+            state.rename_target_sheet.clear();
+            state.delete_target_category = None;
+            state.delete_target_sheet.clear();
+
+            // Clear cache might be too aggressive here, only clear if needed
+            // state.linked_column_cache.clear();
+            warn!("Selected sheet ('{:?}/{}') removed or invalid, clearing selection state.", selected_category_clone, selected_sheet_name_clone.unwrap_or_default());
         }
 
     }); // End CentralPanel
-
-    // Popups shown after CentralPanel
 }

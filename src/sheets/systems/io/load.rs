@@ -1,8 +1,8 @@
 // src/sheets/systems/io/load.rs
-// Renamed conceptually to handle runtime uploads
+// Handles runtime uploads
 
 use bevy::prelude::*;
-use std::path::{PathBuf}; // Only need PathBuf here now
+use std::path::{PathBuf};
 
 // Use items from sibling modules
 use super::save::save_single_sheet;
@@ -19,53 +19,61 @@ use crate::sheets::{
     },
     resources::SheetRegistry,
 };
-// No longer needs example_definitions
 
-
-// --- Startup functions are MOVED to startup.rs ---
-
-
-// --- Event Handlers (Remain mostly the same, represent the runtime upload flow) ---
 
 /// Handles the `JsonSheetUploaded` event. (Sent by handle_process_upload_request)
+/// Adds the uploaded sheet to the specified category in the registry.
 pub fn handle_json_sheet_upload(
     mut events: EventReader<JsonSheetUploaded>,
     mut registry: ResMut<SheetRegistry>,
     mut feedback_writer: EventWriter<SheetOperationFeedback>,
 ) {
     for event in events.read() {
-        info!("Registering/Updating sheet '{}' from uploaded file '{}'...", event.desired_sheet_name, event.original_filename);
-        let sheet_name = event.desired_sheet_name.clone();
+        let category = &event.category; // Get category from event (e.g., None for now)
+        let sheet_name = &event.desired_sheet_name;
+        info!(
+            "Registering/Updating sheet '{:?}/{}' from uploaded file '{}'...",
+            category, sheet_name, event.original_filename
+        );
 
-        // Create default metadata
+        // Create default metadata with category
         let num_cols = event.grid_data.first().map_or(0, |row| row.len());
+        // <<< --- FIX 1: Add category argument --- >>>
         let generated_metadata = SheetMetadata::create_generic(
             sheet_name.clone(),
-            event.original_filename.clone(),
-            num_cols
+            event.original_filename.clone(), // Just filename
+            num_cols,
+            category.clone(), // Pass category <<< ADDED
         );
 
         // Validate generated structure (optional sanity check)
-        if let Err(e) = validator::validate_grid_structure(&event.grid_data, &generated_metadata, &sheet_name) {
+        if let Err(e) = validator::validate_grid_structure(&event.grid_data, &generated_metadata, sheet_name) {
              error!("Internal Error: Grid validation failed for generated metadata: {}", e);
              feedback_writer.send(SheetOperationFeedback { message: format!("Internal error during upload for '{}'", sheet_name), is_error: true });
              continue;
         }
 
         let sheet_data = SheetGridData {
-             metadata: Some(generated_metadata),
+             metadata: Some(generated_metadata.clone()), // Clone metadata for saving
              grid: event.grid_data.clone(),
         };
 
-        // Add/replace in registry
-        registry.add_or_replace_sheet(sheet_name.clone(), sheet_data);
-        let msg = format!("Sheet '{}' successfully uploaded and registered.", sheet_name);
+        // <<< --- FIX 2: Add category argument --- >>>
+        // Add/replace in registry using category
+        registry.add_or_replace_sheet(
+            category.clone(), // <<< ADDED
+            sheet_name.clone(),
+            sheet_data
+        );
+        let msg = format!("Sheet '{:?}/{}' successfully uploaded and registered.", category, sheet_name);
         info!("{}", msg);
         feedback_writer.send(SheetOperationFeedback { message: msg, is_error: false });
 
-        // Save
-        info!("Triggering immediate save for uploaded sheet '{}'.", sheet_name);
-        save_single_sheet(&registry, &sheet_name);
+        // <<< --- FIX 3: Pass metadata struct to save_single_sheet --- >>>
+        // Save using the metadata
+        info!("Triggering immediate save for uploaded sheet '{:?}/{}'.", category, sheet_name);
+        save_single_sheet(&registry, &generated_metadata); // Pass metadata for saving <<< CORRECTED ARGUMENT
+
     }
 }
 
@@ -78,6 +86,7 @@ pub fn handle_initiate_file_upload(
     if !events.is_empty() {
         events.clear();
         info!("File upload initiated by UI.");
+        // TODO: Potentially add category selection here using rfd or another dialog
         let picked_file: Option<PathBuf> = rfd::FileDialog::new()
             .add_filter("JSON Grid Data files", &["json"])
             .pick_file();
@@ -89,7 +98,7 @@ pub fn handle_initiate_file_upload(
                      feedback_writer.send(SheetOperationFeedback { message: msg, is_error: true });
                 } else {
                      info!("File picked: '{}'. Sending request to process.", path.display());
-                     process_event_writer.send(RequestProcessUpload { path });
+                     process_event_writer.send(RequestProcessUpload { path }); // Pass full path
                 }
             }
             None => {
@@ -106,11 +115,13 @@ pub fn handle_process_upload_request(
      mut events: EventReader<RequestProcessUpload>,
     mut feedback_writer: EventWriter<SheetOperationFeedback>,
     mut uploaded_event_writer: EventWriter<JsonSheetUploaded>,
-    registry: Res<SheetRegistry>,
+    registry: Res<SheetRegistry>, // Use Res, not ResMut, for validation read
 ) {
      for event in events.read() {
-         let path = &event.path;
+         let path = &event.path; // Full path to the uploaded file
          let filename_display = path.file_name().map_or_else(|| path.display().to_string(), |os| os.to_string_lossy().into_owned());
+         let filename_only = path.file_name().map(|os| os.to_string_lossy().into_owned()).unwrap_or_default();
+
          info!("Processing uploaded file request for: '{}'", path.display());
 
          // --- Validation Phase ---
@@ -122,6 +133,9 @@ pub fn handle_process_upload_request(
          let derived_name = path.file_stem()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| filename_display.trim_end_matches(".json").trim_end_matches(".JSON").to_string());
+
+        // Validate name globally (check if exists in *any* category)
+        // validate_sheet_name_for_upload uses the registry immutably, which is fine.
          if let Err(e) = validator::validate_sheet_name_for_upload(&derived_name, &registry, &mut feedback_writer) {
               let msg = format!("Upload failed for '{}': {}", filename_display, e);
               error!("{}", msg);
@@ -131,10 +145,13 @@ pub fn handle_process_upload_request(
 
          // --- Loading Phase ---
          match parsers::read_and_parse_json_sheet(path) {
-             Ok((grid_data, original_filename)) => {
+             Ok((grid_data, _)) => { // We use filename_only extracted earlier
+                // <<< --- FIX 4: Add category field to event --- >>>
+                 // Send event with category = None for now
                  uploaded_event_writer.send(JsonSheetUploaded {
+                     category: None, // <<< Uploads go to root category
                      desired_sheet_name: derived_name,
-                     original_filename: original_filename,
+                     original_filename: filename_only, // Send just the filename
                      grid_data: grid_data,
                  });
              }

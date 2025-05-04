@@ -9,19 +9,23 @@ use crate::sheets::definitions::{ColumnDataType, ColumnValidator};
 #[derive(Default)] // No serde derive needed for Local state
 pub struct EditorWindowState {
     // General State
+    pub selected_category: Option<String>, // <<< --- ADDED --- >>>
     pub selected_sheet_name: Option<String>,
 
     // Rename Popup State
     pub show_rename_popup: bool,
-    pub rename_target: String,
+    pub rename_target_category: Option<String>, // <<< --- ADDED --- >>>
+    pub rename_target_sheet: String, // Changed from rename_target
     pub new_name_input: String,
 
     // Delete Popup State
     pub show_delete_confirm_popup: bool,
-    pub delete_target: String,
+    pub delete_target_category: Option<String>, // <<< --- ADDED --- >>>
+    pub delete_target_sheet: String, // Changed from delete_target
 
     // Column Options Popup State
     pub show_column_options_popup: bool,
+    pub options_column_target_category: Option<String>, // <<< --- ADDED --- >>>
     pub options_column_target_sheet: String,
     pub options_column_target_index: usize,
     pub column_options_popup_needs_init: bool, // Flag to init fields on open
@@ -39,7 +43,6 @@ pub struct EditorWindowState {
     // Key: (Target Sheet Name, Target Column Index)
     // Value: HashSet of unique non-empty string values from that target column for fast lookups
     // Displayed suggestions will be generated and sorted from this set.
-    // #[serde(skip)] // REMOVED - This struct isn't serialized
     pub linked_column_cache: HashMap<(String, usize), HashSet<String>>, // Use HashSet for faster lookups
 
 }

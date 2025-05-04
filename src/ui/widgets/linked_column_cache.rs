@@ -32,12 +32,24 @@ pub(crate) fn get_or_populate_linked_options<'a>(
     registry: &SheetRegistry,
     state: &'a mut EditorWindowState, // Return lifetime tied to state
 ) -> CacheResult<'a> {
+    // Note: The cache key currently doesn't include the target category because
+    // the validator definition doesn't store it. If multiple sheets could have the
+    // same name in different categories, this cache might return incorrect results
+    // if the linked column should point to a specific category's sheet.
+    // For now, we assume target_sheet_name is unique globally.
     let cache_key = (target_sheet_name.to_string(), target_column_index);
 
     // --- Check if cache needs population ---
     if !state.linked_column_cache.contains_key(&cache_key) {
         let mut error_msg: Option<String> = None;
-        if let Some(target_sheet) = registry.get_sheet(target_sheet_name) {
+
+        // <<< --- FIX: Find target sheet by iterating through all categories --- >>>
+        let target_sheet_data_opt = registry.iter_sheets()
+            .find(|(_, name, _)| *name == target_sheet_name) // Find sheet with matching name
+            .map(|(_, _, data)| data); // Get the associated SheetGridData
+
+        if let Some(target_sheet) = target_sheet_data_opt {
+        // --- End Fix ---
             if let Some(meta) = &target_sheet.metadata {
                 if target_column_index < meta.column_headers.len() {
                     // Collect unique, non-empty values directly into HashSet
@@ -72,7 +84,7 @@ pub(crate) fn get_or_populate_linked_options<'a>(
                 ));
             }
         } else {
-            error_msg = Some(format!("Target sheet '{}' not found.", target_sheet_name));
+            error_msg = Some(format!("Target sheet '{}' not found (in any category).", target_sheet_name));
         }
 
         // Insert empty set if there was an error during generation to prevent repeated attempts

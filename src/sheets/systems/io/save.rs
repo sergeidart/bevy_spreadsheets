@@ -1,158 +1,141 @@
 // src/sheets/systems/io/save.rs
 
-use bevy::prelude::{error, info, trace, warn, EventReader, Res, ResMut}; // Adjusted imports
+use bevy::prelude::{error, info, trace, warn, EventReader, Res, ResMut};
 use std::{
     fs::{self, File},
     io::BufWriter,
-    path::Path, // Needed for Path::join
+    path::{Path, PathBuf}, // Added PathBuf
 };
 
-// Import get_default_data_base_path correctly relative to this file's module
-use super::get_default_data_base_path;
+// Corrected imports relative to this file's module position
+use super::{get_default_data_base_path, get_full_metadata_path, get_full_sheet_path};
 use crate::sheets::{
     definitions::{SheetGridData, SheetMetadata}, // Added SheetMetadata
     events::{RequestDeleteSheetFile, RequestRenameSheetFile},
     resources::SheetRegistry,
 };
 
+/// Saves the grid data AND metadata for a single sheet using its metadata for path info.
+/// Takes the registry (read-only) and the SheetMetadata of the sheet to save.
+pub fn save_single_sheet(registry: &SheetRegistry, metadata_to_save: &SheetMetadata) {
+    let sheet_name = &metadata_to_save.sheet_name;
+    let category = &metadata_to_save.category;
+    info!("Attempting to save sheet: '{:?}/{}'", category, sheet_name);
 
-/// Saves the grid data AND metadata for a single, specified sheet to their corresponding files.
-/// Takes the registry (read-only) and the sheet name as arguments.
-pub fn save_single_sheet(registry: &SheetRegistry, sheet_name: &str) {
-    info!("Attempting to save single sheet: '{}'", sheet_name);
-
-    match registry.get_sheet(sheet_name) {
+    // Get the actual SheetGridData from the registry using category and name
+    match registry.get_sheet(category, sheet_name) {
         Some(sheet_data) => {
             let base_path = get_default_data_base_path();
-            if let Err(e) = fs::create_dir_all(&base_path) {
-                error!("Failed to ensure data directory '{:?}' exists for saving sheet '{}': {}. Aborting save.", base_path, sheet_name, e);
-                return;
+            let category_path = if let Some(cat_name) = category {
+                 base_path.join(cat_name)
+            } else {
+                 base_path.clone() // Save to root data_sheets dir
+            };
+
+            // --- Ensure Category Directory Exists ---
+            if let Err(e) = fs::create_dir_all(&category_path) {
+                 error!("Failed to ensure category directory '{:?}' exists for saving sheet '{}': {}. Aborting save.", category_path, sheet_name, e);
+                 return;
             }
 
             let mut grid_saved_successfully = false;
 
             // --- Save Grid Data ---
-            if let Some(meta) = &sheet_data.metadata {
-                let filename = &meta.data_filename;
-                if filename.is_empty() {
-                    warn!("Skipping grid save for sheet '{}': Filename in metadata is empty.", sheet_name);
-                } else if meta.sheet_name != sheet_name {
-                     error!(
-                         "Save inconsistency: Metadata name ('{}') does not match requested save name ('{}'). Aborting grid save.",
-                         meta.sheet_name, sheet_name
-                     );
-                } else {
-                    let full_path = base_path.join(filename);
-                    trace!("Saving grid for sheet '{}' to '{}'...", sheet_name, full_path.display());
-                    match File::create(&full_path) {
-                        Ok(file) => {
-                            let writer = BufWriter::new(file);
-                            match serde_json::to_writer_pretty(writer, &sheet_data.grid) {
-                                Ok(_) => {
-                                    info!("Successfully saved grid for sheet '{}' to '{}'.", sheet_name, full_path.display());
-                                    grid_saved_successfully = true; // Mark grid as saved
-                                }
-                                Err(e) => error!("Failed to serialize grid for sheet '{}' to '{}': {}", sheet_name, full_path.display(), e),
-                            }
+            // Use the helper function to get the full path
+            let grid_full_path = get_full_sheet_path(&base_path, metadata_to_save);
+            trace!("Saving grid for sheet '{:?}/{}' to '{}'...", category, sheet_name, grid_full_path.display());
+
+            match File::create(&grid_full_path) {
+                Ok(file) => {
+                    let writer = BufWriter::new(file);
+                    match serde_json::to_writer_pretty(writer, &sheet_data.grid) {
+                        Ok(_) => {
+                            info!("Successfully saved grid for sheet '{:?}/{}' to '{}'.", category, sheet_name, grid_full_path.display());
+                            grid_saved_successfully = true; // Mark grid as saved
                         }
-                        Err(e) => error!("Failed to create/open grid file '{}' for sheet '{}': {}", full_path.display(), sheet_name, e),
+                        Err(e) => error!("Failed to serialize grid for sheet '{:?}/{}' to '{}': {}", category, sheet_name, grid_full_path.display(), e),
                     }
                 }
-            } else {
-                warn!("Skipping grid save for sheet '{}': Metadata missing.", sheet_name);
+                Err(e) => error!("Failed to create/open grid file '{}' for sheet '{:?}/{}': {}", grid_full_path.display(), category, sheet_name, e),
             }
+
 
             // --- Save Metadata ---
-            if let Some(meta) = &sheet_data.metadata {
-                 // Derive metadata filename from the sheet name in metadata (which should match sheet_name)
-                 let meta_filename = format!("{}.meta.json", meta.sheet_name);
-                 let meta_path = base_path.join(&meta_filename);
+            // Use the helper function to get the full path
+            let meta_path = get_full_metadata_path(&base_path, metadata_to_save);
+            trace!("Saving metadata for sheet '{:?}/{}' to '{}'...", category, sheet_name, meta_path.display());
 
-                 // Sanity check again before saving metadata file
-                 if meta.sheet_name != sheet_name {
-                     error!(
-                         "Save inconsistency: Metadata name ('{}') does not match requested save name ('{}'). Aborting metadata save.",
-                         meta.sheet_name, sheet_name
-                     );
-                 } else {
-                     trace!("Saving metadata for sheet '{}' to '{}'...", sheet_name, meta_path.display());
-                     match File::create(&meta_path) {
-                         Ok(file) => {
-                             let writer = BufWriter::new(file);
-                             match serde_json::to_writer_pretty(writer, meta) { // Serialize the whole SheetMetadata
-                                 Ok(_) => {
-                                     info!("Successfully saved metadata for sheet '{}' to '{}'.", sheet_name, meta_path.display());
-                                     // Metadata saved successfully
-                                 }
-                                 Err(e) => {
-                                     error!("Failed to serialize metadata for sheet '{}' to '{}': {}", sheet_name, meta_path.display(), e);
-                                 }
-                             }
-                         }
-                         Err(e) => {
-                             error!("Failed to create/open metadata file '{}' for sheet '{}': {}", meta_path.display(), sheet_name, e);
-                         }
-                     }
-                 } // End metadata sanity check else
-            } else if grid_saved_successfully { // Only warn if grid was saved but metadata is missing
-                 warn!("Grid data saved for sheet '{}', but metadata was missing, so no metadata file saved.", sheet_name);
+            match File::create(&meta_path) {
+                Ok(file) => {
+                    let writer = BufWriter::new(file);
+                    // Serialize the *provided* metadata_to_save, which might have corrections
+                    match serde_json::to_writer_pretty(writer, metadata_to_save) {
+                        Ok(_) => {
+                            info!("Successfully saved metadata for sheet '{:?}/{}' to '{}'.", category, sheet_name, meta_path.display());
+                            // Metadata saved successfully
+                        }
+                        Err(e) => {
+                            error!("Failed to serialize metadata for sheet '{:?}/{}' to '{}': {}", category, sheet_name, meta_path.display(), e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to create/open metadata file '{}' for sheet '{:?}/{}': {}", meta_path.display(), category, sheet_name, e);
+                }
             }
-            // No explicit warning needed if neither grid nor metadata could be saved (prior errors logged).
+
+            if !grid_saved_successfully && !sheet_data.grid.is_empty() {
+                 warn!("Grid data NOT saved for sheet '{:?}/{}', but metadata file might have been saved.", category, sheet_name);
+            }
+
 
         } // End Some(sheet_data)
         None => {
-            error!("Failed to save sheet '{}': Sheet not found in registry.", sheet_name);
+            error!("Failed to save sheet '{:?}/{}': Sheet not found in registry.", category, sheet_name);
         }
     }
 }
 
 
-// --- save_all_sheets_logic is now potentially unused ---
-// You can keep it if you might add a "Save All" button later,
-// or remove it entirely if only single-sheet saving is desired.
-
 /// Core logic function to save ALL registered sheets to JSON files.
 #[allow(dead_code)] // Mark as unused for now if keeping it
 pub fn save_all_sheets_logic(registry: &SheetRegistry) {
-    if registry.get_sheet_names().is_empty() {
+     // Check if there are any sheets at all
+     if registry.iter_sheets().next().is_none() {
         trace!("Save All skipped: No sheets in registry.");
         return;
-    }
+     }
     info!("Attempting to save ALL sheets...");
-    let base_path = get_default_data_base_path();
 
-    if let Err(e) = fs::create_dir_all(&base_path) {
-        error!("Save All: Failed to create data directory '{:?}' for saving: {}. Aborting save.", base_path, e);
-        return;
-    }
-    let mut saved_count = 0;
-    let mut error_count = 0;
-
-    // Iterate using sheet names to call the single save function
-    for sheet_name in registry.get_sheet_names() {
-         // Call the single sheet save logic which now handles both grid and meta
-         // Note: save_single_sheet logs its own errors/successes.
-         // We could potentially capture success/failure here if needed for a summary.
-         save_single_sheet(registry, sheet_name);
-         // For simplicity, we won't track counts meticulously here as save_single_sheet logs.
-         // If detailed summary is needed, save_single_sheet would need to return status.
+    // Iterate through all sheets using the categorized iterator
+    for (_category, _sheet_name, sheet_data) in registry.iter_sheets() {
+         if let Some(metadata) = &sheet_data.metadata {
+              // Call the single sheet save logic which now handles both grid and meta
+              save_single_sheet(registry, metadata);
+         } else {
+              // This shouldn't happen if registry invariants hold
+              warn!("Skipping save for a sheet because its metadata is missing.");
+         }
     }
 
     info!("Finished Save All attempt. Check logs for details of individual sheets.");
-    // Simplified logging for Save All completion
 }
 
 
-// --- File Operation Handlers Remain the Same ---
+// --- File Operation Handlers ---
 
-/// Handles the `RequestDeleteSheetFile` event. (Remains)
+/// Handles the `RequestDeleteSheetFile` event. Expects relative path (e.g., "Cat/File.json").
 pub fn handle_delete_sheet_file_request(
     mut events: EventReader<RequestDeleteSheetFile>,
 ) {
     let base_path = get_default_data_base_path();
     for event in events.read() {
-        if event.filename.is_empty() { warn!("Skipping file deletion request: filename is empty."); continue; }
-        let full_path = base_path.join(&event.filename);
+        if event.relative_path.as_os_str().is_empty() {
+            warn!("Skipping file deletion request: relative path is empty.");
+            continue;
+        }
+        // Path provided in event should be relative to data_sheets (e.g., "MyCategory/Sheet1.json")
+        let full_path = base_path.join(&event.relative_path);
         info!("Handling request to delete file: '{}'", full_path.display());
         if full_path.exists() {
             match fs::remove_file(&full_path) {
@@ -160,31 +143,92 @@ pub fn handle_delete_sheet_file_request(
                 Err(e) => error!("Failed to delete file '{}': {}", full_path.display(), e),
             }
         } else {
-            // It's not necessarily an error if the file doesn't exist (e.g., deleted manually)
-            // Change level to info or trace depending on expected behavior
              info!("File '{}' not found for deletion request (might have been deleted already).", full_path.display());
+        }
+
+        // --- Attempt to delete parent directory if empty ---
+        if let Some(parent_dir) = full_path.parent() {
+             // Only try deleting if it's not the base data path itself
+             if parent_dir != base_path {
+                  match fs::read_dir(parent_dir) {
+                      Ok(mut read_dir) => {
+                          if read_dir.next().is_none() { // Directory is empty
+                              info!("Attempting to remove empty parent directory: '{}'", parent_dir.display());
+                              match fs::remove_dir(parent_dir) {
+                                   Ok(_) => info!("Successfully removed empty directory: '{}'", parent_dir.display()),
+                                   Err(e) => warn!("Failed to remove directory '{}' (it might not be empty or permissions issue): {}", parent_dir.display(), e),
+                              }
+                          }
+                      },
+                      Err(e) => {
+                           // Don't error if reading dir fails, just log
+                           trace!("Could not read parent directory '{}' to check for emptiness: {}", parent_dir.display(), e);
+                      }
+                  }
+             }
         }
     }
 }
 
-/// Handles the `RequestRenameSheetFile` event. (Remains)
+/// Handles the `RequestRenameSheetFile` event. Expects relative paths.
 pub fn handle_rename_sheet_file_request(
      mut events: EventReader<RequestRenameSheetFile>,
 ) {
      let base_path = get_default_data_base_path();
      for event in events.read() {
-         if event.old_filename.is_empty() || event.new_filename.is_empty() { warn!("Skipping file rename request: old or new filename is empty."); continue; }
-         if event.old_filename == event.new_filename { warn!("Skipping file rename request: old and new filenames are the same ('{}').", event.old_filename); continue; }
-         let old_path = base_path.join(&event.old_filename);
-         let new_path = base_path.join(&event.new_filename);
+         if event.old_relative_path.as_os_str().is_empty() || event.new_relative_path.as_os_str().is_empty() {
+             warn!("Skipping file rename request: old or new relative path is empty."); continue;
+         }
+         if event.old_relative_path == event.new_relative_path {
+              warn!("Skipping file rename request: old and new relative paths are the same ('{}').", event.old_relative_path.display()); continue;
+         }
+
+         let old_path = base_path.join(&event.old_relative_path);
+         let new_path = base_path.join(&event.new_relative_path);
+
          info!("Handling request to rename file: '{}' -> '{}'", old_path.display(), new_path.display());
+
          if !old_path.exists() { warn!("Cannot rename: Old file '{}' not found.", old_path.display()); continue; }
          if new_path.exists() { error!("Cannot rename: Target file '{}' already exists.", new_path.display()); continue; }
+
+         // Ensure target directory exists (needed if category changes, though rename currently doesn't support that)
+         if let Some(new_parent) = new_path.parent() {
+             if !new_parent.exists() {
+                  if let Err(e) = fs::create_dir_all(new_parent) {
+                      error!("Cannot rename: Failed to create target directory '{}': {}", new_parent.display(), e);
+                      continue;
+                  }
+             }
+         } else {
+              error!("Cannot rename: Could not determine parent directory for new path '{}'.", new_path.display());
+              continue;
+         }
+
+
          match fs::rename(&old_path, &new_path) {
              Ok(_) => info!("Successfully renamed file: '{}' -> '{}'", old_path.display(), new_path.display()),
              Err(e) => error!("Failed to rename file '{}' to '{}': {}", old_path.display(), new_path.display(), e),
          }
+
+          // --- Attempt to delete old parent directory if empty ---
+          if let Some(old_parent_dir) = old_path.parent() {
+             // Only try deleting if it's not the base data path itself and differs from new parent
+             if old_parent_dir != base_path && old_parent_dir != new_path.parent().unwrap_or(old_parent_dir) {
+                  match fs::read_dir(old_parent_dir) {
+                      Ok(mut read_dir) => {
+                          if read_dir.next().is_none() { // Directory is empty
+                              info!("Attempting to remove empty old parent directory: '{}'", old_parent_dir.display());
+                              match fs::remove_dir(old_parent_dir) {
+                                   Ok(_) => info!("Successfully removed empty old directory: '{}'", old_parent_dir.display()),
+                                   Err(e) => warn!("Failed to remove old directory '{}': {}", old_parent_dir.display(), e),
+                              }
+                          }
+                      },
+                      Err(e) => {
+                           trace!("Could not read old parent directory '{}' to check for emptiness: {}", old_parent_dir.display(), e);
+                      }
+                  }
+             }
+        }
      }
 }
-
-// --- Autosave Systems REMOVED ---

@@ -1,6 +1,8 @@
 // src/sheets/systems/logic/delete_sheet.rs
 use bevy::prelude::*;
+use std::path::PathBuf; // Added for relative path
 use crate::sheets::{
+    definitions::SheetMetadata, // Needed for path generation
     events::{RequestDeleteSheet, RequestDeleteSheetFile, SheetOperationFeedback},
     resources::SheetRegistry,
 };
@@ -13,56 +15,61 @@ pub fn handle_delete_request(
     mut feedback_writer: EventWriter<SheetOperationFeedback>,
 ) {
     for event in events.read() {
+        let category = &event.category; // <<< Get category
         let sheet_name = &event.sheet_name;
-        info!("Handling delete request for sheet: '{}'", sheet_name);
+        info!("Handling delete request for sheet: '{:?}/{}'", category, sheet_name);
 
         // --- Get metadata BEFORE attempting delete ---
-        // Need immutable borrow first
-        let metadata_opt = {
+        // Need immutable borrow first to clone metadata if sheet exists
+        let metadata_opt: Option<SheetMetadata> = {
             let registry_immut = registry.as_ref();
-            registry_immut.get_sheet(sheet_name).and_then(|d| d.metadata.clone()) // Clone metadata if present
+            registry_immut.get_sheet(category, sheet_name).and_then(|d| d.metadata.clone()) // Clone metadata if present
         };
 
         // Check if sheet exists before attempting delete (using immutable borrow again)
-        if registry.get_sheet(sheet_name).is_none() {
-             let msg = format!("Delete failed: Sheet '{}' not found.", sheet_name);
-             error!("{}", msg);
-             feedback_writer.send(SheetOperationFeedback { message: msg, is_error: true });
-             continue; // Skip to next event
-        }
-        if metadata_opt.is_none() && registry.get_sheet(sheet_name).is_some() {
-            warn!("Sheet '{}' exists but metadata is missing during delete request processing.", sheet_name);
-            // Proceed with registry deletion, but file deletion might be incomplete.
+        if metadata_opt.is_none() {
+            let msg = format!("Delete failed: Sheet '{:?}/{}' not found or missing metadata.", category, sheet_name);
+            error!("{}", msg);
+            feedback_writer.send(SheetOperationFeedback { message: msg, is_error: true });
+            continue; // Skip to next event
         }
 
         // --- Perform Delete in Registry (Mutable Borrow) ---
-        match registry.delete_sheet(sheet_name) {
-            Ok(_) => {
-                let msg = format!("Successfully deleted sheet '{}' from registry.", sheet_name);
+        // Use the category from the event
+        match registry.delete_sheet(category, sheet_name) {
+            Ok(removed_data) => { // Registry deletion returns the removed data
+                let msg = format!("Successfully deleted sheet '{:?}/{}' from registry.", category, sheet_name);
                 info!("{}", msg);
                 feedback_writer.send(SheetOperationFeedback { message: msg, is_error: false });
 
-                // --- Request File Deletions (using cloned metadata) ---
-                if let Some(metadata) = metadata_opt {
-                     let filename_to_delete = &metadata.data_filename;
-                     // Use sheet_name from metadata for consistency, though it should match event.sheet_name
-                     let meta_filename_to_delete = format!("{}.meta.json", metadata.sheet_name);
+                // --- Request File Deletions (using metadata from removed data) ---
+                if let Some(metadata) = removed_data.metadata { // Use metadata from the returned data
+                     // Construct relative paths
+                     let mut grid_relative_path = PathBuf::new();
+                     if let Some(cat) = &metadata.category { grid_relative_path.push(cat); }
+                     grid_relative_path.push(&metadata.data_filename);
 
-                     if !filename_to_delete.is_empty() {
-                         info!("Requesting grid file deletion: '{}'", filename_to_delete);
-                         file_delete_writer.send(RequestDeleteSheetFile { filename: filename_to_delete.clone() });
+                     let mut meta_relative_path = PathBuf::new();
+                     if let Some(cat) = &metadata.category { meta_relative_path.push(cat); }
+                     meta_relative_path.push(format!("{}.meta.json", metadata.sheet_name));
+
+
+                     if !metadata.data_filename.is_empty() {
+                         info!("Requesting grid file deletion: '{}'", grid_relative_path.display());
+                         file_delete_writer.send(RequestDeleteSheetFile { relative_path: grid_relative_path });
                      } else {
-                         warn!("No grid filename found in metadata for deleted sheet '{}'.", metadata.sheet_name);
+                         warn!("No grid filename found in metadata for deleted sheet '{:?}/{}'.", category, metadata.sheet_name);
                      }
-                     info!("Requesting meta file deletion: '{}'", meta_filename_to_delete);
-                     file_delete_writer.send(RequestDeleteSheetFile { filename: meta_filename_to_delete });
+                     info!("Requesting meta file deletion: '{}'", meta_relative_path.display());
+                     file_delete_writer.send(RequestDeleteSheetFile { relative_path: meta_relative_path });
                 } else {
-                    warn!("Cannot request file deletion for '{}': Metadata was missing.", sheet_name);
+                    // This case should ideally not happen if metadata_opt check passed
+                    warn!("Cannot request file deletion for '{:?}/{}': Metadata was missing in removed data.", category, sheet_name);
                 }
             }
             Err(e) => {
-                // This error means deletion from registry map failed, which is unexpected if sheet existed.
-                let msg = format!("Critical error: Failed to delete sheet '{}' from registry: {}", sheet_name, e);
+                // Error from registry.delete_sheet
+                let msg = format!("Failed to delete sheet '{:?}/{}' from registry: {}", category, sheet_name, e);
                 error!("{}", msg);
                 feedback_writer.send(SheetOperationFeedback { message: msg, is_error: true });
             }

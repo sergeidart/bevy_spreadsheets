@@ -8,8 +8,7 @@ use crate::sheets::{
     resources::SheetRegistry,
     events::UpdateCellEvent,
 };
-// Import the refactored function
-use crate::ui::common::edit_cell_widget; // <-- CHANGED from ui_for_cell
+use crate::ui::common::edit_cell_widget;
 use super::state::EditorWindowState;
 
 
@@ -50,6 +49,7 @@ fn get_filtered_row_indices(
 pub fn sheet_table_body(
     body: TableBody,
     row_height: f32,
+    category: &Option<String>, // <<< ADDED category
     sheet_name: &str,
     headers: &[String], // Needed for column count consistency check
     filters: &[Option<String>], // Passed to filtering logic
@@ -61,7 +61,8 @@ pub fn sheet_table_body(
 
     // --- Pre-fetch data needed for rendering (immutable reads) ---
     let (grid_data, filtered_indices, num_cols, validators) = {
-        if let Some(sheet_data) = registry.get_sheet(sheet_name) {
+        // Use category and sheet_name to get data
+        if let Some(sheet_data) = registry.get_sheet(category, sheet_name) {
             if let Some(meta) = &sheet_data.metadata {
                  (
                     &sheet_data.grid, // Borrow grid directly
@@ -71,12 +72,12 @@ pub fn sheet_table_body(
                  )
             } else {
                  // Metadata missing, use empty defaults
-                 warn!("Sheet '{}' found but metadata missing in table_body", sheet_name);
+                 warn!("Sheet '{:?}/{}' found but metadata missing in table_body", category, sheet_name);
                  (&Vec::new(), Vec::new(), 0, Vec::new())
             }
         } else {
              // Sheet missing entirely
-             warn!("Sheet '{}' not found in registry in table_body", sheet_name);
+             warn!("Sheet '{:?}/{}' not found in registry in table_body", category, sheet_name);
              (&Vec::new(), Vec::new(), 0, Vec::new())
         }
     };
@@ -90,11 +91,11 @@ pub fn sheet_table_body(
          body.row(row_height, |mut row| { row.col(|ui| { ui.label("(No rows match filter)"); }); });
          return false;
      }
-     else if grid_data.is_empty() && registry.get_sheet(sheet_name).is_some() {
+     else if grid_data.is_empty() && registry.get_sheet(category, sheet_name).is_some() {
          body.row(row_height, |mut row| { row.col(|ui| { ui.label("(Sheet is empty)"); }); });
          return false;
      }
-     else if registry.get_sheet(sheet_name).is_none() {
+     else if registry.get_sheet(category, sheet_name).is_none() {
          // This case should ideally be handled by the caller preventing rendering,
          // but included as a fallback.
          body.row(row_height, |mut row| { row.col(|ui| { ui.label("Sheet missing"); }); });
@@ -127,8 +128,8 @@ pub fn sheet_table_body(
                      );
                  });
                  warn!(
-                     "Row length mismatch in sheet '{}', row {}: Expected {}, found {}",
-                     sheet_name, original_row_index, num_cols, current_row.len()
+                     "Row length mismatch in sheet '{:?}/{}', row {}: Expected {}, found {}",
+                     category, sheet_name, original_row_index, num_cols, current_row.len()
                  );
                  return; // Skip rendering rest of this invalid row
              }
@@ -139,19 +140,25 @@ pub fn sheet_table_body(
                     // Safely get cell string and validator
                     if let Some(cell_string) = current_row.get(c_idx) {
                          let validator_opt = validators.get(c_idx).cloned().flatten();
-                         let cell_id = egui::Id::new("cell").with(sheet_name).with(original_row_index).with(c_idx);
+                         // Include category in the ID for uniqueness across categories
+                         let cell_id = egui::Id::new("cell")
+                             .with(category.as_deref().unwrap_or("root"))
+                             .with(sheet_name)
+                             .with(original_row_index)
+                             .with(c_idx);
 
-                        // --- Call the refactored edit widget ---
-                        if let Some(new_value) = edit_cell_widget( // <-- CHANGED from ui_for_cell
+                        // Call the edit widget
+                        if let Some(new_value) = edit_cell_widget(
                              ui,
                              cell_id,
                              cell_string,
                              &validator_opt,
-                             registry,
-                             state
+                             registry, // Pass immutable registry
+                             state // Pass mutable state for cache
                         ) {
-                             // If the widget indicated a change, send an update event
+                             // If the widget indicated a change, send an update event with category
                              cell_update_writer.send(UpdateCellEvent {
+                                 category: category.clone(), // <<< Send category
                                  sheet_name: sheet_name.to_string(),
                                  row_index: original_row_index,
                                  col_index: c_idx,
@@ -161,14 +168,14 @@ pub fn sheet_table_body(
                     } else {
                         // This should ideally not happen if row length check passed
                         ui.colored_label(egui::Color32::RED, "Cell Err");
-                        error!("Cell index {} out of bounds for row {} (len {}) in sheet '{}'", c_idx, original_row_index, current_row.len(), sheet_name);
+                        error!("Cell index {} out of bounds for row {} (len {}) in sheet '{:?}/{}'", c_idx, original_row_index, current_row.len(), category, sheet_name);
                     }
                 });
             } // End column loop
         } else {
             // This should not happen if filtered_indices are derived correctly
             row.col(|ui| { ui.colored_label(egui::Color32::RED, "Row Idx Err"); });
-            error!("Original row index {} out of bounds (grid len {}) in sheet '{}'", original_row_index, grid_data.len(), sheet_name);
+            error!("Original row index {} out of bounds (grid len {}) in sheet '{:?}/{}'", original_row_index, grid_data.len(), category, sheet_name);
         }
     }); // End body.rows
 
