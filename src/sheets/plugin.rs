@@ -11,11 +11,14 @@ use super::events::{
 
 // Adjust IO system imports to reflect the new structure
 use super::systems::io::{
-    // Import from the NEW startup module
-    startup::{
+    // Import from startup_load module
+    startup_load::{
         register_sheet_metadata,
         load_registered_sheets_startup,
-        scan_directory_for_sheets_startup, // scan moved here
+    },
+    // Import from startup_scan module
+    startup_scan::{
+        scan_directory_for_sheets_startup,
     },
     // Import runtime upload handlers from load module
     load::{
@@ -27,9 +30,7 @@ use super::systems::io::{
     save::{
         handle_delete_sheet_file_request,
         handle_rename_sheet_file_request,
-        // save_single_sheet is used internally by other systems, not usually registered directly
     },
-    // No longer need direct import from scan module
 };
 // Import logic systems (remain the same)
 use super::systems::logic::{
@@ -68,7 +69,6 @@ impl Plugin for SheetsPlugin {
 
 
         // --- Event Registration ---
-        // Register all events used by the systems
         app.add_event::<AddSheetRowRequest>()
            .add_event::<JsonSheetUploaded>()
            .add_event::<RequestRenameSheet>()
@@ -82,15 +82,15 @@ impl Plugin for SheetsPlugin {
 
 
         // --- Startup Systems ---
-        // Add systems from the new startup.rs module
+        // Add systems from the split startup modules
         app.add_systems(Startup,
             (
-                // These now come from systems::io::startup
-                register_sheet_metadata,
-                apply_deferred, // Apply registry changes from registration before loading
-                load_registered_sheets_startup,
-                apply_deferred, // Apply registry changes from loading before scanning
-                scan_directory_for_sheets_startup,
+                // These now come from systems::io::startup_load and ::startup_scan
+                register_sheet_metadata,         // from startup_load
+                apply_deferred,                  // Ensure registry changes are applied
+                load_registered_sheets_startup,  // from startup_load
+                apply_deferred,                  // Ensure registry changes are applied
+                scan_directory_for_sheets_startup, // from startup_scan
             ).chain(), // Ensure they run in this specific order at startup
         );
 
@@ -132,6 +132,6 @@ impl Plugin for SheetsPlugin {
         );
 
 
-        info!("SheetsPlugin initialized (using startup.rs and load.rs for IO).");
+        info!("SheetsPlugin initialized (using split startup IO).");
     }
 }

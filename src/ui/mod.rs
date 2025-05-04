@@ -9,8 +9,8 @@ pub mod common;
 // Declare the new systems module
 pub mod systems;
 
-// Import the editor UI system
-use elements::editor::generic_sheet_editor_ui;
+// Import the editor UI system from its new location
+use elements::editor::generic_sheet_editor_ui; // Updated import path
 // Import the new feedback handling system
 use systems::handle_ui_feedback;
 
@@ -34,7 +34,7 @@ impl Plugin for EditorUiPlugin {
             // Add the UI feedback handler system to run in Update schedule
             .add_systems(Update, handle_ui_feedback)
             // Add the main editor UI rendering system using EguiContextPass
-            .add_systems(EguiContextPass, generic_sheet_editor_ui); // Keep this
+            .add_systems(EguiContextPass, generic_sheet_editor_ui); // System name remains the same
 
         info!("EditorUiPlugin initialized with feedback handling.");
     }

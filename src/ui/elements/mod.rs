@@ -1,8 +1,8 @@
 // src/ui/elements/mod.rs
 
-// Main editor view (will be simplified)
+// Main editor view (now points to the editor directory)
 pub mod editor;
-// NEW: Module for popup dialogs
+// Popups module (directory)
 pub mod popups;
-// NEW: Module for the top control panel/toolbar
+// Top panel module (file)
 pub mod top_panel;

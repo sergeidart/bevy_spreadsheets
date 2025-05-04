@@ -25,12 +25,14 @@ const EXAMPLE_ITEMS_HEADERS: &[&str] = &[
 
 // Function to create the owned metadata instance
 pub fn create_example_items_metadata() -> SheetMetadata {
-    assert_eq!(EXAMPLE_ITEMS_HEADERS.len(), EXAMPLE_ITEMS_COLUMN_TYPES.len(), "ExampleItems headers/types length mismatch!");
+    let num_cols = EXAMPLE_ITEMS_HEADERS.len();
+    assert_eq!(num_cols, EXAMPLE_ITEMS_COLUMN_TYPES.len(), "ExampleItems headers/types length mismatch!");
     SheetMetadata {
         sheet_name: EXAMPLE_ITEMS_SHEET_NAME.to_string(),
         data_filename: EXAMPLE_ITEMS_FILENAME.to_string(),
         column_headers: EXAMPLE_ITEMS_HEADERS.iter().map(|&s| s.to_string()).collect(),
         column_types: EXAMPLE_ITEMS_COLUMN_TYPES.to_vec(),
+        column_filters: vec![None; num_cols], // Initialize filters
     }
 }
 
@@ -43,12 +45,14 @@ const SIMPLE_CONFIG_COLUMN_TYPES: &[ColumnDataType] = &[
 const SIMPLE_CONFIG_HEADERS: &[&str] = &["Setting Key", "Setting Value", "Priority (Optional u16)"];
 
 pub fn create_simple_config_metadata() -> SheetMetadata {
-     assert_eq!(SIMPLE_CONFIG_HEADERS.len(), SIMPLE_CONFIG_COLUMN_TYPES.len(), "SimpleConfig headers/types length mismatch!");
+    let num_cols = SIMPLE_CONFIG_HEADERS.len();
+    assert_eq!(num_cols, SIMPLE_CONFIG_COLUMN_TYPES.len(), "SimpleConfig headers/types length mismatch!");
     SheetMetadata {
         sheet_name: SIMPLE_CONFIG_SHEET_NAME.to_string(),
         data_filename: SIMPLE_CONFIG_FILENAME.to_string(),
         column_headers: SIMPLE_CONFIG_HEADERS.iter().map(|&s| s.to_string()).collect(),
         column_types: SIMPLE_CONFIG_COLUMN_TYPES.to_vec(),
+        column_filters: vec![None; num_cols], // Initialize filters
     }
 }
 

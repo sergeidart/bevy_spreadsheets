@@ -12,12 +12,14 @@ pub enum ColumnDataType {
 
 /// Holds the metadata defining the structure of a specific sheet.
 /// Now uses owned types for dynamic creation.
-#[derive(Debug, Clone, Serialize, Deserialize)] // Can now be serialized if needed
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SheetMetadata {
     pub sheet_name: String,       // Owned String
     pub data_filename: String,    // Owned String
     pub column_headers: Vec<String>, // Owned Vec<String>
     pub column_types: Vec<ColumnDataType>, // Owned Vec<ColumnDataType>
+    #[serde(default)] // To handle loading older metadata without filters
+    pub column_filters: Vec<Option<String>>, // New field for filters
 }
 
 /// Represents the actual grid data along with its metadata.
@@ -39,6 +41,7 @@ impl SheetMetadata {
             column_headers: (0..num_cols).map(|i| format!("Column {}", i + 1)).collect(),
             // Default all columns to String type for generic uploads
             column_types: vec![ColumnDataType::String; num_cols],
+            column_filters: vec![None; num_cols], // Initialize filters with None
         }
     }
 }
