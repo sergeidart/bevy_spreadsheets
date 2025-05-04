@@ -1,13 +1,27 @@
 // src/ui/mod.rs
 use bevy::prelude::*;
-use bevy_egui::{EguiContexts, EguiContextPass}; // Removed EguiPlugin import if unused elsewhere here
+// Keep only necessary bevy_egui imports if EguiPlugin added elsewhere
+use bevy_egui::EguiContextPass;
 
 // Declare UI element modules
 pub mod elements;
-pub mod common; // Don't forget common
+pub mod common;
+// Declare the new systems module
+pub mod systems;
 
 // Import the editor UI system
 use elements::editor::generic_sheet_editor_ui;
+// Import the new feedback handling system
+use systems::handle_ui_feedback;
+
+// --- Define the Feedback Resource ---
+/// Resource to hold feedback messages for the UI.
+#[derive(Resource, Default, Debug, Clone)]
+pub struct UiFeedbackState {
+    pub last_message: String,
+    pub is_error: bool,
+}
+
 
 /// Plugin for the standalone spreadsheet editor UI.
 pub struct EditorUiPlugin;
@@ -15,11 +29,13 @@ pub struct EditorUiPlugin;
 impl Plugin for EditorUiPlugin {
     fn build(&self, app: &mut App) {
         app
-            // EguiPlugin is already added in main.rs, so remove it from here.
-            // .add_plugins(EguiPlugin { enable_multipass_for_primary_context: true }) // <-- REMOVE THIS LINE
-            // Run your UI system in the EguiContextPass schedule:
+            // Initialize the UI feedback resource
+            .init_resource::<UiFeedbackState>()
+            // Add the UI feedback handler system to run in Update schedule
+            .add_systems(Update, handle_ui_feedback)
+            // Add the main editor UI rendering system using EguiContextPass
             .add_systems(EguiContextPass, generic_sheet_editor_ui); // Keep this
 
-        info!("EditorUiPlugin initialized.");
+        info!("EditorUiPlugin initialized with feedback handling.");
     }
 }

@@ -1,4 +1,8 @@
 // src/ui/elements/mod.rs
 
-// Only the editor element is needed for this app
+// Main editor view (will be simplified)
 pub mod editor;
+// NEW: Module for popup dialogs
+pub mod popups;
+// NEW: Module for the top control panel/toolbar
+pub mod top_panel;

@@ -1,24 +1,58 @@
 // src/sheets/events.rs
 use bevy::prelude::Event;
-use super::definitions::SheetGridData; // Import SheetGridData
+use std::path::PathBuf;
 
-/// Event sent when the user clicks the "Save All Sheets" button in the UI.
-/// Handled by systems in `sheets::systems::io`.
-#[derive(Event, Debug, Clone)]
-pub struct RequestSaveSheets;
+use super::definitions::SheetGridData; // Keep if SheetGridData used elsewhere
 
-/// Event sent when the user clicks the "Add Row" button in the sheet editor UI.
-/// Handled by systems in `sheets::systems::logic`.
+// --- RequestSaveSheets struct removed ---
+// #[derive(Event, Debug, Clone)]
+// pub struct RequestSaveSheets;
+
+// --- Other events remain ---
 #[derive(Event, Debug, Clone)]
 pub struct AddSheetRowRequest {
-    pub sheet_name: String, // Use String
+    pub sheet_name: String,
 }
 
-/// Event sent when a JSON file has been successfully loaded and parsed by the UI.
-/// Handled by a system to add the data to the SheetRegistry.
 #[derive(Event, Debug, Clone)]
 pub struct JsonSheetUploaded {
-    pub desired_sheet_name: String, // Name derived from filename
-    pub original_filename: String, // Keep original filename for reference/saving
-    pub grid_data: Vec<Vec<String>>, // The parsed grid
+    pub desired_sheet_name: String,
+    pub original_filename: String,
+    pub grid_data: Vec<Vec<String>>,
+}
+
+#[derive(Event, Debug, Clone)]
+pub struct RequestRenameSheet {
+    pub old_name: String,
+    pub new_name: String,
+}
+
+#[derive(Event, Debug, Clone)]
+pub struct RequestDeleteSheet {
+    pub sheet_name: String,
+}
+
+#[derive(Event, Debug, Clone)]
+pub struct RequestDeleteSheetFile {
+    pub filename: String,
+}
+
+#[derive(Event, Debug, Clone)]
+pub struct RequestRenameSheetFile {
+    pub old_filename: String,
+    pub new_filename: String,
+}
+
+#[derive(Event, Debug, Clone)]
+pub struct SheetOperationFeedback {
+    pub message: String,
+    pub is_error: bool,
+}
+
+#[derive(Event, Debug, Clone)]
+pub struct RequestInitiateFileUpload;
+
+#[derive(Event, Debug, Clone)]
+pub struct RequestProcessUpload {
+    pub path: PathBuf,
 }
