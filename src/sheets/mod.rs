@@ -8,7 +8,7 @@ pub mod plugin;
 pub mod resources;
 
 // Declare internal implementation module
-mod systems;
+pub(crate) mod systems;
 
 // Re-export types needed externally (e.g., by UI)
 pub use definitions::{ColumnDataType, SheetGridData, SheetMetadata};
