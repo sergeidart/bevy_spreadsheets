@@ -2,13 +2,9 @@
 use bevy::prelude::Event;
 use std::path::PathBuf;
 
-use super::definitions::SheetGridData; // Keep if SheetGridData used elsewhere
+// Corrected import path
+use super::definitions::{SheetGridData, ColumnValidator};
 
-// --- RequestSaveSheets struct removed ---
-// #[derive(Event, Debug, Clone)]
-// pub struct RequestSaveSheets;
-
-// --- Other events remain ---
 #[derive(Event, Debug, Clone)]
 pub struct AddSheetRowRequest {
     pub sheet_name: String,
@@ -57,10 +53,26 @@ pub struct RequestProcessUpload {
     pub path: PathBuf,
 }
 
-// --- Added Event ---
 #[derive(Event, Debug, Clone)]
 pub struct RequestUpdateColumnName {
     pub sheet_name: String,
     pub column_index: usize,
     pub new_name: String,
+}
+
+// --- NEW Event for Cell Updates ---
+#[derive(Event, Debug, Clone)]
+pub struct UpdateCellEvent {
+    pub sheet_name: String,
+    pub row_index: usize, // Use original row index
+    pub col_index: usize,
+    pub new_value: String,
+}
+
+// --- Event for Validator Updates ---
+#[derive(Event, Debug, Clone)]
+pub struct RequestUpdateColumnValidator {
+    pub sheet_name: String,
+    pub column_index: usize,
+    pub new_validator: Option<ColumnValidator>, // Use Option to allow clearing/resetting
 }

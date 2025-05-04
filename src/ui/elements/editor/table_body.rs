@@ -3,147 +3,174 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use egui_extras::{TableBody, TableRow};
 
-use crate::sheets::definitions::ColumnDataType;
-use crate::sheets::resources::SheetRegistry;
-use crate::ui::common::ui_for_cell;
-use super::state::EditorWindowState; // For flagging save
+use crate::sheets::{
+    definitions::ColumnValidator,
+    resources::SheetRegistry,
+    events::UpdateCellEvent,
+};
+// Import the refactored function
+use crate::ui::common::edit_cell_widget; // <-- CHANGED from ui_for_cell
+use super::state::EditorWindowState;
+
 
 /// Filters rows based on the "contains" logic for active column filters.
 /// Returns a Vec containing the original indices of rows that pass ALL filters.
 fn get_filtered_row_indices(
     grid: &Vec<Vec<String>>,
-    filters: &[Option<String>], // Changed to slice &[Option<String>]
-    _headers: &[String], // Keep for potential future debugging use
+    filters: &[Option<String>],
+    _headers: &[String], // Kept for potential future use
 ) -> Vec<usize> {
     if filters.iter().all(Option::is_none) {
-        // Optimization: If no filters are active, return all indices
+        // Optimization: If no filters, return all indices
         return (0..grid.len()).collect();
     }
-
     (0..grid.len())
         .filter(|&row_idx| {
-            // Get the current row safely
             if let Some(row) = grid.get(row_idx) {
                 // Check if this row passes ALL active filters
                 filters.iter().enumerate().all(|(col_idx, filter_opt)| {
                     match filter_opt {
-                        // Filter is active and not empty
+                        // If filter exists and is not empty, check if cell contains it (case-insensitive)
                         Some(filter_text) if !filter_text.is_empty() => {
-                             // Get the cell text for this column safely
                              row.get(col_idx)
-                                 // Perform case-insensitive contains check
                                 .map_or(false, |cell_text| cell_text.to_lowercase().contains(&filter_text.to_lowercase()))
                         }
-                        // No filter for this column, or filter is empty string: always passes
+                        // If no filter or filter is empty, this column passes
                         _ => true,
                     }
                 })
-            } else {
-                // Row index out of bounds (shouldn't happen ideally)
-                warn!("Row index {} out of bounds during filtering.", row_idx);
-                false
-            }
+            } else { false } // Row index out of bounds
         })
-        .collect() // Collect the original indices that passed
+        .collect()
 }
 
-/// Renders the body rows for the sheet table, handling filtering and cell editing.
-/// Returns true if any cell was changed during this frame.
-pub fn sheet_table_body(
-    body: TableBody, // egui_extras table body
-    row_height: f32, // Pass calculated row height in
-    sheet_name: &str,
-    headers: &[String], // Needed for filtering context and num_cols
-    column_types: &[ColumnDataType],
-    filters: &[Option<String>],
-    registry: &mut SheetRegistry, // Mutable registry for cell edits
-    state: &mut EditorWindowState, // Mutable state to flag saves
-) -> bool {
-    let mut change_occurred = false;
-    let mut body = body; // Make mutable for use
 
-    // --- Get grid data and apply filtering ---
-    let (filtered_indices, num_cols) = if let Some(sheet_data) = registry.get_sheet(sheet_name) {
-        (
-            // Pass filters as slice
-            get_filtered_row_indices(&sheet_data.grid, filters, headers),
-            sheet_data.metadata.as_ref().map_or(0, |m| m.column_headers.len()),
-        )
-    } else {
-        // Sheet disappeared? Render empty or error message
-        body.row(row_height, |mut row| { // Use passed row_height
-            row.col(|ui| {
-                ui.label("Sheet data unavailable.");
-            });
-        });
-        return false; // No changes possible
+/// Renders the body rows for the sheet table, handling filtering and cell editing via Events.
+/// Returns false (change handling is now done via events).
+pub fn sheet_table_body(
+    body: TableBody,
+    row_height: f32,
+    sheet_name: &str,
+    headers: &[String], // Needed for column count consistency check
+    filters: &[Option<String>], // Passed to filtering logic
+    registry: &SheetRegistry, // Changed to immutable reference &SheetRegistry
+    mut cell_update_writer: EventWriter<UpdateCellEvent>,
+    state: &mut EditorWindowState, // Mutable state for cache access
+) -> bool { // Return value less meaningful now
+    let mut body = body;
+
+    // --- Pre-fetch data needed for rendering (immutable reads) ---
+    let (grid_data, filtered_indices, num_cols, validators) = {
+        if let Some(sheet_data) = registry.get_sheet(sheet_name) {
+            if let Some(meta) = &sheet_data.metadata {
+                 (
+                    &sheet_data.grid, // Borrow grid directly
+                    get_filtered_row_indices(&sheet_data.grid, filters, headers),
+                    meta.column_headers.len(), // Use metadata headers length
+                    meta.column_validators.clone(), // Clone validators for use in closure
+                 )
+            } else {
+                 // Metadata missing, use empty defaults
+                 warn!("Sheet '{}' found but metadata missing in table_body", sheet_name);
+                 (&Vec::new(), Vec::new(), 0, Vec::new())
+            }
+        } else {
+             // Sheet missing entirely
+             warn!("Sheet '{}' not found in registry in table_body", sheet_name);
+             (&Vec::new(), Vec::new(), 0, Vec::new())
+        }
     };
+
+     // --- Render Placeholder Rows for Edge Cases ---
+     if num_cols == 0 && !grid_data.is_empty() {
+         body.row(row_height, |mut row| { row.col(|ui| { ui.label("(No columns)"); }); });
+         return false;
+     }
+     else if filtered_indices.is_empty() && !grid_data.is_empty() {
+         body.row(row_height, |mut row| { row.col(|ui| { ui.label("(No rows match filter)"); }); });
+         return false;
+     }
+     else if grid_data.is_empty() && registry.get_sheet(sheet_name).is_some() {
+         body.row(row_height, |mut row| { row.col(|ui| { ui.label("(Sheet is empty)"); }); });
+         return false;
+     }
+     else if registry.get_sheet(sheet_name).is_none() {
+         // This case should ideally be handled by the caller preventing rendering,
+         // but included as a fallback.
+         body.row(row_height, |mut row| { row.col(|ui| { ui.label("Sheet missing"); }); });
+         return false;
+     }
 
     let num_filtered_rows = filtered_indices.len();
 
-    // --- Render Filtered Rows ---
-    // Borrow registry mutably *once* if possible, for the duration of the loop
-    if let Some(sheet_data_mut) = registry.get_sheet_mut(sheet_name) {
-        body.rows(row_height, num_filtered_rows, |mut row: TableRow| { // Use passed row_height and num_filtered_rows
-            let filtered_row_index_in_list = row.index(); // 0..num_filtered_rows-1
-
-            // Map back to original grid index
-            let original_row_index = match filtered_indices.get(filtered_row_index_in_list) {
-                Some(&idx) => idx,
-                None => {
-                    error!("Filtered index {} out of bounds!", filtered_row_index_in_list);
-                    row.col(|ui| { ui.label("Error: Invalid Filtered Index"); });
-                    return;
-                }
-            };
-
-            // Access the mutable grid using the original index
-            if original_row_index < sheet_data_mut.grid.len() {
-                // Resize row if column count mismatch (modifies underlying data)
-                if sheet_data_mut.grid[original_row_index].len() != num_cols {
-                    sheet_data_mut.grid[original_row_index].resize(num_cols, String::new());
-                    change_occurred = true; // Mark change if resized
-                }
-
-                if num_cols == 0 {
-                    row.col(|ui| { ui.label("(No columns defined)"); });
-                    return;
-                }
-
-                // Borrow the specific row mutably once
-                let current_row_mut = &mut sheet_data_mut.grid[original_row_index];
-                for c_idx in 0..num_cols {
-                    row.col(|ui| {
-                        // Borrow the cell string mutably
-                        if let Some(cell_string_mut) = current_row_mut.get_mut(c_idx) {
-                             if let Some(col_type) = column_types.get(c_idx) {
-                                 // Generate unique ID using original row index
-                                 let cell_id = egui::Id::new("cell")
-                                     .with(sheet_name)
-                                     .with(original_row_index) // Use original index for ID stability
-                                     .with(c_idx);
-                                 if ui_for_cell(ui, cell_id, cell_string_mut, *col_type) {
-                                     change_occurred = true; // Mark change if cell edited
-                                     // Flag save immediately when a cell changes
-                                     state.sheet_needs_save = true;
-                                     state.sheet_to_save = sheet_name.to_string();
-                                 }
-                             } else { ui.label("Error: Type invalid");}
-                        } else { ui.label("Error: Index invalid"); }
-                    });
-                } // End column loop
-            } else {
-                row.col(|ui| { ui.label("Error: Original Row index invalid"); });
+    // --- Main Row Rendering Loop ---
+    body.rows(row_height, num_filtered_rows, |mut row: TableRow| {
+        let filtered_row_index_in_list = row.index();
+        // Get the original index from the pre-calculated filtered list
+        let original_row_index = match filtered_indices.get(filtered_row_index_in_list) {
+            Some(&idx) => idx,
+            None => {
+                error!("Filtered index out of bounds! List index: {}, List len: {}", filtered_row_index_in_list, filtered_indices.len());
+                row.col(|ui| { ui.colored_label(egui::Color32::RED, "Err"); });
+                return;
             }
-        }); // End body.rows
-    } else {
-        // Sheet disappeared between initial check and mutable borrow
-        body.row(row_height, |mut row| { // Use passed row_height
-            row.col(|ui| {
-                ui.label("Sheet data unavailable (mut).");
-            });
-        });
-    }
+        };
 
-    change_occurred
+        // Safely get the current row using the original index
+        if let Some(current_row) = grid_data.get(original_row_index) {
+            // Consistency check: Ensure row has expected number of columns based on metadata
+             if current_row.len() != num_cols {
+                 row.col(|ui| {
+                     ui.colored_label(
+                         egui::Color32::RED,
+                         format!("Row Len Err ({} vs {})", current_row.len(), num_cols)
+                     );
+                 });
+                 warn!(
+                     "Row length mismatch in sheet '{}', row {}: Expected {}, found {}",
+                     sheet_name, original_row_index, num_cols, current_row.len()
+                 );
+                 return; // Skip rendering rest of this invalid row
+             }
+
+            // Render each column in the row
+            for c_idx in 0..num_cols {
+                row.col(|ui| {
+                    // Safely get cell string and validator
+                    if let Some(cell_string) = current_row.get(c_idx) {
+                         let validator_opt = validators.get(c_idx).cloned().flatten();
+                         let cell_id = egui::Id::new("cell").with(sheet_name).with(original_row_index).with(c_idx);
+
+                        // --- Call the refactored edit widget ---
+                        if let Some(new_value) = edit_cell_widget( // <-- CHANGED from ui_for_cell
+                             ui,
+                             cell_id,
+                             cell_string,
+                             &validator_opt,
+                             registry,
+                             state
+                        ) {
+                             // If the widget indicated a change, send an update event
+                             cell_update_writer.send(UpdateCellEvent {
+                                 sheet_name: sheet_name.to_string(),
+                                 row_index: original_row_index,
+                                 col_index: c_idx,
+                                 new_value: new_value,
+                             });
+                        }
+                    } else {
+                        // This should ideally not happen if row length check passed
+                        ui.colored_label(egui::Color32::RED, "Cell Err");
+                        error!("Cell index {} out of bounds for row {} (len {}) in sheet '{}'", c_idx, original_row_index, current_row.len(), sheet_name);
+                    }
+                });
+            } // End column loop
+        } else {
+            // This should not happen if filtered_indices are derived correctly
+            row.col(|ui| { ui.colored_label(egui::Color32::RED, "Row Idx Err"); });
+            error!("Original row index {} out of bounds (grid len {}) in sheet '{}'", original_row_index, grid_data.len(), sheet_name);
+        }
+    }); // End body.rows
+
+    false // Return value is less important now
 }

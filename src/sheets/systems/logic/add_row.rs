@@ -1,0 +1,42 @@
+// src/sheets/systems/logic/add_row.rs
+use bevy::prelude::*;
+use crate::sheets::{
+    events::{AddSheetRowRequest, SheetOperationFeedback},
+    resources::SheetRegistry,
+    systems::io::save::save_single_sheet,
+};
+
+/// Handles adding a new, empty row to a specified sheet.
+pub fn handle_add_row_request(
+    mut events: EventReader<AddSheetRowRequest>,
+    mut registry: ResMut<SheetRegistry>,
+    mut feedback_writer: EventWriter<SheetOperationFeedback>,
+) {
+    for event in events.read() {
+        let sheet_name = &event.sheet_name;
+        if let Some(sheet_data) = registry.get_sheet_mut(sheet_name) {
+            if let Some(metadata) = &sheet_data.metadata {
+                let num_cols = metadata.column_headers.len();
+                // Add a new row with empty strings matching the number of columns
+                sheet_data.grid.push(vec![String::new(); num_cols]);
+                let msg = format!("Added row to sheet '{}'.", sheet_name);
+                info!("{}", msg);
+                feedback_writer.send(SheetOperationFeedback { message: msg, is_error: false });
+
+                // Trigger save after adding the row
+                info!("Row added to '{}', triggering immediate save.", sheet_name);
+                // Need immutable borrow for save, get it from ResMut temporarily
+                let registry_immut = registry.as_ref();
+                save_single_sheet(registry_immut, sheet_name);
+            } else {
+                 let msg = format!("Cannot add row to sheet '{}': Metadata missing.", sheet_name);
+                 warn!("{}", msg);
+                 feedback_writer.send(SheetOperationFeedback { message: msg, is_error: true });
+            }
+        } else {
+            let msg = format!("Cannot add row: Sheet '{}' not found in registry.", sheet_name);
+            warn!("{}", msg);
+            feedback_writer.send(SheetOperationFeedback { message: msg, is_error: true });
+        }
+    }
+}

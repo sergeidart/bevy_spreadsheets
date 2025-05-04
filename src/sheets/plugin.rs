@@ -7,45 +7,34 @@ use super::events::{
     AddSheetRowRequest, JsonSheetUploaded, RequestRenameSheet, RequestDeleteSheet,
     RequestDeleteSheetFile, RequestRenameSheetFile, SheetOperationFeedback,
     RequestInitiateFileUpload, RequestProcessUpload, RequestUpdateColumnName,
+    RequestUpdateColumnValidator,
+    UpdateCellEvent,
 };
 
-// Adjust IO system imports to reflect the new structure
+// IO systems (imports remain the same)
 use super::systems::io::{
-    // Import from startup_load module
-    startup_load::{
-        register_sheet_metadata,
-        load_registered_sheets_startup,
-    },
-    // Import from startup_scan module
-    startup_scan::{
-        scan_directory_for_sheets_startup,
-    },
-    // Import runtime upload handlers from load module
-    load::{
-        handle_json_sheet_upload,
-        handle_initiate_file_upload,
-        handle_process_upload_request,
-    },
-    // Import from save module (remains the same)
-    save::{
-        handle_delete_sheet_file_request,
-        handle_rename_sheet_file_request,
-    },
-};
-// Import logic systems (remain the same)
-use super::systems::logic::{
-    handle_add_row_request,
-    handle_rename_request,
-    handle_delete_request,
-    handle_update_column_name,
+    startup_load::{register_sheet_metadata, load_registered_sheets_startup},
+    startup_scan::{scan_directory_for_sheets_startup},
+    load::{handle_json_sheet_upload, handle_initiate_file_upload, handle_process_upload_request},
+    save::{handle_delete_sheet_file_request, handle_rename_sheet_file_request},
 };
 
-// Define system sets for ordering (remain the same)
+// Logic systems (import handlers from new specific modules)
+use super::systems::logic::{
+    add_row::handle_add_row_request,             // <-- UPDATED path
+    rename_sheet::handle_rename_request,         // <-- UPDATED path
+    delete_sheet::handle_delete_request,         // <-- UPDATED path
+    update_column_name::handle_update_column_name, // <-- UPDATED path
+    update_column_validator::handle_update_column_validator, // <-- UPDATED path
+    update_cell::handle_cell_update,             // <-- UPDATED path
+};
+
+// Define system sets for ordering
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 enum SheetSystemSet {
-    UserInput,      // Systems reacting directly to UI events (rename, delete, add row, upload init)
-    ApplyChanges,   // Systems processing data and modifying registry (process upload, handle upload result)
-    FileOperations, // Systems performing file IO requests (delete/rename file requests from save module)
+    UserInput,      // Systems reacting directly to UI events
+    ApplyChanges,   // Systems processing data and modifying registry
+    FileOperations, // Systems performing file IO requests
 }
 
 
@@ -58,15 +47,13 @@ impl Plugin for SheetsPlugin {
         app.configure_sets(Update,
             (
                 SheetSystemSet::UserInput,
-                SheetSystemSet::ApplyChanges,
-                SheetSystemSet::FileOperations,
-            ).chain() // Ensure strict order between these sets
+                SheetSystemSet::ApplyChanges.after(SheetSystemSet::UserInput),
+                SheetSystemSet::FileOperations.after(SheetSystemSet::ApplyChanges),
+            )
         );
-
 
         // --- Resource Initialization ---
         app.init_resource::<SheetRegistry>();
-
 
         // --- Event Registration ---
         app.add_event::<AddSheetRowRequest>()
@@ -78,60 +65,68 @@ impl Plugin for SheetsPlugin {
            .add_event::<SheetOperationFeedback>()
            .add_event::<RequestInitiateFileUpload>()
            .add_event::<RequestProcessUpload>()
-           .add_event::<RequestUpdateColumnName>();
-
+           .add_event::<RequestUpdateColumnName>()
+           .add_event::<RequestUpdateColumnValidator>()
+           .add_event::<UpdateCellEvent>();
 
         // --- Startup Systems ---
-        // Add systems from the split startup modules
         app.add_systems(Startup,
             (
-                // These now come from systems::io::startup_load and ::startup_scan
-                register_sheet_metadata,         // from startup_load
-                apply_deferred,                  // Ensure registry changes are applied
-                load_registered_sheets_startup,  // from startup_load
-                apply_deferred,                  // Ensure registry changes are applied
-                scan_directory_for_sheets_startup, // from startup_scan
-            ).chain(), // Ensure they run in this specific order at startup
+                register_sheet_metadata,
+                apply_deferred,
+                load_registered_sheets_startup,
+                apply_deferred,
+                scan_directory_for_sheets_startup,
+            ).chain(),
         );
 
         // --- Update Systems (Organized into Sets) ---
 
-        // Set 1: Handle direct user interactions and logic that modifies the registry
+        // UserInput: Reacts to UI interactions that might generate other events
         app.add_systems(Update,
             (
-                // Upload initiation (starts the upload workflow)
-                handle_initiate_file_upload, // from load.rs
-
-                // Direct registry modifications (trigger saves internally)
-                handle_rename_request,       // from logic.rs
-                handle_delete_request,       // from logic.rs (triggers file delete event)
-                handle_add_row_request,      // from logic.rs
-                handle_update_column_name, // from logic.rs
+                handle_initiate_file_upload,
+                // handle_process_upload_request needs registry access but primarily reacts to user action result
+                // Let's keep it in ApplyChanges for now as it leads to registry modification via JsonSheetUploaded
             ).in_set(SheetSystemSet::UserInput)
         );
 
-        // Set 2: Process intermediate steps and apply registry changes from workflows
+        // ApplyChanges: Handles events that modify the registry state
         app.add_systems(Update,
             (
-                 // Process the file path from the upload request
-                 handle_process_upload_request, // from load.rs (sends JsonSheetUploaded)
-                 apply_deferred, // Ensure JsonSheetUploaded event is available in the same frame
-                 // Handle the processed/parsed upload data
-                 handle_json_sheet_upload,      // from load.rs (updates registry, triggers save)
-            ).chain() // Ensure process runs before handle within this set
+                 // Process uploads first as they add/modify registry state
+                 handle_process_upload_request, // Reads registry, writes JsonSheetUploaded
+                 apply_deferred, // Ensure JsonSheetUploaded event is available for next system
+                 handle_json_sheet_upload, // Reads JsonSheetUploaded, modifies registry, triggers save
+                 apply_deferred, // Ensure registry changes are visible for logic handlers
+
+                 // --- Logic handlers triggered by events (using updated imports) ---
+                 // Order might matter: Rename/Delete before Add/Update on potentially affected sheets
+                 handle_rename_request,
+                 handle_delete_request,
+                 // Add/Update can likely run in parallel if needed, or keep sequential
+                 handle_add_row_request,
+                 handle_update_column_name,
+                 handle_update_column_validator,
+                 handle_cell_update, // Handles individual cell edits
+
+                 // Apply deferred after logic handlers ensure changes are visible for FileOperations
+                 apply_deferred,
+            )
+             // Keep these sequential for now unless performance requires parallelization
+             .chain() // <-- Explicitly chain within ApplyChanges
              .in_set(SheetSystemSet::ApplyChanges)
         );
 
-        // Set 3: Handle low-level file operations requested by other systems
+        // FileOperations: Handles file IO based on events from ApplyChanges stage
         app.add_systems(Update,
             (
-                // These respond to RequestDeleteSheetFile / RequestRenameSheetFile events
-                handle_delete_sheet_file_request, // from save.rs
-                handle_rename_sheet_file_request, // from save.rs
+                // These can likely run in parallel
+                handle_delete_sheet_file_request,
+                handle_rename_sheet_file_request,
             ).in_set(SheetSystemSet::FileOperations)
         );
 
-
-        info!("SheetsPlugin initialized (using split startup IO).");
+        info!("SheetsPlugin initialized (with split logic handlers).");
     }
 }

@@ -8,6 +8,8 @@ pub mod elements;
 pub mod common;
 // Declare the new systems module
 pub mod systems;
+// Declare the new widgets module
+pub mod widgets; // <-- ADDED
 
 // Import the editor UI system from its new location
 use elements::editor::generic_sheet_editor_ui; // Updated import path
