@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use std::collections::HashMap; // <<< ADDED import for HashMap
 use crate::sheets::{
     definitions::{SheetMetadata, ColumnValidator}, // Need metadata for saving
-    events::{UpdateCellEvent, SheetOperationFeedback},
+    events::{UpdateCellEvent, SheetOperationFeedback, SheetDataModifiedInRegistryEvent}, // Added SheetDataModifiedInRegistryEvent
     resources::SheetRegistry,
     systems::io::save::save_single_sheet,
 };
@@ -13,28 +13,24 @@ pub fn handle_cell_update(
     mut events: EventReader<UpdateCellEvent>,
     mut registry: ResMut<SheetRegistry>,
     mut feedback_writer: EventWriter<SheetOperationFeedback>,
+    mut data_modified_writer: EventWriter<SheetDataModifiedInRegistryEvent>, // Added writer
 ) {
     // Use a map to track which sheets need saving to avoid redundant saves per frame
-    // HashMap should now be found >>>
     let mut sheets_to_save: HashMap<(Option<String>, String), SheetMetadata> = HashMap::new();
 
     for event in events.read() {
-        let category = &event.category; // <<< Get category
+        let category = &event.category; 
         let sheet_name = &event.sheet_name;
         let row_idx = event.row_index;
         let col_idx = event.col_index;
         let new_value = &event.new_value;
 
-        // --- Phase 1: Get current value and check bounds (Immutable Borrow) ---
-        let validation_result: Result<String, String> = { // Returns Ok(old_value) or Err(msg)
+        let validation_result: Result<String, String> = { 
             let registry_immut = registry.as_ref();
-            // Use category and sheet name to get sheet
             if let Some(sheet_data) = registry_immut.get_sheet(category, sheet_name) {
                 if let Some(row) = sheet_data.grid.get(row_idx) {
                      if let Some(cell) = row.get(col_idx) {
-                         // Validation logic moved to UI (edit_cell_widget using validation.rs)
-                         // Backend accepts the string provided by UI event.
-                         Ok(cell.clone()) // Return current value
+                         Ok(cell.clone()) 
                      } else {
                          Err(format!("Column index {} out of bounds ({} columns).", col_idx, row.len()))
                      }
@@ -46,24 +42,23 @@ pub fn handle_cell_update(
             }
         };
 
-        // --- Phase 2: Application (Mutable Borrow) ---
         match validation_result {
             Ok(old_value) => {
-                // Only update if the value actually changed
                 if old_value != *new_value {
-                     // Get mutable access to the sheet using category
                      if let Some(sheet_data) = registry.get_sheet_mut(category, sheet_name) {
-                         // Bounds should be correct based on Phase 1 check, but use get_mut for safety
                          if let Some(row) = sheet_data.grid.get_mut(row_idx) {
                              if let Some(cell) = row.get_mut(col_idx) {
                                  trace!("Updating cell [{},{}] in sheet '{:?}/{}' from '{}' to '{}'", row_idx, col_idx, category, sheet_name, old_value, new_value);
-                                 *cell = new_value.clone(); // Update the cell value
+                                 *cell = new_value.clone(); 
 
-                                 // Mark sheet for saving if metadata exists
                                  if let Some(metadata) = &sheet_data.metadata {
                                      let key = (category.clone(), sheet_name.clone());
-                                     // Insert/update metadata in the save map
                                      sheets_to_save.insert(key, metadata.clone());
+                                     // Send data modified event
+                                     data_modified_writer.send(SheetDataModifiedInRegistryEvent {
+                                         category: category.clone(),
+                                         sheet_name: sheet_name.clone(),
+                                     });
                                  } else {
                                       warn!("Cannot mark sheet '{:?}/{}' for save after cell update: Metadata missing.", category, sheet_name);
                                  }
@@ -76,20 +71,18 @@ pub fn handle_cell_update(
                  }
             }
             Err(err_msg) => {
-                 // Log validation errors from Phase 1 (e.g., sheet not found, index out of bounds)
                  let full_msg = format!("Cell update rejected for sheet '{:?}/{}' cell[{},{}]: {}", category, sheet_name, row_idx, col_idx, err_msg);
                  warn!("{}", full_msg);
                  feedback_writer.send(SheetOperationFeedback { message: full_msg, is_error: true });
             }
         }
-    } // End event loop
+    } 
 
-    // --- Phase 3: Saving ---
     if !sheets_to_save.is_empty() {
-        let registry_immut = registry.as_ref(); // Get immutable borrow for saving
+        let registry_immut = registry.as_ref(); 
         for ((cat, name), metadata) in sheets_to_save {
             info!("Cell updated in '{:?}/{}', triggering immediate save.", cat, name);
-            save_single_sheet(registry_immut, &metadata); // <<< Pass metadata
+            save_single_sheet(registry_immut, &metadata); 
         }
     }
 }

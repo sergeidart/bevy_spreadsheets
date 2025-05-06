@@ -1,56 +1,118 @@
 // src/ui/elements/editor/state.rs
-use bevy::prelude::Resource; // Resource isn't actually used here, Local is used in system
-use std::collections::{HashMap, HashSet}; // Add HashSet import
-// Corrected import path
-use crate::sheets::definitions::{ColumnDataType, ColumnValidator};
+use crate::sheets::definitions::ColumnDataType;
+use crate::sheets::SheetRegistry; // <-- ADDED IMPORT for SheetRegistry
+use bevy::log::debug; // <-- ADDED IMPORT for debug macro
+use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher}; // For hashing filter state
 
-// Define the local state for the editor window
-// Using Local<T> in the system. It doesn't need Serialize/Deserialize.
-#[derive(Default)] // No serde derive needed for Local state
-pub struct EditorWindowState {
-    // General State
-    pub selected_category: Option<String>, // <<< --- ADDED --- >>>
-    pub selected_sheet_name: Option<String>,
-
-    // Rename Popup State
-    pub show_rename_popup: bool,
-    pub rename_target_category: Option<String>, // <<< --- ADDED --- >>>
-    pub rename_target_sheet: String, // Changed from rename_target
-    pub new_name_input: String,
-
-    // Delete Popup State
-    pub show_delete_confirm_popup: bool,
-    pub delete_target_category: Option<String>, // <<< --- ADDED --- >>>
-    pub delete_target_sheet: String, // Changed from delete_target
-
-    // Column Options Popup State
-    pub show_column_options_popup: bool,
-    pub options_column_target_category: Option<String>, // <<< --- ADDED --- >>>
-    pub options_column_target_sheet: String,
-    pub options_column_target_index: usize,
-    pub column_options_popup_needs_init: bool, // Flag to init fields on open
-
-    // Fields for Column Options Popup UI selections
-    pub options_column_rename_input: String,
-    pub options_column_filter_input: String,
-    // -- Validator selection state --
-    pub options_validator_type: Option<ValidatorTypeChoice>, // Radio button choice
-    pub options_basic_type_select: ColumnDataType, // Selected basic type
-    pub options_link_target_sheet: Option<String>, // Selected target sheet name for linking
-    pub options_link_target_column_index: Option<usize>, // Selected target column index
-
-    // --- Cache for linked column dropdown options ---
-    // Key: (Target Sheet Name, Target Column Index)
-    // Value: HashSet of unique non-empty string values from that target column for fast lookups
-    // Displayed suggestions will be generated and sorted from this set.
-    pub linked_column_cache: HashMap<(String, usize), HashSet<String>>, // Use HashSet for faster lookups
-
+// AI Mode State Enum
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AiModeState {
+    #[default]
+    Idle, // Not in AI mode
+    Preparing, // Checkboxes visible, selecting rows
+    Submitting, // Sent request to AI, waiting for response
+    ResultsReady, // AI response received, ready for review
+    Reviewing,    // Reviewing suggestions one by one
 }
 
-// Enum for Validator Choice Radio Buttons
+// Validator Choice Enum
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ValidatorTypeChoice {
     #[default]
     Basic,
     Linked,
+}
+
+// Helper to calculate hash for filter state
+fn calculate_filters_hash(filters: &Vec<Option<String>>) -> u64 {
+    let mut s = std::collections::hash_map::DefaultHasher::new();
+    filters.hash(&mut s);
+    s.finish()
+}
+
+
+// Local state for the editor window (doesn't need Serialize/Deserialize)
+#[derive(Default)]
+pub struct EditorWindowState {
+    // General State
+    pub selected_category: Option<String>,
+    pub selected_sheet_name: Option<String>,
+
+    // Rename Popup State
+    pub show_rename_popup: bool,
+    pub rename_target_category: Option<String>,
+    pub rename_target_sheet: String,
+    pub new_name_input: String,
+
+    // Delete Popup State
+    pub show_delete_confirm_popup: bool,
+    pub delete_target_category: Option<String>,
+    pub delete_target_sheet: String,
+
+    // Column Options Popup State
+    pub show_column_options_popup: bool,
+    pub options_column_target_category: Option<String>,
+    pub options_column_target_sheet: String,
+    pub options_column_target_index: usize,
+    pub column_options_popup_needs_init: bool,
+    pub options_column_rename_input: String,
+    pub options_column_filter_input: String,
+    pub options_column_ai_context_input: String, // NEW: AI Context Input
+    pub options_validator_type: Option<ValidatorTypeChoice>,
+    pub options_basic_type_select: ColumnDataType,
+    pub options_link_target_sheet: Option<String>,
+    pub options_link_target_column_index: Option<usize>,
+
+    // Cache for linked column dropdown options
+    pub linked_column_cache: HashMap<(String, usize), HashSet<String>>,
+
+    // AI Interaction State
+    pub ai_mode: AiModeState,
+    pub ai_selected_rows: HashSet<usize>,
+    pub ai_suggestions: HashMap<usize, Vec<String>>,
+    pub ai_review_queue: Vec<usize>,
+    pub ai_current_review_index: Option<usize>,
+    // AI Rule State
+    pub ai_general_rule_input: String,
+    pub show_ai_rule_popup: bool,
+
+    // Settings State
+    pub show_settings_popup: bool,
+    pub settings_new_api_key_input: String,
+    pub settings_api_key_status: String,
+
+    // --- ADDED for Filter Cache ---
+    // Key: (Category, SheetName, FiltersHash) -> Value: Vec of original row indices
+    pub filtered_row_indices_cache: HashMap<(Option<String>, String, u64), Vec<usize>>,
+    // Flag to force recalculation when data changes or filters change significantly
+    pub force_filter_recalculation: bool,
+}
+
+impl EditorWindowState {
+    // Helper method to invalidate the filter cache for the currently selected sheet
+    pub fn invalidate_current_sheet_filter_cache(&mut self, registry: &SheetRegistry) {
+        if let Some(sheet_name) = &self.selected_sheet_name {
+            if let Some(sheet_data) = registry.get_sheet(&self.selected_category, sheet_name) {
+                if let Some(metadata) = &sheet_data.metadata {
+                    let filters_hash = calculate_filters_hash(&metadata.get_filters());
+                    let cache_key = (self.selected_category.clone(), sheet_name.clone(), filters_hash);
+                    self.filtered_row_indices_cache.remove(&cache_key);
+                    self.force_filter_recalculation = true; // Also set flag
+                    debug!("Invalidated filter cache for key: {:?}", cache_key);
+                }
+            }
+        }
+         // More general invalidation if we don't have the exact hash:
+         // Iterate and remove all entries matching current category and sheet name
+         if let Some(sheet_name) = &self.selected_sheet_name {
+            let cat = self.selected_category.clone();
+            let name = sheet_name.clone();
+            self.filtered_row_indices_cache.retain(|(s_cat, s_name, _), _| {
+                !(*s_cat == cat && *s_name == name)
+            });
+            self.force_filter_recalculation = true;
+            debug!("Broadly invalidated filter cache for sheet: '{:?}/{}'", cat, name);
+        }
+    }
 }

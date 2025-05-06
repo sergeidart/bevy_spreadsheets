@@ -1,13 +1,15 @@
 // src/ui/elements/popups/column_options_validator.rs
-use bevy::prelude::*;
-use bevy_egui::egui;
-use std::collections::HashSet;
 use crate::sheets::{
     definitions::{ColumnDataType, ColumnValidator},
     events::RequestUpdateColumnValidator,
     resources::SheetRegistry,
 };
-use crate::ui::elements::editor::state::{EditorWindowState, ValidatorTypeChoice};
+use crate::ui::elements::editor::state::{
+    EditorWindowState, ValidatorTypeChoice,
+};
+use bevy::prelude::*;
+use bevy_egui::egui;
+use std::collections::HashSet; // Keep HashSet for potential future use
 
 /// Renders the UI section for selecting the column validator rule.
 pub(super) fn show_validator_section(
@@ -18,8 +20,16 @@ pub(super) fn show_validator_section(
     ui.strong("Validation Rule");
     if let Some(mut choice) = state.options_validator_type {
         ui.horizontal(|ui| {
-            ui.radio_value(&mut choice, ValidatorTypeChoice::Basic, "Basic Type");
-            ui.radio_value(&mut choice, ValidatorTypeChoice::Linked, "Linked Column");
+            ui.radio_value(
+                &mut choice,
+                ValidatorTypeChoice::Basic,
+                "Basic Type",
+            );
+            ui.radio_value(
+                &mut choice,
+                ValidatorTypeChoice::Linked,
+                "Linked Column",
+            );
         });
         state.options_validator_type = Some(choice); // Update state
 
@@ -29,14 +39,37 @@ pub(super) fn show_validator_section(
                 ui.horizontal(|ui| {
                     ui.label("Data Type:");
                     egui::ComboBox::from_id_source("basic_type_selector")
-                        .selected_text(format!("{:?}", state.options_basic_type_select))
+                        .selected_text(format!(
+                            "{:?}",
+                            state.options_basic_type_select
+                        ))
                         .show_ui(ui, |ui| {
                             use ColumnDataType::*;
                             let all_types = [
-                                String, OptionString, Bool, OptionBool, U8, OptionU8, U16,
-                                OptionU16, U32, OptionU32, U64, OptionU64, I8, OptionI8,
-                                I16, OptionI16, I32, OptionI32, I64, OptionI64, F32,
-                                OptionF32, F64, OptionF64,
+                                String,
+                                OptionString,
+                                Bool,
+                                OptionBool,
+                                U8,
+                                OptionU8,
+                                U16,
+                                OptionU16,
+                                U32,
+                                OptionU32,
+                                U64,
+                                OptionU64,
+                                I8,
+                                OptionI8,
+                                I16,
+                                OptionI16,
+                                I32,
+                                OptionI32,
+                                I64,
+                                OptionI64,
+                                F32,
+                                OptionF32,
+                                F64,
+                                OptionF64,
                             ];
                             for t in all_types.iter() {
                                 ui.selectable_value(
@@ -65,18 +98,23 @@ pub(super) fn show_validator_section(
                         .options_link_target_sheet
                         .as_deref()
                         .unwrap_or("--Select--");
-                    let sheet_combo_resp = egui::ComboBox::from_id_source("link_sheet_selector")
-                        .selected_text(selected_sheet_text)
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut state.options_link_target_sheet, None, "--Select--");
-                            for name in all_sheet_names.iter() {
+                    let sheet_combo_resp =
+                        egui::ComboBox::from_id_source("link_sheet_selector")
+                            .selected_text(selected_sheet_text)
+                            .show_ui(ui, |ui| {
                                 ui.selectable_value(
                                     &mut state.options_link_target_sheet,
-                                    Some(name.clone()),
-                                    name,
+                                    None,
+                                    "--Select--",
                                 );
-                            }
-                        });
+                                for name in all_sheet_names.iter() {
+                                    ui.selectable_value(
+                                        &mut state.options_link_target_sheet,
+                                        Some(name.clone()),
+                                        name,
+                                    );
+                                }
+                            });
                     // If sheet selection changes, clear column selection
                     if sheet_combo_resp.response.changed() {
                         state.options_link_target_column_index = None;
@@ -85,29 +123,42 @@ pub(super) fn show_validator_section(
 
                 ui.horizontal(|ui| {
                     ui.label("Target Column:");
-                    ui.add_enabled_ui(state.options_link_target_sheet.is_some(), |ui| {
-                        let mut headers: Vec<(usize, String)> = Vec::new();
-                        if let Some(tsn) = &state.options_link_target_sheet {
-                            // Find the target sheet (any category) and get its headers
-                            if let Some((_, _, ts_data)) = registry_immut
-                                .iter_sheets()
-                                .find(|(_, name, _)| name.as_str() == tsn.as_str())
+                    ui.add_enabled_ui(
+                        state.options_link_target_sheet.is_some(),
+                        |ui| {
+                            let mut headers: Vec<(usize, String)> = Vec::new();
+                            if let Some(tsn) = &state.options_link_target_sheet
                             {
-                                // Compare &str == &str
-                                if let Some(m) = &ts_data.metadata {
-                                    headers = m.column_headers.iter().cloned().enumerate().collect();
+                                // Find the target sheet (any category) and get its headers
+                                if let Some((_, _, ts_data)) = registry_immut
+                                    .iter_sheets()
+                                    .find(|(_, name, _)| {
+                                        name.as_str() == tsn.as_str()
+                                    })
+                                {
+                                    if let Some(m) = &ts_data.metadata {
+                                        // --- CORRECTED: Get headers from columns ---
+                                        headers = m
+                                            .columns
+                                            .iter()
+                                            .map(|c| c.header.clone())
+                                            .enumerate() // Get index along with header
+                                            .collect();
+                                    }
                                 }
                             }
-                        }
-                        let selected_col_text = match state.options_link_target_column_index {
-                            Some(idx) => headers
-                                .iter()
-                                .find(|(i, _)| *i == idx)
-                                .map(|(_, h)| h.as_str())
-                                .unwrap_or("--Invalid--"),
-                            None => "--Select--",
-                        };
-                        egui::ComboBox::from_id_source("link_column_selector")
+                            let selected_col_text =
+                                match state.options_link_target_column_index {
+                                    Some(idx) => headers
+                                        .iter()
+                                        .find(|(i, _)| *i == idx)
+                                        .map(|(_, h)| h.as_str())
+                                        .unwrap_or("--Invalid--"),
+                                    None => "--Select--",
+                                };
+                            egui::ComboBox::from_id_source(
+                                "link_column_selector",
+                            )
                             .selected_text(selected_col_text)
                             .show_ui(ui, |ui| {
                                 ui.selectable_value(
@@ -123,12 +174,16 @@ pub(super) fn show_validator_section(
                                     );
                                 }
                             });
-                    });
+                        },
+                    );
                 });
             }
         }
     } else {
-        ui.colored_label(egui::Color32::RED, "Error loading validator options.");
+        ui.colored_label(
+            egui::Color32::RED,
+            "Error loading validator options.",
+        );
     }
 }
 
@@ -143,24 +198,24 @@ pub(super) fn apply_validator_update(
     let sheet_name = &state.options_column_target_sheet;
     let col_index = state.options_column_target_index;
 
+    // --- CORRECTED: Get current validator from ColumnDefinition ---
     let current_validator = registry
         .get_sheet(category, sheet_name)
         .and_then(|s| s.metadata.as_ref())
-        .and_then(|m| m.column_validators.get(col_index))
-        .cloned()
-        .flatten();
+        .and_then(|m| m.columns.get(col_index)) // Get the ColumnDefinition Option
+        .and_then(|col_def| col_def.validator.clone()); // Clone the Option<Validator> inside
 
     // Construct New Validator
     let (new_validator, validation_ok) = match state.options_validator_type {
-        Some(ValidatorTypeChoice::Basic) => {
-            (Some(ColumnValidator::Basic(state.options_basic_type_select)), true)
-        }
+        Some(ValidatorTypeChoice::Basic) => (
+            Some(ColumnValidator::Basic(state.options_basic_type_select)),
+            true,
+        ),
         Some(ValidatorTypeChoice::Linked) => {
             if let (Some(ts), Some(tc)) = (
                 state.options_link_target_sheet.as_ref(),
                 state.options_link_target_column_index,
             ) {
-                // TODO: Add category to Linked struct when available
                 (
                     Some(ColumnValidator::Linked {
                         target_sheet_name: ts.clone(),
@@ -187,12 +242,21 @@ pub(super) fn apply_validator_update(
 
     // Send Validator Update Event if changed
     if validator_changed {
+        info!(
+            "Validator change detected for col {} of '{:?}/{}'. Sending update event.",
+            col_index + 1, category, sheet_name
+        );
         column_validator_writer.send(RequestUpdateColumnValidator {
             category: category.clone(), // <<< Send category
             sheet_name: sheet_name.clone(),
             column_index: col_index,
             new_validator: new_validator.clone(),
         });
+    } else {
+        trace!(
+            "Validator unchanged for col {} of '{:?}/{}'.",
+            col_index + 1, category, sheet_name
+        );
     }
 
     true // Action successful or no change needed
@@ -200,9 +264,12 @@ pub(super) fn apply_validator_update(
 
 /// Checks if the current validator configuration in the state is valid for applying.
 pub(super) fn is_validator_config_valid(state: &EditorWindowState) -> bool {
-     match state.options_validator_type {
-         Some(ValidatorTypeChoice::Linked)=> state.options_link_target_sheet.is_some() && state.options_link_target_column_index.is_some(),
-         Some(ValidatorTypeChoice::Basic) => true, // Basic is always valid here
-         None => false, // Invalid state if options didn't load
-     }
+    match state.options_validator_type {
+        Some(ValidatorTypeChoice::Linked) => {
+            state.options_link_target_sheet.is_some()
+                && state.options_link_target_column_index.is_some()
+        }
+        Some(ValidatorTypeChoice::Basic) => true, // Basic is always valid here
+        None => false, // Invalid state if options didn't load
+    }
 }

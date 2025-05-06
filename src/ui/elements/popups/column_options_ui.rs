@@ -1,9 +1,9 @@
 // src/ui/elements/popups/column_options_ui.rs
-use bevy::prelude::*;
-use bevy_egui::egui;
 use crate::sheets::resources::SheetRegistry;
 use crate::ui::elements::editor::state::EditorWindowState;
-use super::column_options_validator::{show_validator_section, is_validator_config_valid}; // Import helper
+use bevy::prelude::*; // Keep bevy prelude
+use bevy_egui::egui;
+use super::column_options_validator::{is_validator_config_valid, show_validator_section}; // Import helper
 
 // Structure to hold the results of the UI interaction
 pub(super) struct ColumnOptionsUiResult {
@@ -32,12 +32,14 @@ pub(super) fn show_column_options_window_ui(
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .open(&mut popup_open) // Control opening via state flag
         .show(ctx, |ui| {
-            let header_text = registry_immut
+            // Get column definition using index
+            let column_def_opt = registry_immut
                 .get_sheet(&popup_category, &popup_sheet_name) // Use cached category/name
                 .and_then(|s| s.metadata.as_ref())
-                .and_then(|m| m.column_headers.get(state.options_column_target_index))
-                .map(|s| s.as_str())
-                .unwrap_or("?");
+                .and_then(|m| m.columns.get(state.options_column_target_index));
+
+            let header_text = column_def_opt.map(|c| c.header.as_str()).unwrap_or("?");
+
             ui.label(format!(
                 "Options for '{:?}/{}' - Column '{}' (#{})", // Show category/sheet
                 popup_category,
@@ -51,8 +53,19 @@ pub(super) fn show_column_options_window_ui(
             ui.strong("Rename");
             ui.horizontal(|ui| {
                 ui.label("New Name:");
-                if ui.add(egui::TextEdit::singleline(&mut state.options_column_rename_input).desired_width(150.0).lock_focus(true)).lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                    if !state.options_column_rename_input.trim().is_empty() && is_validator_config_valid(state) {
+                let rename_resp = ui.add(
+                    egui::TextEdit::singleline(
+                        &mut state.options_column_rename_input,
+                    )
+                    .desired_width(150.0)
+                    .lock_focus(true), // Keep focus on open
+                );
+                if rename_resp.lost_focus()
+                    && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                {
+                    if !state.options_column_rename_input.trim().is_empty()
+                        && is_validator_config_valid(state)
+                    {
                         apply_clicked = true;
                     }
                 }
@@ -63,14 +76,41 @@ pub(super) fn show_column_options_window_ui(
             ui.strong("Filter (Contains)");
             ui.horizontal(|ui| {
                 ui.label("Text:");
-                 if ui.add(egui::TextEdit::singleline(&mut state.options_column_filter_input).desired_width(150.0)).lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                      if is_validator_config_valid(state) { // Allow applying filter change even if name empty? Assume yes for now.
-                          apply_clicked = true;
-                      }
-                 }
-                 if ui.button("Clear").clicked() { state.options_column_filter_input.clear(); }
-             });
+                let filter_resp = ui.add(
+                    egui::TextEdit::singleline(
+                        &mut state.options_column_filter_input,
+                    )
+                    .desired_width(150.0),
+                );
+                if filter_resp.lost_focus()
+                    && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                {
+                    if is_validator_config_valid(state) {
+                        // Allow applying filter change even if name empty
+                        apply_clicked = true;
+                    }
+                }
+                if ui.button("Clear").clicked() {
+                    state.options_column_filter_input.clear();
+                }
+            });
             ui.small("Leave empty or clear to disable filter.");
+            ui.separator();
+
+            // --- NEW: AI Context Section ---
+            ui.strong("AI Context Hint");
+            ui.horizontal(|ui| {
+                ui.label("Context:");
+                // Use add_sized for potentially larger text areas if needed
+                ui.add(
+                    egui::TextEdit::multiline(
+                        &mut state.options_column_ai_context_input,
+                    )
+                    .desired_width(f32::INFINITY) // Fill available width
+                    .desired_rows(2), // Start with 2 rows, allow expansion
+                );
+            });
+            ui.small("Optional hint for AI about this column's meaning.");
             ui.separator();
 
             // --- Validator Section (using helper) ---
@@ -79,10 +119,19 @@ pub(super) fn show_column_options_window_ui(
 
             // --- Action Buttons ---
             ui.horizontal(|ui| {
-                 let apply_enabled = !state.options_column_rename_input.trim().is_empty() && is_validator_config_valid(state);
-                 if ui.add_enabled(apply_enabled, egui::Button::new("Apply")).clicked() { apply_clicked = true; }
-                 if ui.button("Cancel").clicked() { cancel_clicked = true; }
-             });
+                let apply_enabled =
+                    !state.options_column_rename_input.trim().is_empty()
+                        && is_validator_config_valid(state);
+                if ui
+                    .add_enabled(apply_enabled, egui::Button::new("Apply"))
+                    .clicked()
+                {
+                    apply_clicked = true;
+                }
+                if ui.button("Cancel").clicked() {
+                    cancel_clicked = true;
+                }
+            });
         }); // End .show()
 
     // Determine if closed via 'x' button

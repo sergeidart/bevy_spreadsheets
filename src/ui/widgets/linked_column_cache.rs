@@ -1,9 +1,8 @@
 // src/ui/widgets/linked_column_cache.rs
-use bevy::prelude::*;
-use std::collections::HashSet;
-
 use crate::sheets::resources::SheetRegistry;
 use crate::ui::elements::editor::state::EditorWindowState;
+use bevy::prelude::*;
+use std::collections::HashSet;
 
 /// Represents the result of trying to get or populate the cache.
 pub(crate) enum CacheResult<'a> {
@@ -43,15 +42,16 @@ pub(crate) fn get_or_populate_linked_options<'a>(
     if !state.linked_column_cache.contains_key(&cache_key) {
         let mut error_msg: Option<String> = None;
 
-        // <<< --- FIX: Find target sheet by iterating through all categories --- >>>
-        let target_sheet_data_opt = registry.iter_sheets()
+        // Find target sheet by iterating through all categories
+        let target_sheet_data_opt = registry
+            .iter_sheets()
             .find(|(_, name, _)| *name == target_sheet_name) // Find sheet with matching name
             .map(|(_, _, data)| data); // Get the associated SheetGridData
 
         if let Some(target_sheet) = target_sheet_data_opt {
-        // --- End Fix ---
             if let Some(meta) = &target_sheet.metadata {
-                if target_column_index < meta.column_headers.len() {
+                // --- CORRECTED: Use meta.columns.len() ---
+                if target_column_index < meta.columns.len() {
                     // Collect unique, non-empty values directly into HashSet
                     let unique_values: HashSet<String> = target_sheet
                         .grid
@@ -72,9 +72,9 @@ pub(crate) fn get_or_populate_linked_options<'a>(
                 } else {
                     error_msg = Some(format!(
                         "Target column index {} out of bounds for sheet '{}' ({} columns).",
-                        target_column_index + 1, // User-facing index
+                        target_column_index, // Use 0-based index internally
                         target_sheet_name,
-                        meta.column_headers.len()
+                        meta.columns.len() // --- CORRECTED: Use meta.columns.len() ---
                     ));
                 }
             } else {
@@ -84,27 +84,33 @@ pub(crate) fn get_or_populate_linked_options<'a>(
                 ));
             }
         } else {
-            error_msg = Some(format!("Target sheet '{}' not found (in any category).", target_sheet_name));
+            error_msg = Some(format!(
+                "Target sheet '{}' not found (in any category).",
+                target_sheet_name
+            ));
         }
 
         // Insert empty set if there was an error during generation to prevent repeated attempts
-        if error_msg.is_some() {
+        if let Some(err) = error_msg {
             state
                 .linked_column_cache
-                .entry(cache_key.clone()) // Use entry API to avoid potential race condition if called concurrently (though unlikely here)
+                .entry(cache_key.clone()) // Use entry API
                 .or_insert_with(HashSet::new);
-            return CacheResult::Error(error_msg.unwrap()); // Return the error
+            return CacheResult::Error(err); // Return the error
         }
     }
 
     // --- Retrieve from cache ---
     // We use get again here, as the entry might have been inserted above.
-    // The unwrap is safe because we ensured the key exists.
+    // The unwrap should be safe because we ensured the key exists or returned Error.
     if let Some(values) = state.linked_column_cache.get(&cache_key) {
         CacheResult::Success(values)
     } else {
         // This case should be unreachable due to the logic above.
-        error!("Logic error: Cache key ({:?}) not found after population attempt.", cache_key);
+        error!(
+            "Logic error: Cache key ({:?}) not found after population attempt.",
+            cache_key
+        );
         CacheResult::Error("Internal cache error".to_string())
     }
 }

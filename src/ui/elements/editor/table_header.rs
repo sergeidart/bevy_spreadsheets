@@ -3,18 +3,22 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use egui_extras::TableRow;
 
-use super::state::EditorWindowState; // Need mutable state to trigger popup
+use crate::sheets::definitions::SheetMetadata; // Added import
+use super::state::EditorWindowState; 
 
 /// Renders the header row for the sheet table.
 /// Allows clicking headers to open the column options popup.
 pub fn sheet_table_header(
-    header: TableRow, // egui_extras header row
-    headers: &[String],
-    filters: &[Option<String>],
-    sheet_name: &str,
-    state: &mut EditorWindowState, // Mutable state to set popup flags
+    header_row: TableRow, // egui_extras header row
+    metadata: &SheetMetadata, // Changed to take a reference to SheetMetadata
+    sheet_name: &str, // This is &String, which is fine
+    state: &mut EditorWindowState, 
 ) {
-    let mut header = header; // Make mutable for iteration
+    let mut header = header_row; // Make mutable for iteration
+    
+    // Get headers and filters from metadata
+    let headers = metadata.get_headers();
+    let filters = metadata.get_filters();
     let num_cols = headers.len();
 
     for (c_idx, header_text) in headers.iter().enumerate() {
@@ -30,10 +34,12 @@ pub fn sheet_table_header(
             // Trigger the options popup on click
             if header_response.clicked() {
                 state.show_column_options_popup = true;
-                state.options_column_target_sheet = sheet_name.to_string();
+                state.options_column_target_sheet = sheet_name.to_string(); // sheet_name is &String
                 state.options_column_target_index = c_idx;
-                // Mark that popup needs init
                 state.column_options_popup_needs_init = true;
+
+                // Set the category for the popup based on the metadata of the current sheet
+                state.options_column_target_category = metadata.category.clone();
             }
             header_response.on_hover_text(format!("Click for options for column '{}'", header_text));
         });
