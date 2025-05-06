@@ -77,6 +77,10 @@ pub struct EditorWindowState {
     pub filtered_row_indices_cache: HashMap<(Option<String>, String, u64), Vec<usize>>,
     // Flag to force recalculation when data changes or filters change significantly
     pub force_filter_recalculation: bool,
+
+    // --- Fields for auto-scrolling on new row add ---
+    pub request_scroll_to_bottom_on_add: bool,
+    pub scroll_to_row_index: Option<usize>,
 }
 
 impl EditorWindowState {

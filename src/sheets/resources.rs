@@ -361,19 +361,3 @@ impl SheetRegistry {
         }
     }
 }
-
-// --- REMOVED: SheetValidationState Resource ---
-// This functionality will be merged into SheetRenderCache by storing ValidationState
-// within RenderableCellData.
-/*
-#[derive(Resource, Default, Debug)]
-pub struct SheetValidationState {
-    // Key: (Category Name Opt, Sheet Name)
-    // Value: Grid of validation states matching the data grid structure
-    states: HashMap<(Option<String>, String), Vec<Vec<ValidationState>>>,
-}
-
-impl SheetValidationState {
-    // ... methods ...
-}
-*/

@@ -145,6 +145,8 @@ pub fn show_top_panel(
                          sheet_name: sheet_name.clone(),
                      });
                      // Optimistically set flag, system will send SheetDataModifiedEvent too
+                    // Set the request flag for scrolling
+                    state.request_scroll_to_bottom_on_add = true;
                      state.force_filter_recalculation = true;
                  }
              }
