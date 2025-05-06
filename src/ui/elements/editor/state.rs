@@ -1,36 +1,26 @@
 // src/ui/elements/editor/state.rs
+// NO CHANGES needed for the validation refactor, file remains as is.
 use crate::sheets::definitions::ColumnDataType;
-use crate::sheets::SheetRegistry; // <-- ADDED IMPORT for SheetRegistry
-use bevy::log::debug; // <-- ADDED IMPORT for debug macro
+use crate::sheets::SheetRegistry; // Keep for cache invalidation helper maybe?
+use bevy::log::debug;
 use std::collections::{HashMap, HashSet};
-use std::hash::{Hash, Hasher}; // For hashing filter state
+use std::hash::{Hash, Hasher};
 
-// AI Mode State Enum
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AiModeState {
-    #[default]
-    Idle, // Not in AI mode
-    Preparing, // Checkboxes visible, selecting rows
-    Submitting, // Sent request to AI, waiting for response
-    ResultsReady, // AI response received, ready for review
-    Reviewing,    // Reviewing suggestions one by one
+    #[default] Idle, Preparing, Submitting, ResultsReady, Reviewing,
 }
 
-// Validator Choice Enum
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ValidatorTypeChoice {
-    #[default]
-    Basic,
-    Linked,
+    #[default] Basic, Linked,
 }
 
-// Helper to calculate hash for filter state
 fn calculate_filters_hash(filters: &Vec<Option<String>>) -> u64 {
     let mut s = std::collections::hash_map::DefaultHasher::new();
     filters.hash(&mut s);
     s.finish()
 }
-
 
 // Local state for the editor window (doesn't need Serialize/Deserialize)
 #[derive(Default)]
@@ -82,7 +72,7 @@ pub struct EditorWindowState {
     pub settings_new_api_key_input: String,
     pub settings_api_key_status: String,
 
-    // --- ADDED for Filter Cache ---
+    // Filter Cache
     // Key: (Category, SheetName, FiltersHash) -> Value: Vec of original row indices
     pub filtered_row_indices_cache: HashMap<(Option<String>, String, u64), Vec<usize>>,
     // Flag to force recalculation when data changes or filters change significantly
@@ -91,28 +81,25 @@ pub struct EditorWindowState {
 
 impl EditorWindowState {
     // Helper method to invalidate the filter cache for the currently selected sheet
+    // Note: This only affects the *row filtering*, not the cell validation state.
     pub fn invalidate_current_sheet_filter_cache(&mut self, registry: &SheetRegistry) {
         if let Some(sheet_name) = &self.selected_sheet_name {
-            if let Some(sheet_data) = registry.get_sheet(&self.selected_category, sheet_name) {
-                if let Some(metadata) = &sheet_data.metadata {
-                    let filters_hash = calculate_filters_hash(&metadata.get_filters());
-                    let cache_key = (self.selected_category.clone(), sheet_name.clone(), filters_hash);
-                    self.filtered_row_indices_cache.remove(&cache_key);
-                    self.force_filter_recalculation = true; // Also set flag
-                    debug!("Invalidated filter cache for key: {:?}", cache_key);
-                }
-            }
-        }
-         // More general invalidation if we don't have the exact hash:
-         // Iterate and remove all entries matching current category and sheet name
-         if let Some(sheet_name) = &self.selected_sheet_name {
             let cat = self.selected_category.clone();
             let name = sheet_name.clone();
+            // Remove specific hash first if metadata available
+            if let Some(sheet_data) = registry.get_sheet(&cat, &name) {
+                 if let Some(metadata) = &sheet_data.metadata {
+                    let filters_hash = calculate_filters_hash(&metadata.get_filters());
+                    let cache_key = (cat.clone(), name.clone(), filters_hash);
+                    self.filtered_row_indices_cache.remove(&cache_key);
+                }
+            }
+            // Also perform broad invalidation just in case hash wasn't right or metadata unavailable
             self.filtered_row_indices_cache.retain(|(s_cat, s_name, _), _| {
                 !(*s_cat == cat && *s_name == name)
             });
             self.force_filter_recalculation = true;
-            debug!("Broadly invalidated filter cache for sheet: '{:?}/{}'", cat, name);
+            debug!("Invalidated filter cache for sheet: '{:?}/{}'", cat, name);
         }
     }
 }

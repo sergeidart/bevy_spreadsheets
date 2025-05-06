@@ -1,221 +1,217 @@
 // src/ui/common.rs
-// FINAL VERSION AFTER REFACTORING
 use bevy::prelude::*;
-use bevy_egui::egui::{self, Id, Response, Sense, Color32};
+use bevy_egui::egui::{self, Color32, Id, Response, Sense};
 use std::collections::HashSet;
+// use std::str::FromStr; // Not strictly needed if parsing logic moves
 
 use crate::sheets::{
     definitions::{ColumnDataType, ColumnValidator},
-    resources::SheetRegistry,
+    // ADDED SheetRenderCache, REMOVED SheetValidationState
+    resources::{SheetRegistry, SheetRenderCache},
 };
 use crate::ui::elements::editor::state::EditorWindowState;
-// Import new validation functions and state
-use crate::ui::validation::{validate_basic_cell, validate_linked_cell, ValidationState};
+use crate::ui::validation::ValidationState; // Keep for enum access
 use crate::ui::widgets::handle_linked_column_edit;
-// Import moved option widgets
+use crate::ui::widgets::linked_column_cache::{self, CacheResult};
 use crate::ui::widgets::option_widgets::{ui_option_bool, ui_option_numerical};
 
 /// Renders interactive UI for editing a single cell based on its validator.
-/// Handles parsing and showing the appropriate widget.
-/// Returns Some(new_value) if the value was changed, None otherwise.
+/// Handles displaying the appropriate widget and visual validation state.
+/// Returns Some(new_value) if the value was changed by the user interaction *this frame*, None otherwise.
+#[allow(clippy::too_many_arguments)] // We accept the number of args for this central function
 pub fn edit_cell_widget(
     ui: &mut egui::Ui,
     id: egui::Id,
-    current_cell_string: &str,
-    validator_opt: &Option<ColumnValidator>,
-    registry: &SheetRegistry,
+    // current_cell_string: &str, // No longer need direct cell string from grid
+    validator_opt: &Option<ColumnValidator>, // Still need validator for widget type
+    // ADDED parameters for context
+    category: &Option<String>,
+    sheet_name: &str,
+    row_index: usize,
+    col_index: usize,
+    // --- Resources ---
+    registry: &SheetRegistry, // For metadata lookup for widget type
+    render_cache: &SheetRenderCache, // Use the new render cache
+    // Still need EditorWindowState mutably for linked column cache access (for dropdowns)
     state: &mut EditorWindowState,
-) -> Option<String> {
-    let mut final_new_value: Option<String> = None;
-    let original_string = current_cell_string.to_string();
+) -> Option<String> { // Return type remains Option<String> for committed changes
 
-    let basic_type = match validator_opt {
-        Some(ColumnValidator::Basic(data_type)) => *data_type,
-        Some(ColumnValidator::Linked { .. }) => ColumnDataType::String, // Base type for linked is string interaction
-        None => ColumnDataType::String,
-    };
+    // --- 1. Read Pre-calculated RenderableCellData ---
+    let render_cell_data_opt = render_cache.get_cell_data(category, sheet_name, row_index, col_index);
 
-    // --- Determine Validation State & Get Allowed Values for Linked ---
-    let mut parse_error = false;
-    let mut temp_allowed_values: Option<&HashSet<String>> = None;
-    let empty_set_for_error = HashSet::new(); // Used if cache fails
-
-    let validation_state = match validator_opt {
-        Some(ColumnValidator::Basic(_)) | None => {
-            // Basic type parsing/validation handled by the new function
-            let (state, basic_parse_error) = validate_basic_cell(current_cell_string, basic_type);
-            parse_error = basic_parse_error; // Store parse error flag
-            state // Return the state determined by the validator function
-        }
-        Some(ColumnValidator::Linked { target_sheet_name, target_column_index }) => {
-            // Linked validation handled by the new function
-            let (state, maybe_allowed) = validate_linked_cell(
-                current_cell_string, target_sheet_name, *target_column_index, registry, state
-            );
-            if maybe_allowed.is_some() {
-                temp_allowed_values = maybe_allowed; // Store reference if cache success
-            } else if state == ValidationState::Invalid {
-                // If cache errored or value invalid, ensure we have a non-None (but potentially empty) set for the widget
-                temp_allowed_values = Some(&empty_set_for_error);
-            }
-            state
+    let (current_display_text, cell_validation_state) = match render_cell_data_opt {
+        Some(data) => (data.display_text.as_str(), data.validation_state),
+        None => {
+            warn!("Render cache miss for cell [{}/{}, {}/{}]. Defaulting.",
+                category.as_deref().unwrap_or("root"), sheet_name, row_index, col_index);
+            ("", ValidationState::default())
         }
     };
-    // --- End Validation State Determination ---
 
 
-    // --- Define the widget drawing logic as a closure ---
-    let draw_widget_logic = |ui: &mut egui::Ui| -> (Option<Response>, Option<String>) {
-        let mut widget_response: Option<Response> = None;
-        let mut temp_new_value: Option<String> = None;
-
-        // Initialize temporary variables for non-string types based on the original string
-        let mut temp_bool: bool = false; let mut temp_opt_bool: Option<bool> = None;
-        let mut temp_u8: u8 = 0; let mut temp_opt_u8: Option<u8> = None;
-        let mut temp_u16: u16 = 0; let mut temp_opt_u16: Option<u16> = None;
-        let mut temp_u32: u32 = 0; let mut temp_opt_u32: Option<u32> = None;
-        let mut temp_u64: u64 = 0; let mut temp_opt_u64: Option<u64> = None;
-        let mut temp_i8: i8 = 0; let mut temp_opt_i8: Option<i8> = None;
-        let mut temp_i16: i16 = 0; let mut temp_opt_i16: Option<i16> = None;
-        let mut temp_i32: i32 = 0; let mut temp_opt_i32: Option<i32> = None;
-        let mut temp_i64: i64 = 0; let mut temp_opt_i64: Option<i64> = None;
-        let mut temp_f32: f32 = 0.0; let mut temp_opt_f32: Option<f32> = None;
-        let mut temp_f64: f64 = 0.0; let mut temp_opt_f64: Option<f64> = None;
-
-        // Only attempt parsing if the validation didn't mark it as explicitly Invalid
-        // OR if it's a Linked type (where we still show the text edit even if invalid)
-        if validation_state != ValidationState::Invalid || matches!( validator_opt, Some(ColumnValidator::Linked { .. }) ) {
-             if !current_cell_string.is_empty() { // Avoid parsing empty strings
-                 match basic_type {
-                     ColumnDataType::String | ColumnDataType::OptionString => {} // No parsing needed
-                     ColumnDataType::Bool => temp_bool = matches!(original_string.to_lowercase().as_str(), "true" | "1"),
-                     ColumnDataType::OptionBool => temp_opt_bool = match original_string.to_lowercase().as_str() { "true" | "1" => Some(true), "false" | "0" => Some(false), _ => None },
-                     ColumnDataType::U8 => temp_u8 = original_string.parse().unwrap_or(0),
-                     ColumnDataType::OptionU8 => temp_opt_u8 = original_string.parse().ok(),
-                     ColumnDataType::U16 => temp_u16 = original_string.parse().unwrap_or(0),
-                     ColumnDataType::OptionU16 => temp_opt_u16 = original_string.parse().ok(),
-                     ColumnDataType::U32 => temp_u32 = original_string.parse().unwrap_or(0),
-                     ColumnDataType::OptionU32 => temp_opt_u32 = original_string.parse().ok(),
-                     ColumnDataType::U64 => temp_u64 = original_string.parse().unwrap_or(0),
-                     ColumnDataType::OptionU64 => temp_opt_u64 = original_string.parse().ok(),
-                     ColumnDataType::I8 => temp_i8 = original_string.parse().unwrap_or(0),
-                     ColumnDataType::OptionI8 => temp_opt_i8 = original_string.parse().ok(),
-                     ColumnDataType::I16 => temp_i16 = original_string.parse().unwrap_or(0),
-                     ColumnDataType::OptionI16 => temp_opt_i16 = original_string.parse().ok(),
-                     ColumnDataType::I32 => temp_i32 = original_string.parse().unwrap_or(0),
-                     ColumnDataType::OptionI32 => temp_opt_i32 = original_string.parse().ok(),
-                     ColumnDataType::I64 => temp_i64 = original_string.parse().unwrap_or(0),
-                     ColumnDataType::OptionI64 => temp_opt_i64 = original_string.parse().ok(),
-                     ColumnDataType::F32 => temp_f32 = original_string.parse().unwrap_or(0.0),
-                     ColumnDataType::OptionF32 => temp_opt_f32 = original_string.parse().ok(),
-                     ColumnDataType::F64 => temp_f64 = original_string.parse().unwrap_or(0.0),
-                     ColumnDataType::OptionF64 => temp_opt_f64 = original_string.parse().ok(),
-                 }
-             }
-        }
-
-        // Draw the actual widget centered vertically
-        ui.vertical_centered(|ui| {
-            match validator_opt {
-                 // --- Linked Column Handling ---
-                Some(ColumnValidator::Linked { target_sheet_name, target_column_index }) => {
-                    // Default to empty set if temp_allowed_values is None (due to cache error)
-                    let allowed_values_ref = temp_allowed_values.unwrap_or(&empty_set_for_error);
-                    temp_new_value = handle_linked_column_edit(
-                        ui, id, &original_string, target_sheet_name,
-                        *target_column_index, registry,
-                        // state, // state no longer passed here
-                        allowed_values_ref,
-                    );
-                    // Allocate space even if invalid, for consistent layout/hover
-                    if validation_state == ValidationState::Invalid {
-                       widget_response = Some(ui.allocate_rect(ui.available_rect_before_wrap(), Sense::hover()));
-                    }
-                }
-                // --- Basic/None Case ---
-                Some(ColumnValidator::Basic(_)) | None => {
-                     match basic_type {
-                         // --- String Handling ---
-                         ColumnDataType::String | ColumnDataType::OptionString => {
-                             let mut temp_string = original_string.clone();
-                             let resp = ui.add_sized(
-                                 ui.available_size(),
-                                 egui::TextEdit::singleline(&mut temp_string).frame(false)
-                             );
-                             if resp.changed() { temp_new_value = Some(temp_string); }
-                             widget_response = Some(resp);
-                         }
-                         // --- Other Basic Types (Checkbox, DragValue, etc.) ---
-                         // Calls ui_option_bool and ui_option_numerical from widgets::option_widgets
-                         ColumnDataType::Bool => { let resp = ui.add(egui::Checkbox::new(&mut temp_bool, "")); if resp.changed() { temp_new_value = Some(temp_bool.to_string()); } widget_response = Some(resp); }
-                         ColumnDataType::OptionBool => { let (changed, resp) = ui_option_bool(ui, id.with("opt_bool"), &mut temp_opt_bool); if changed { temp_new_value = Some( temp_opt_bool.map_or_else(String::new, |v| v.to_string()), ); } widget_response = Some(resp); }
-                         ColumnDataType::U8 => { let r = ui.add(egui::DragValue::new(&mut temp_u8)); if r.changed() { temp_new_value = Some(temp_u8.to_string()); } widget_response = Some(r);},
-                         ColumnDataType::OptionU8 => { let (changed, resp) = ui_option_numerical(ui, id.with("opt_u8"), &mut temp_opt_u8); if changed { temp_new_value = Some(temp_opt_u8.map_or_else(String::new, |v| v.to_string())); } widget_response = Some(resp);},
-                         ColumnDataType::U16 => { let r = ui.add(egui::DragValue::new(&mut temp_u16)); if r.changed() { temp_new_value = Some(temp_u16.to_string()); } widget_response = Some(r);},
-                         ColumnDataType::OptionU16 => { let (changed, resp) = ui_option_numerical(ui, id.with("opt_u16"), &mut temp_opt_u16); if changed { temp_new_value = Some(temp_opt_u16.map_or_else(String::new, |v| v.to_string())); } widget_response = Some(resp);},
-                         ColumnDataType::U32 => { let r = ui.add(egui::DragValue::new(&mut temp_u32)); if r.changed() { temp_new_value = Some(temp_u32.to_string()); } widget_response = Some(r);},
-                         ColumnDataType::OptionU32 => { let (changed, resp) = ui_option_numerical(ui, id.with("opt_u32"), &mut temp_opt_u32); if changed { temp_new_value = Some(temp_opt_u32.map_or_else(String::new, |v| v.to_string())); } widget_response = Some(resp);},
-                         ColumnDataType::U64 => { let r = ui.add(egui::DragValue::new(&mut temp_u64)); if r.changed() { temp_new_value = Some(temp_u64.to_string()); } widget_response = Some(r);},
-                         ColumnDataType::OptionU64 => { let (changed, resp) = ui_option_numerical(ui, id.with("opt_u64"), &mut temp_opt_u64); if changed { temp_new_value = Some(temp_opt_u64.map_or_else(String::new, |v| v.to_string())); } widget_response = Some(resp);},
-                         ColumnDataType::I8 => { let r = ui.add(egui::DragValue::new(&mut temp_i8)); if r.changed() { temp_new_value = Some(temp_i8.to_string()); } widget_response = Some(r);},
-                         ColumnDataType::OptionI8 => { let (changed, resp) = ui_option_numerical(ui, id.with("opt_i8"), &mut temp_opt_i8); if changed { temp_new_value = Some(temp_opt_i8.map_or_else(String::new, |v| v.to_string())); } widget_response = Some(resp);},
-                         ColumnDataType::I16 => { let r = ui.add(egui::DragValue::new(&mut temp_i16)); if r.changed() { temp_new_value = Some(temp_i16.to_string()); } widget_response = Some(r);},
-                         ColumnDataType::OptionI16 => { let (changed, resp) = ui_option_numerical(ui, id.with("opt_i16"), &mut temp_opt_i16); if changed { temp_new_value = Some(temp_opt_i16.map_or_else(String::new, |v| v.to_string())); } widget_response = Some(resp);},
-                         ColumnDataType::I32 => { let r = ui.add(egui::DragValue::new(&mut temp_i32)); if r.changed() { temp_new_value = Some(temp_i32.to_string()); } widget_response = Some(r);},
-                         ColumnDataType::OptionI32 => { let (changed, resp) = ui_option_numerical(ui, id.with("opt_i32"), &mut temp_opt_i32); if changed { temp_new_value = Some(temp_opt_i32.map_or_else(String::new, |v| v.to_string())); } widget_response = Some(resp);},
-                         ColumnDataType::I64 => { let r = ui.add(egui::DragValue::new(&mut temp_i64)); if r.changed() { temp_new_value = Some(temp_i64.to_string()); } widget_response = Some(r);},
-                         ColumnDataType::OptionI64 => { let (changed, resp) = ui_option_numerical(ui, id.with("opt_i64"), &mut temp_opt_i64); if changed { temp_new_value = Some(temp_opt_i64.map_or_else(String::new, |v| v.to_string())); } widget_response = Some(resp);},
-                         ColumnDataType::F32 => { let r = ui.add(egui::DragValue::new(&mut temp_f32).speed(0.1)); if r.changed() { temp_new_value = Some(temp_f32.to_string()); } widget_response = Some(r);},
-                         ColumnDataType::OptionF32 => { let (changed, resp) = ui_option_numerical(ui, id.with("opt_f32"), &mut temp_opt_f32); if changed { temp_new_value = Some(temp_opt_f32.map_or_else(String::new, |v| v.to_string())); } widget_response = Some(resp);},
-                         ColumnDataType::F64 => { let r = ui.add(egui::DragValue::new(&mut temp_f64).speed(0.1)); if r.changed() { temp_new_value = Some(temp_f64.to_string()); } widget_response = Some(r);},
-                         ColumnDataType::OptionF64 => { let (changed, resp) = ui_option_numerical(ui, id.with("opt_f64"), &mut temp_opt_f64); if changed { temp_new_value = Some(temp_opt_f64.map_or_else(String::new, |v| v.to_string())); } widget_response = Some(resp);},
-                     }
-                }
-            }
-        }); // End vertical_centered
-
-        (widget_response, temp_new_value)
-    };
-    // --- End widget drawing closure ---
+    // Determine basic type for widget selection from metadata (still needed)
+    let basic_type = registry.get_sheet(category, sheet_name)
+        .and_then(|sd| sd.metadata.as_ref())
+        .and_then(|meta| meta.columns.get(col_index))
+        .map_or(ColumnDataType::String, |col_def| col_def.data_type);
 
 
-    // --- Allocate space ---
+    // --- 2. Allocate Space & Draw Frame ---
     let desired_size = egui::vec2(ui.available_width(), ui.style().spacing.interact_size.y);
-    let (_id, frame_rect) = ui.allocate_space(desired_size);
+    let (frame_id, frame_rect) = ui.allocate_space(desired_size);
 
-    // --- Determine Background Color for the Frame ---
-    let bg_color = match validation_state {
+    // Determine Background Color based on pre-calculated state
+    let bg_color = match cell_validation_state {
         ValidationState::Empty => Color32::TRANSPARENT,
         ValidationState::Valid => Color32::from_gray(40),
         ValidationState::Invalid => Color32::from_rgba_unmultiplied(80, 20, 20, 180),
     };
 
-    // --- Always Draw the Frame with the Determined Background ---
     let frame = egui::Frame::none()
         .inner_margin(egui::Margin::symmetric(2, 1))
         .fill(bg_color);
 
-    // Allocate UI in the rect and show the frame, running the drawing logic inside
-    let inner_response = ui.allocate_ui_at_rect(frame_rect, |frame_ui| {
-         frame.show(frame_ui, |ui_inside_frame| {
-             draw_widget_logic(ui_inside_frame)
-         }).inner
-    }).inner;
+    // --- 3. Draw the Frame and Widget Logic Inside ---
+    let inner_response = ui
+        .allocate_ui_at_rect(frame_rect, |frame_ui| {
+            frame.show(frame_ui, |widget_ui| {
+                let mut response_opt: Option<Response> = None;
+                let mut temp_new_value: Option<String> = None;
 
-    let (_resp, new_val) = inner_response;
-    final_new_value = new_val;
+                macro_rules! handle_numeric {
+                    ($ui:ident, $T:ty, $id_suffix:expr, $default:expr, $speed:expr) => {
+                        {
+                            let mut value_for_widget: $T = current_display_text.parse().unwrap_or($default);
+                            // CORRECTED: Removed .frame(false) from DragValue
+                            let resp = $ui.add(egui::DragValue::new(&mut value_for_widget).speed($speed));
+                            if resp.changed() {
+                                temp_new_value = Some(value_for_widget.to_string());
+                            }
+                            response_opt = Some(resp);
+                        }
+                    };
+                }
+                macro_rules! handle_option_numeric {
+                     ($ui:ident, $T:ty, $id_suffix:expr) => {
+                        {
+                            let mut value_for_widget: Option<$T> = if current_display_text.is_empty() {
+                                None
+                            } else {
+                                current_display_text.parse().ok()
+                            };
+                            let (changed, resp) = ui_option_numerical($ui, id.with($id_suffix), &mut value_for_widget);
+                            if changed {
+                                temp_new_value = Some(value_for_widget.map_or_else(String::new, |v| v.to_string()));
+                            }
+                            response_opt = Some(resp);
+                        }
+                     };
+                }
 
-    // Add hover text for invalid state
-    if validation_state == ValidationState::Invalid {
-        let hover_text = if parse_error {
-            format!("Parse Error! Invalid input: '{}'", original_string)
-        } else {
-            format!("Invalid Link! Value '{}' not found or link broken.", original_string)
-        };
-        ui.interact(frame_rect, id.with("hover_invalid"), Sense::hover())
+                widget_ui.vertical_centered(|centered_widget_ui| {
+                    match validator_opt {
+                        Some(ColumnValidator::Linked {
+                            target_sheet_name,
+                            target_column_index,
+                        }) => {
+                            let allowed_values = match linked_column_cache::get_or_populate_linked_options(
+                                target_sheet_name,
+                                *target_column_index,
+                                registry,
+                                state,
+                            ) {
+                                CacheResult::Success(values) => values,
+                                CacheResult::Error(_) => &HashSet::new(),
+                            };
+                            temp_new_value = handle_linked_column_edit(
+                                centered_widget_ui,
+                                id,
+                                current_display_text,
+                                target_sheet_name,
+                                *target_column_index,
+                                registry,
+                                allowed_values,
+                            );
+                            if temp_new_value.is_none() && response_opt.is_none() {
+                                response_opt = Some(
+                                    centered_widget_ui.allocate_rect(
+                                        centered_widget_ui.available_rect_before_wrap(),
+                                        Sense::hover(),
+                                    ),
+                                );
+                            }
+                        }
+                        Some(ColumnValidator::Basic(_)) | None => { // Basic or No Validator
+                            match basic_type {
+                                ColumnDataType::String | ColumnDataType::OptionString => {
+                                    let mut temp_string = current_display_text.to_string();
+                                    let resp = centered_widget_ui.add_sized(
+                                        centered_widget_ui.available_size(),
+                                        egui::TextEdit::singleline(&mut temp_string).frame(false),
+                                    );
+                                    if resp.changed() {
+                                        temp_new_value = Some(temp_string);
+                                    }
+                                    response_opt = Some(resp);
+                                }
+                                ColumnDataType::Bool => {
+                                    let mut value_for_widget = matches!(current_display_text.to_lowercase().as_str(), "true" | "1");
+                                    let resp = centered_widget_ui.add(egui::Checkbox::new(&mut value_for_widget, ""));
+                                    if resp.changed() {
+                                        temp_new_value = Some(value_for_widget.to_string());
+                                    }
+                                    response_opt = Some(resp);
+                                }
+                                ColumnDataType::OptionBool => {
+                                     let mut value_for_widget: Option<bool> = match current_display_text.to_lowercase().as_str() {
+                                        "" => None,
+                                        "true" | "1" => Some(true),
+                                        "false" | "0" => Some(false),
+                                        _ => None,
+                                    };
+                                    let (changed, resp) = ui_option_bool(centered_widget_ui, id.with("opt_bool"), &mut value_for_widget);
+                                    if changed {
+                                        temp_new_value = Some(value_for_widget.map_or_else(String::new, |v| v.to_string()));
+                                    }
+                                    response_opt = Some(resp);
+                                }
+                                ColumnDataType::U8 => { handle_numeric!(centered_widget_ui, u8, "u8", 0, 1.0) },
+                                ColumnDataType::OptionU8 => { handle_option_numeric!(centered_widget_ui, u8, "opt_u8") },
+                                ColumnDataType::U16 => { handle_numeric!(centered_widget_ui, u16, "u16", 0, 1.0) },
+                                ColumnDataType::OptionU16 => { handle_option_numeric!(centered_widget_ui, u16, "opt_u16") },
+                                ColumnDataType::U32 => { handle_numeric!(centered_widget_ui, u32, "u32", 0, 1.0) },
+                                ColumnDataType::OptionU32 => { handle_option_numeric!(centered_widget_ui, u32, "opt_u32") },
+                                ColumnDataType::U64 => { handle_numeric!(centered_widget_ui, u64, "u64", 0, 1.0) },
+                                ColumnDataType::OptionU64 => { handle_option_numeric!(centered_widget_ui, u64, "opt_u64") },
+                                ColumnDataType::I8 => { handle_numeric!(centered_widget_ui, i8, "i8", 0, 1.0) },
+                                ColumnDataType::OptionI8 => { handle_option_numeric!(centered_widget_ui, i8, "opt_i8") },
+                                ColumnDataType::I16 => { handle_numeric!(centered_widget_ui, i16, "i16", 0, 1.0) },
+                                ColumnDataType::OptionI16 => { handle_option_numeric!(centered_widget_ui, i16, "opt_i16") },
+                                ColumnDataType::I32 => { handle_numeric!(centered_widget_ui, i32, "i32", 0, 1.0) },
+                                ColumnDataType::OptionI32 => { handle_option_numeric!(centered_widget_ui, i32, "opt_i32") },
+                                ColumnDataType::I64 => { handle_numeric!(centered_widget_ui, i64, "i64", 0, 1.0) },
+                                ColumnDataType::OptionI64 => { handle_option_numeric!(centered_widget_ui, i64, "opt_i64") },
+                                ColumnDataType::F32 => { handle_numeric!(centered_widget_ui, f32, "f32", 0.0, 0.1) },
+                                ColumnDataType::OptionF32 => { handle_option_numeric!(centered_widget_ui, f32, "opt_f32") },
+                                ColumnDataType::F64 => { handle_numeric!(centered_widget_ui, f64, "f64", 0.0, 0.1) },
+                                ColumnDataType::OptionF64 => { handle_option_numeric!(centered_widget_ui, f64, "opt_f64") },
+                            }
+                        }
+                    }
+                });
+                (response_opt, temp_new_value)
+            })
+            .inner
+        })
+        .inner;
+
+    let (_widget_resp_opt, final_new_value) = inner_response;
+
+    // --- 4. Add Hover Text for Invalid State ---
+    if cell_validation_state == ValidationState::Invalid {
+        let hover_text = format!("Invalid Value! '{}' is not allowed here.", current_display_text);
+        ui.interact(frame_rect, frame_id.with("hover_invalid"), Sense::hover())
             .on_hover_text(hover_text);
     }
-    // --- End Frame Drawing ---
-
     final_new_value
 }

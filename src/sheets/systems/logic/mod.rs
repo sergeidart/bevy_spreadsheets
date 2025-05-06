@@ -8,7 +8,9 @@ pub mod update_cell;
 pub mod update_column_name;
 pub mod update_column_validator;
 pub mod delete_rows;
-pub mod update_column_width; // <-- ADDED
+pub mod update_column_width;
+// pub mod validation; // <-- REMOVED
+pub mod update_render_cache; // <-- ADDED
 
 // Re-export the handler functions for easier use in plugin.rs
 pub use add_row::handle_add_row_request;
@@ -18,4 +20,6 @@ pub use update_cell::handle_cell_update;
 pub use update_column_name::handle_update_column_name;
 pub use update_column_validator::handle_update_column_validator;
 pub use delete_rows::handle_delete_rows_request;
-pub use update_column_width::handle_update_column_width; // <-- ADDED
+pub use update_column_width::handle_update_column_width;
+// pub use validation::handle_sheet_revalidation_request; // <-- REMOVED
+pub use update_render_cache::handle_sheet_render_cache_update; // <-- ADDED

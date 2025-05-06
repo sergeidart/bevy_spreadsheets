@@ -1,11 +1,11 @@
 // src/sheets/events.rs
 use bevy::prelude::Event;
 use std::path::PathBuf;
-use std::collections::HashSet; // <-- Add this import
+use std::collections::HashSet;
 
-// Use definitions (including new ColumnDefinition)
-use super::definitions::{ColumnDefinition, ColumnValidator, SheetGridData}; // Keep SheetGridData if needed
+use super::definitions::{ColumnDefinition, ColumnValidator, SheetGridData};
 
+// --- Existing Events ---
 #[derive(Event, Debug, Clone)]
 pub struct AddSheetRowRequest {
     pub category: Option<String>,
@@ -14,9 +14,9 @@ pub struct AddSheetRowRequest {
 
 #[derive(Event, Debug, Clone)]
 pub struct JsonSheetUploaded {
-    pub category: Option<String>, // e.g., None for direct uploads to root
+    pub category: Option<String>,
     pub desired_sheet_name: String,
-    pub original_filename: String, // Just the filename part
+    pub original_filename: String,
     pub grid_data: Vec<Vec<String>>,
 }
 
@@ -35,13 +35,13 @@ pub struct RequestDeleteSheet {
 
 #[derive(Event, Debug, Clone)]
 pub struct RequestDeleteSheetFile {
-    pub relative_path: PathBuf, // Relative to data_sheets base dir
+    pub relative_path: PathBuf,
 }
 
 #[derive(Event, Debug, Clone)]
 pub struct RequestRenameSheetFile {
-    pub old_relative_path: PathBuf, // Relative to data_sheets base dir
-    pub new_relative_path: PathBuf, // Relative to data_sheets base dir
+    pub old_relative_path: PathBuf,
+    pub new_relative_path: PathBuf,
 }
 
 #[derive(Event, Debug, Clone)]
@@ -55,7 +55,7 @@ pub struct RequestInitiateFileUpload;
 
 #[derive(Event, Debug, Clone)]
 pub struct RequestProcessUpload {
-    pub path: PathBuf, // Full path to the uploaded file
+    pub path: PathBuf,
 }
 
 #[derive(Event, Debug, Clone)]
@@ -70,7 +70,7 @@ pub struct RequestUpdateColumnName {
 pub struct UpdateCellEvent {
     pub category: Option<String>,
     pub sheet_name: String,
-    pub row_index: usize, // Use original row index
+    pub row_index: usize,
     pub col_index: usize,
     pub new_value: String,
 }
@@ -80,19 +80,16 @@ pub struct RequestUpdateColumnValidator {
     pub category: Option<String>,
     pub sheet_name: String,
     pub column_index: usize,
-    pub new_validator: Option<ColumnValidator>, // Use Option to allow clearing
+    pub new_validator: Option<ColumnValidator>,
 }
 
-// --- ADDED: Event to request deleting specific rows ---
 #[derive(Event, Debug, Clone)]
 pub struct RequestDeleteRows {
     pub category: Option<String>,
     pub sheet_name: String,
-    // Use HashSet for potentially unordered indices from UI selection
     pub row_indices: HashSet<usize>,
 }
 
-// --- ADDED: Event to request updating column width ---
 #[derive(Event, Debug, Clone)]
 pub struct RequestUpdateColumnWidth {
     pub category: Option<String>,
@@ -100,19 +97,29 @@ pub struct RequestUpdateColumnWidth {
     pub column_index: usize,
     pub new_width: f32,
 }
-// --- END ADD ---
 
-// --- ADDED: AI Task Result Event ---
 #[derive(Event, Debug, Clone)]
 pub struct AiTaskResult {
     pub original_row_index: usize,
-    // Ok(suggestion) or Err(message)
     pub result: Result<Vec<String>, String>,
 }
 
-// --- ADDED: Event to signal data modification in registry for cache invalidation ---
+/// Event fired when sheet data (grid or metadata affecting structure/validation)
+/// is directly modified in the SheetRegistry.
+/// The new `handle_sheet_render_cache_update` system listens to this.
 #[derive(Event, Debug, Clone)]
 pub struct SheetDataModifiedInRegistryEvent {
+    pub category: Option<String>,
+    pub sheet_name: String,
+    // Optional: Could add a field here like `reason: ModificationReason`
+    // (e.g., CellEdit, RowAdded, ColumnTypeChanged) to allow more granular
+    // updates in the render cache system, but for now, just sheet identifier.
+}
+
+/// Event to explicitly request a revalidation and render cache rebuild for a sheet.
+/// The new `handle_sheet_render_cache_update` system listens to this.
+#[derive(Event, Debug, Clone)]
+pub struct RequestSheetRevalidation {
     pub category: Option<String>,
     pub sheet_name: String,
 }

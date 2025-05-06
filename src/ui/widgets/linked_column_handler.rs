@@ -18,8 +18,8 @@ use super::linked_column_visualization::add_linked_text_edit;
 /// Assumes allowed_values have been fetched previously.
 pub fn handle_linked_column_edit(
     ui: &mut egui::Ui,
-    id: egui::Id,
-    current_value: &str,
+    id: egui::Id, // Base ID for the cell
+    current_value: &str, // <-- Changed: Accept &str
     target_sheet_name: &str,
     target_column_index: usize,
     registry: &SheetRegistry, // Still needed for potential future logic? Keep for now.
@@ -32,7 +32,7 @@ pub fn handle_linked_column_edit(
     );
 
     let mut final_new_value: Option<String> = None;
-    let original_string = current_value.to_string();
+    // --- REMOVED: original_string = current_value.to_string(); ---
     let text_edit_id = id.with("ac_text_edit");
     let popup_id = id.with("ac_popup");
 
@@ -45,18 +45,19 @@ pub fn handle_linked_column_edit(
     // --- 2. Manage Input Text (using egui temporary memory) ---
     let mut input_text = ui.memory_mut(|mem| {
         mem.data
-            .get_temp_mut_or_insert_with::<String>(text_edit_id, || -> String { original_string.clone() })
-            .clone()
+            // --- MODIFIED: Initialize with current_value (&str) ---
+            .get_temp_mut_or_insert_with::<String>(text_edit_id, || -> String { current_value.to_string() }) // Clone only once for initialization if needed
+            .clone() // Clone the String buffer from memory for local use
     });
-    trace!("Input text from memory: '{}',", input_text);
+    trace!("Input text from memory: '{}'", input_text);
 
     // --- 3. Draw the TextEdit and Handle Focus for Popup ---
     let text_edit_response = add_linked_text_edit(
         ui,
         id,
-        &mut input_text,
-        &link_error, // Pass link_error (mostly for hover text if needed)
-        &original_string,
+        &mut input_text, // Pass mutable String buffer
+        &link_error,
+        current_value, // Pass the original &str for hover text
     );
 
     // Update temporary memory immediately on change
@@ -90,7 +91,8 @@ pub fn handle_linked_column_edit(
                             let current_input = list_ui.memory(|mem| {
                                 mem.data
                                     .get_temp(text_edit_id)
-                                    .unwrap_or_else(|| original_string.clone())
+                                    // --- MODIFIED: Fallback clone from &str ---
+                                    .unwrap_or_else(|| current_value.to_string())
                             });
                             let input_lower = current_input.to_lowercase();
 
@@ -138,19 +140,21 @@ pub fn handle_linked_column_edit(
     if let Some(clicked) = clicked_suggestion_in_popup {
         // Commit value if a suggestion was clicked
         debug!("Commit via popup click. Value: '{}'", clicked);
-        committed_value = Some(clicked.clone());
-        // Ensure local input_text matches clicked value for consistency this frame
-        // input_text = clicked.clone(); // This line might be redundant now
+        committed_value = Some(clicked.clone()); // Clone the clicked suggestion
+        // Ensure local input_text variable matches clicked value for consistency this frame
+        // input_text = clicked.clone(); // Redundant: temp memory already updated
     } else if text_edit_response.lost_focus() {
         // Commit value when focus is lost
-        let buffer = ui.memory(|mem| mem.data.get_temp(text_edit_id).unwrap_or_else(|| original_string.clone()));
+        // --- MODIFIED: Fallback clone from &str ---
+        let buffer = ui.memory(|mem| mem.data.get_temp(text_edit_id).unwrap_or_else(|| current_value.to_string()));
         debug!("Commit on LostFocus: '{}'", buffer);
-        committed_value = Some(buffer);
+        committed_value = Some(buffer); // Clone buffer from memory
     } else if text_edit_response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
          // Commit value on Enter key press while focused
-        let buffer = ui.memory(|mem| mem.data.get_temp(text_edit_id).unwrap_or_else(|| original_string.clone()));
-        debug!("Commit on Enter: '{}'", buffer);
-        committed_value = Some(buffer);
+         // --- MODIFIED: Fallback clone from &str ---
+         let buffer = ui.memory(|mem| mem.data.get_temp(text_edit_id).unwrap_or_else(|| current_value.to_string()));
+         debug!("Commit on Enter: '{}'", buffer);
+         committed_value = Some(buffer); // Clone buffer from memory
          // Defocus and close popup on Enter commit
         ui.memory_mut(|mem| mem.request_focus(Id::NULL));
         ui.memory_mut(|mem| mem.close_popup());
@@ -161,9 +165,10 @@ pub fn handle_linked_column_edit(
     // outside this function in `edit_cell_widget` to determine background color.
     // Here, we just check if the committed value is different from the original.
     if let Some(ref val) = committed_value {
-        if *val != original_string {
-            debug!("Change detected: '{}' -> '{}'", original_string, val);
-            final_new_value = Some(val.clone());
+        // --- MODIFIED: Compare with current_value (&str) ---
+        if val != current_value {
+            debug!("Change detected: '{}' -> '{}'", current_value, val);
+            final_new_value = Some(val.clone()); // Clone the final committed value
         } else {
             debug!("No change: '{}' matches original.", val);
         }

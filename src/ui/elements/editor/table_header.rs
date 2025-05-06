@@ -9,21 +9,19 @@ use super::state::EditorWindowState;
 /// Renders the header row for the sheet table.
 /// Allows clicking headers to open the column options popup.
 pub fn sheet_table_header(
-    header_row: TableRow, // egui_extras header row
+    header_row: TableRow, 
     metadata: &SheetMetadata, // Changed to take a reference to SheetMetadata
-    sheet_name: &str, // This is &String, which is fine
+    sheet_name: &str, 
     state: &mut EditorWindowState, 
 ) {
-    let mut header = header_row; // Make mutable for iteration
+    let mut header = header_row; 
     
-    // Get headers and filters from metadata
     let headers = metadata.get_headers();
     let filters = metadata.get_filters();
     let num_cols = headers.len();
 
     for (c_idx, header_text) in headers.iter().enumerate() {
         header.col(|ui| {
-            // Add indicator if filter is active
             let display_text = if filters.get(c_idx).cloned().flatten().is_some() {
                 format!("{} (Filtered)", header_text)
             } else {
@@ -31,14 +29,11 @@ pub fn sheet_table_header(
             };
 
             let header_response = ui.button(display_text);
-            // Trigger the options popup on click
             if header_response.clicked() {
                 state.show_column_options_popup = true;
-                state.options_column_target_sheet = sheet_name.to_string(); // sheet_name is &String
+                state.options_column_target_sheet = sheet_name.to_string(); 
                 state.options_column_target_index = c_idx;
                 state.column_options_popup_needs_init = true;
-
-                // Set the category for the popup based on the metadata of the current sheet
                 state.options_column_target_category = metadata.category.clone();
             }
             header_response.on_hover_text(format!("Click for options for column '{}'", header_text));

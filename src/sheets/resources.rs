@@ -1,19 +1,131 @@
 // src/sheets/resources.rs
 use bevy::prelude::*;
-use std::collections::{HashMap, BTreeMap}; // Use BTreeMap for sorted categories
+use std::collections::{HashMap, BTreeMap};
+// ADDED: Import ValidationState from ui::validation
+use crate::ui::validation::ValidationState;
+
 
 use super::definitions::{SheetGridData, SheetMetadata};
 
-/// Core Resource holding all registered sheet data, categorized by folder structure.
-#[derive(Resource, Default, Debug)]
-pub struct SheetRegistry {
-    // Key: Category Name (None for root), Value: Map of SheetName -> SheetData
-    categorized_sheets: BTreeMap<Option<String>, HashMap<String, SheetGridData>>,
-    // Store category names separately for UI ordering (BTreeMap keys are already sorted)
+// --- NEW: RenderableCellData ---
+/// Holds pre-processed data for rendering a single cell.
+#[derive(Clone, Debug, Default)]
+pub struct RenderableCellData {
+    /// The string to actually display in the UI widget.
+    /// This might be the raw string or a formatted version (e.g., "true" for bool).
+    pub display_text: String,
+    /// The calculated validation state for this cell.
+    pub validation_state: ValidationState,
+    // pub background_color: egui::Color32, // Example: Could be added if not derived in widget
+    // pub text_color: egui::Color32,     // Example
 }
 
+// --- NEW: SheetRenderCache Resource ---
+/// Resource holding the pre-calculated renderable data for each cell of each sheet.
+#[derive(Resource, Default, Debug)]
+pub struct SheetRenderCache {
+    // Key: (Category Name Opt, Sheet Name)
+    // Value: Grid of renderable cell data matching the data grid structure
+    pub(crate) states: HashMap<(Option<String>, String), Vec<Vec<RenderableCellData>>>,
+}
+
+impl SheetRenderCache {
+    /// Gets the renderable data for a specific cell, if it exists.
+    pub fn get_cell_data(
+        &self,
+        category: &Option<String>,
+        sheet_name: &str,
+        row: usize,
+        col: usize,
+    ) -> Option<&RenderableCellData> {
+        self.states
+            .get(&(category.clone(), sheet_name.to_string()))
+            .and_then(|grid_state| grid_state.get(row))
+            .and_then(|row_state| row_state.get(col))
+    }
+
+    /// Updates or inserts the entire renderable grid data for a sheet.
+    #[allow(dead_code)] // Might be used internally or for full rebuilds
+    pub(crate) fn update_sheet_grid_data(
+        &mut self,
+        category: Option<String>,
+        sheet_name: String,
+        new_grid_render_data: Vec<Vec<RenderableCellData>>,
+    ) {
+        self.states
+            .insert((category, sheet_name), new_grid_render_data);
+    }
+
+    /// Clears the render cache for a specific sheet (e.g., when deleted).
+    pub(crate) fn clear_sheet_render_data(&mut self, category: &Option<String>, sheet_name: &str) {
+        let key = (category.clone(), sheet_name.to_string());
+        if self.states.remove(&key).is_some() {
+            trace!("Cleared render cache for sheet '{:?}/{}'.", category, sheet_name);
+        }
+    }
+
+    /// Renames the render cache entry for a sheet.
+    pub(crate) fn rename_sheet_render_data(
+        &mut self,
+        category: &Option<String>,
+        old_name: &str,
+        new_name: &str,
+    ) {
+        let old_key = (category.clone(), old_name.to_string());
+        if let Some(state_grid) = self.states.remove(&old_key) {
+            let new_key = (category.clone(), new_name.to_string());
+            self.states.insert(new_key, state_grid);
+             trace!("Renamed render cache for sheet '{:?}/{}' to '{:?}/{}'.", category, old_name, category, new_name);
+        } else {
+            trace!("No render cache found to rename for sheet '{:?}/{}'.", category, old_name);
+        }
+    }
+
+    /// Ensures the render cache for a sheet has the correct dimensions,
+    /// adding default `RenderableCellData` if rows/columns are missing.
+    /// Returns a mutable reference to the cached grid.
+    pub(crate) fn ensure_and_get_sheet_cache_mut(
+        &mut self,
+        category: &Option<String>,
+        sheet_name: &String,
+        num_rows: usize,
+        num_cols: usize,
+    ) -> &mut Vec<Vec<RenderableCellData>> {
+        let key = (category.clone(), sheet_name.clone());
+        let sheet_cache = self.states.entry(key).or_insert_with(Vec::new);
+
+        // Ensure correct number of rows
+        if sheet_cache.len() < num_rows {
+            for _ in sheet_cache.len()..num_rows {
+                sheet_cache.push(vec![RenderableCellData::default(); num_cols]);
+            }
+        } else if sheet_cache.len() > num_rows {
+            sheet_cache.truncate(num_rows);
+        }
+
+        // Ensure correct number of columns for each row
+        for row_cache in sheet_cache.iter_mut() {
+            if row_cache.len() < num_cols {
+                row_cache.resize_with(num_cols, RenderableCellData::default);
+            } else if row_cache.len() > num_cols {
+                row_cache.truncate(num_cols);
+            }
+        }
+        sheet_cache
+    }
+}
+
+
+// --- SheetRegistry definition (remains the same) ---
+#[derive(Resource, Default, Debug)]
+pub struct SheetRegistry {
+    categorized_sheets: BTreeMap<Option<String>, HashMap<String, SheetGridData>>,
+}
+
+// --- SheetRegistry impl (remains the same) ---
 impl SheetRegistry {
-    /// Gets the path relative to the data directory for a given sheet.
+    // ... (all existing methods of SheetRegistry) ...
+    // Gets the path relative to the data directory for a given sheet.
     /// Returns PathBuf("CategoryName/FileName.json") or PathBuf("FileName.json").
     fn get_relative_path(metadata: &SheetMetadata) -> std::path::PathBuf {
         let mut path = std::path::PathBuf::new();
@@ -249,3 +361,19 @@ impl SheetRegistry {
         }
     }
 }
+
+// --- REMOVED: SheetValidationState Resource ---
+// This functionality will be merged into SheetRenderCache by storing ValidationState
+// within RenderableCellData.
+/*
+#[derive(Resource, Default, Debug)]
+pub struct SheetValidationState {
+    // Key: (Category Name Opt, Sheet Name)
+    // Value: Grid of validation states matching the data grid structure
+    states: HashMap<(Option<String>, String), Vec<Vec<ValidationState>>>,
+}
+
+impl SheetValidationState {
+    // ... methods ...
+}
+*/

@@ -1,16 +1,12 @@
 // src/ui/mod.rs
-// FINAL VERSION AFTER REFACTORING
 use bevy::prelude::*;
-// Keep only necessary bevy_egui imports if EguiPlugin added elsewhere
-use bevy_egui::EguiContextPass;
+use bevy_egui::EguiContextPass; // Keep EguiContextPass
 
 // Declare UI element modules
 pub mod elements;
 pub mod common;
-pub mod validation; // <-- ADDED validation module
-// Declare the new systems module
+pub mod validation;
 pub mod systems;
-// Declare the new widgets module
 pub mod widgets;
 
 // Import the editor UI system from its new location
@@ -38,7 +34,8 @@ impl Plugin for EditorUiPlugin {
             // Add the UI feedback handler system to run in Update schedule
             .add_systems(Update, handle_ui_feedback)
             // Add the main editor UI rendering system using EguiContextPass
-            .add_systems(EguiContextPass, generic_sheet_editor_ui); // System name remains the same
+            // This line remains the same - Bevy handles the SystemParam automatically.
+            .add_systems(EguiContextPass, generic_sheet_editor_ui);
 
         info!("EditorUiPlugin initialized with feedback handling.");
     }
