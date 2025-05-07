@@ -1,182 +1,219 @@
 // src/ui/elements/editor/ai_review_ui.rs
 use bevy::prelude::*;
-use bevy_egui::egui;
+use bevy_egui::egui::{self, Color32, RichText, TextStyle, Align};
+use egui_extras::{TableBuilder, Column}; // Import TableBuilder and Column
 
 use crate::sheets::{events::UpdateCellEvent, resources::SheetRegistry};
-use super::state::{AiModeState, EditorWindowState};
-// Import helpers from the new ai_helpers module
+use super::state::{AiModeState, EditorWindowState, ReviewChoice};
 use super::ai_helpers::{advance_review_queue, exit_review_mode};
 
-/// Shows the UI for reviewing AI suggestions one by one.
-pub(super) fn show_ai_review_ui(
+pub(super) fn draw_inline_ai_review_panel(
     ui: &mut egui::Ui,
     state: &mut EditorWindowState,
-    selected_category_clone: &Option<String>, // Pass as immutable ref
-    selected_sheet_name_clone: &Option<String>, // Pass as immutable ref
-    registry: &SheetRegistry, // Pass as immutable ref
-    cell_update_writer: &mut EventWriter<UpdateCellEvent>, // Pass mutable ref
+    selected_category_clone: &Option<String>,
+    selected_sheet_name_clone: &Option<String>,
+    registry: &SheetRegistry,
+    cell_update_writer: &mut EventWriter<UpdateCellEvent>,
 ) {
-    // Flags to defer state changes
-    let mut action_accept = false;
-    let mut action_reject = false;
-    let mut action_skip = false;
-    let mut action_cancel = false;
-    let mut row_idx_for_action: Option<usize> = None;
-
-    // --- Draw the UI elements within the centered vertical layout ---
-    ui.vertical_centered(|ui| {
-        ui.heading("AI Review Mode");
-        ui.separator();
-
-        let current_queue_index_opt = state.ai_current_review_index;
-        let mut maybe_original_row_idx: Option<usize> = None;
-        if let Some(queue_idx) = current_queue_index_opt {
-            maybe_original_row_idx = state.ai_review_queue.get(queue_idx).cloned();
+    let sheet_name_str = match selected_sheet_name_clone {
+        Some(s) => s.as_str(),
+        None => {
+            exit_review_mode(state);
+            return;
         }
+    };
 
-        // Store the row index if valid, needed for deferred actions
-        row_idx_for_action = maybe_original_row_idx;
+    let original_row_index = match state.current_ai_suggestion_edit_buffer {
+        Some((idx, _)) => idx,
+        None => {
+            warn!("Inline review panel: edit buffer is empty. Attempting to advance/exit.");
+            advance_review_queue(state);
+            return;
+        }
+    };
 
-        if let Some(original_row_idx) = maybe_original_row_idx {
-            ui.label(format!(
-                "Reviewing suggestion for original row index: {}",
-                original_row_idx
-            ));
+    let original_data_cloned: Option<Vec<String>> = registry
+        .get_sheet(selected_category_clone, sheet_name_str)
+        .and_then(|d| d.grid.get(original_row_index))
+        .cloned();
 
-            // --- Immutable Reads for Drawing ---
-            // Fetch original data and suggestion immutably
-            let sheet_name = selected_sheet_name_clone.as_ref().unwrap(); // Assume valid
-            let original_data_opt = registry
-                .get_sheet(selected_category_clone, sheet_name)
-                .and_then(|d| d.grid.get(original_row_idx));
+    let metadata_opt = registry
+        .get_sheet(selected_category_clone, sheet_name_str)
+        .and_then(|d| d.metadata.as_ref());
 
-            // Immutable borrow here
-            let suggestion_opt = state.ai_suggestions.get(&original_row_idx);
-            // --- End Immutable Reads ---
+    // --- Main Panel Frame ---
+    egui::Frame::group(ui.style())
+        .inner_margin(egui::Margin::same(5))
+        .show(ui, |ui| {
+            ui.label(RichText::new(format!("Reviewing AI Suggestion for Original Row Index: {}", original_row_index)).heading()); // User-facing index
+            ui.separator();
 
-            match (original_data_opt, suggestion_opt) {
-                (Some(original_row), Some(suggestion_row)) => {
-                    // Display comparison (simple example)
-                    ui.group(|ui| {
-                        egui::Grid::new("ai_review_grid")
-                            .num_columns(3)
-                            .spacing([10.0, 4.0])
-                            .striped(true)
-                            .show(ui, |ui| {
-                                ui.label("Column");
-                                ui.label("Original");
-                                ui.label("Suggestion");
-                                ui.end_row();
+            if state.current_ai_suggestion_edit_buffer.is_none() || state.current_ai_suggestion_edit_buffer.as_ref().map_or(true, |(idx, _)| *idx != original_row_index) {
+                ui.colored_label(Color32::YELLOW, "Review item changed, refreshing...");
+                return;
+            }
+            
+            // Get mutable access to the suggestion being edited
+            let (_, current_suggestion_mut) = state.current_ai_suggestion_edit_buffer.as_mut().unwrap();
 
-                                let num_cols =
-                                    original_row.len().max(suggestion_row.len());
-                                for i in 0..num_cols {
-                                     let header = registry
-                                        .get_sheet(selected_category_clone, sheet_name)
-                                        .and_then(|d| d.metadata.as_ref())
-                                        .and_then(|m| m.columns.get(i))
-                                        .map_or_else(
-                                            || format!("Col {}", i + 1),
-                                            |c| c.header.clone(),
-                                        );
-                                    ui.label(&header);
-                                    let original_cell =
-                                        original_row.get(i).cloned().unwrap_or_default();
-                                    let suggested_cell = suggestion_row
-                                        .get(i)
-                                        .cloned()
-                                        .unwrap_or_default();
+            match (original_data_cloned.as_ref(), metadata_opt) {
+                (Some(original_row), Some(metadata)) => {
+                    let num_cols = metadata.columns.len().max(current_suggestion_mut.len());
 
-                                    // Highlight differences
-                                    let original_label = egui::RichText::new(&original_cell);
-                                    let suggested_label = if original_cell != suggested_cell {
-                                        egui::RichText::new(&suggested_cell)
-                                            .color(egui::Color32::LIGHT_YELLOW)
-                                            .strong()
-                                    } else {
-                                         egui::RichText::new(&suggested_cell)
-                                    };
-                                    ui.label(original_label);
-                                    ui.label(suggested_label);
-                                    ui.end_row();
-                                }
-                            });
-                    });
+                    // Ensure choice and suggestion buffers are correctly sized
+                    if state.ai_review_column_choices.len() != num_cols {
+                         state.ai_review_column_choices = vec![ReviewChoice::AI; num_cols];
+                    }
+                    if current_suggestion_mut.len() != num_cols {
+                         current_suggestion_mut.resize(num_cols, String::new());
+                    }
 
-                    // --- Action Buttons: Set Flags ---
-                    ui.horizontal(|ui| {
-                        if ui.button("✅ Accept Suggestion").clicked() {
-                             // --- Send update events immediately (this is fine) ---
-                             for (col_idx, suggested_value) in suggestion_row.iter().enumerate() {
-                                if let Some(original_value) = original_row.get(col_idx) {
-                                    if original_value != suggested_value {
-                                        cell_update_writer.send(UpdateCellEvent {
-                                            category: selected_category_clone.clone(),
-                                            sheet_name: sheet_name.clone(),
-                                            row_index: original_row_idx,
-                                            col_index: col_idx,
-                                            new_value: suggested_value.clone(),
-                                        });
-                                    }
-                                } else {
-                                     cell_update_writer.send(UpdateCellEvent {
-                                        category: selected_category_clone.clone(),
-                                        sheet_name: sheet_name.clone(),
-                                        row_index: original_row_idx,
-                                        col_index: col_idx,
-                                        new_value: suggested_value.clone(),
+                    let text_style = TextStyle::Body;
+                    let row_height = ui.text_style_height(&text_style);
+
+                    // --- Use TableBuilder for the review grid ---
+                    let table = TableBuilder::new(ui)
+                        .striped(true)
+                        .resizable(true)
+                        .cell_layout(egui::Layout::left_to_right(Align::Center))
+                        .columns(Column::auto().at_least(80.0), num_cols) // Auto-sized columns
+                        .min_scrolled_height(0.0);
+
+                    table
+                        .header(20.0, |mut header| {
+                            for c_idx in 0..num_cols {
+                                header.col(|ui| {
+                                    let col_header = metadata.columns.get(c_idx)
+                                        .map_or_else(|| format!("Col {}", c_idx + 1), |c| c.header.clone());
+                                    ui.strong(col_header);
+                                });
+                            }
+                        })
+                        .body(|mut body| {
+                            // --- Original Row ---
+                            body.row(row_height, |mut row| {
+                                for c_idx in 0..num_cols {
+                                    row.col(|ui| {
+                                        let original_value = original_row.get(c_idx).cloned().unwrap_or_default();
+                                        let current_choice = state.ai_review_column_choices[c_idx];
+                                        let is_different = original_value != current_suggestion_mut.get(c_idx).cloned().unwrap_or_default();
+                                        
+                                        let display_text = if is_different && current_choice == ReviewChoice::AI {
+                                            RichText::new(&original_value).strikethrough()
+                                        } else {
+                                            RichText::new(&original_value)
+                                        };
+                                        ui.label(display_text).on_hover_text("Original Value");
                                     });
                                 }
+                            });
+
+                            // --- AI Suggestion Row (Editable) ---
+                            body.row(row_height, |mut row| {
+                                for c_idx in 0..num_cols {
+                                    row.col(|ui| {
+                                        let original_value = original_row.get(c_idx).cloned().unwrap_or_default();
+                                        let ai_value_mut = current_suggestion_mut.get_mut(c_idx).expect("Suggestion vec exists");
+                                        let is_different = original_value != *ai_value_mut;
+
+                                        ui.add(
+                                            egui::TextEdit::singleline(ai_value_mut)
+                                                .desired_width(f32::INFINITY) // Fill cell
+                                                .text_color_opt(if is_different { Some(Color32::LIGHT_YELLOW) } else { None })
+                                        );
+                                    });
+                                }
+                            });
+
+                            // --- Choice Row (Checkboxes) ---
+                            body.row(row_height, |mut row| {
+                                for c_idx in 0..num_cols {
+                                    row.col(|ui| {
+                                        ui.horizontal_centered(|ui| {
+                                            let mut choice = state.ai_review_column_choices[c_idx];
+                                            if ui.radio_value(&mut choice, ReviewChoice::Original, "Original").clicked() {
+                                                state.ai_review_column_choices[c_idx] = ReviewChoice::Original;
+                                            }
+                                            if ui.radio_value(&mut choice, ReviewChoice::AI, "AI").clicked() {
+                                                state.ai_review_column_choices[c_idx] = ReviewChoice::AI;
+                                            }
+                                        });
+                                    });
+                                }
+                            });
+                        }); // End Table Body
+
+                    // --- Action Buttons ---
+                    ui.add_space(10.0);
+                    let mut apply_action = false;
+                    let mut skip_action = false;
+                    let mut cancel_action = false;
+
+                    ui.horizontal(|ui| {
+                        if ui.button("✅ Apply Chosen Changes").clicked() {
+                            apply_action = true;
+                        }
+                        if ui.button("⏩ Skip This Row").clicked() {
+                            skip_action = true;
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.button("❌ Cancel Review Mode").clicked() {
+                                cancel_action = true;
                             }
-                            // --- Defer state change ---
-                            action_accept = true;
-                        }
-                        if ui.button("❌ Reject Suggestion").clicked() {
-                            action_reject = true;
-                        }
-                        if ui.button("⏩ Skip Review").clicked() {
-                            action_skip = true;
-                        }
+                        });
                     });
-                }
-                _ => {
-                    ui.colored_label(
-                        egui::Color32::RED,
-                        "Error: Could not retrieve original data or suggestion.",
-                    );
-                    // Skip problematic item by setting flag
-                    action_skip = true;
-                }
-            }
-        } else if current_queue_index_opt.is_some() {
-            // Queue index exists but no corresponding row index found (error state)
-            ui.colored_label(egui::Color32::RED, "Error: Invalid review index!");
-            action_cancel = true; // Treat as cancel to exit mode
-        } else {
-            // Queue index is None, review finished or queue was empty
-            ui.label("Review queue processed or empty.");
-             if state.ai_mode == AiModeState::Reviewing { // Only trigger exit if actually in review mode
-                 action_cancel = true;
-             }
-        }
 
-        ui.separator();
-        if ui.button("Cancel Review").clicked() {
-            action_cancel = true;
-        }
-    }); // --- End ui.vertical_centered ---
+                    // --- Defer actions to avoid borrow issues ---
+                    if apply_action {
+                        for (c_idx, choice) in state.ai_review_column_choices.iter().enumerate() {
+                            let original_cell_value = original_row.get(c_idx).cloned().unwrap_or_default();
+                            // Important: Re-fetch current_suggestion_mut here as it might have been edited
+                            let ai_cell_value = state.current_ai_suggestion_edit_buffer.as_ref()
+                                .and_then(|(_, buf)| buf.get(c_idx))
+                                .cloned()
+                                .unwrap_or_default();
 
-    // --- Deferred State Modifications (After UI Scope) ---
-    if action_accept || action_reject || action_skip {
-        if let Some(idx) = row_idx_for_action {
-            state.ai_suggestions.remove(&idx); // Remove from suggestions map
-            advance_review_queue(state);       // Mutably borrow state HERE
-        } else {
-             // Should not happen if flags were set correctly
-             warn!("Review action triggered but row_idx_for_action was None.");
-             exit_review_mode(state); // Exit defensively
-        }
-    } else if action_cancel {
-        exit_review_mode(state); // Mutably borrow state HERE
-    }
+                            let value_to_apply = match choice {
+                                ReviewChoice::Original => &original_cell_value,
+                                ReviewChoice::AI => &ai_cell_value,
+                            };
+                            
+                            let current_grid_value = registry.get_sheet(selected_category_clone, sheet_name_str)
+                                .and_then(|s| s.grid.get(original_row_index))
+                                .and_then(|r| r.get(c_idx))
+                                .cloned()
+                                .unwrap_or_default();
+
+                            if *value_to_apply != current_grid_value {
+                                 info!("Applying change for row {}, col {}: '{}' from choice {:?}", original_row_index, c_idx, value_to_apply, choice);
+                                 cell_update_writer.send(UpdateCellEvent {
+                                     category: selected_category_clone.clone(),
+                                     sheet_name: sheet_name_str.to_string(),
+                                     row_index: original_row_index,
+                                     col_index: c_idx,
+                                     new_value: value_to_apply.clone(),
+                                 });
+                             }
+                         }
+                        advance_review_queue(state);
+                    } else if skip_action {
+                        advance_review_queue(state);
+                    } else if cancel_action {
+                        exit_review_mode(state);
+                    }
+
+                } // End match (Some(original_row), Some(metadata))
+                (_, None) => {
+                    ui.colored_label(Color32::RED, "Error: Missing metadata for sheet.");
+                    if ui.button("Cancel Review Mode").clicked() { exit_review_mode(state); }
+                }
+                (None, _) => {
+                    ui.colored_label(Color32::RED, "Error: Original row data not found (was it deleted?).");
+                     ui.horizontal(|ui| {
+                        if ui.button("Skip Problematic Row").clicked() { advance_review_queue(state); }
+                        if ui.button("Cancel Review Mode").clicked() { exit_review_mode(state); }
+                     });
+                }
+            } // End match
+        }); // End Frame::group
 }
