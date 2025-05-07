@@ -11,7 +11,7 @@ use bevy_egui::egui;
 pub fn show_top_panel(
     ui: &mut egui::Ui,
     state: &mut EditorWindowState,
-    registry: &SheetRegistry, // Changed to immutable reference
+    registry: &SheetRegistry,
     mut add_row_event_writer: EventWriter<AddSheetRowRequest>,
     mut upload_req_writer: EventWriter<RequestInitiateFileUpload>,
     mut delete_rows_event_writer: EventWriter<RequestDeleteRows>,
@@ -33,9 +33,10 @@ pub fn show_top_panel(
                     if !is_selected_root {
                         state.selected_category = None;
                         state.selected_sheet_name = None;
-                        state.ai_selected_rows.clear(); 
-                        state.force_filter_recalculation = true; // Invalidate cache
+                        state.ai_selected_rows.clear();
+                        state.force_filter_recalculation = true;
                         debug!("Category changed to Root. Forcing filter recalc.");
+                        state.ai_rule_popup_needs_init = true; // Also re-init AI popup if open/opened next
                     }
                 }
                 for cat_opt in categories.iter() {
@@ -45,20 +46,21 @@ pub fn show_top_panel(
                             if !is_selected_cat {
                                 state.selected_category = Some(cat_name.clone());
                                 state.selected_sheet_name = None;
-                                state.ai_selected_rows.clear(); 
-                                state.force_filter_recalculation = true; // Invalidate cache
+                                state.ai_selected_rows.clear();
+                                state.force_filter_recalculation = true;
                                 debug!("Category changed to '{}'. Forcing filter recalc.", cat_name);
+                                state.ai_rule_popup_needs_init = true; // Also re-init AI popup if open/opened next
                             }
                         }
                     }
                 }
             });
-        
-        if category_response.response.changed() && state.selected_sheet_name.is_none() {
-            // If category changed and no sheet is selected (or became none),
-            // ensure force_filter_recalculation is true.
-            // This handles cases where the list of sheets might change but selection doesn't auto-pick one.
-            state.force_filter_recalculation = true;
+
+        if category_response.response.changed() { // Simplified condition
+             if state.selected_sheet_name.is_none() { // if no sheet became selected
+                state.force_filter_recalculation = true;
+             }
+             state.ai_rule_popup_needs_init = true; // If category changes, AI popup for new context might need re-init
         }
 
 
@@ -74,35 +76,34 @@ pub fn show_top_panel(
             let sheet_response = egui::ComboBox::from_id_source("sheet_selector_grid")
                 .selected_text(selected_sheet_text)
                 .show_ui(ui, |ui| {
-                    // Store original selection to detect change
                     let original_selection = state.selected_sheet_name.clone();
                     ui.selectable_value(&mut state.selected_sheet_name, None, "--Select--");
                     for name in sheets_in_category {
                         ui.selectable_value(&mut state.selected_sheet_name, Some(name.clone()), &name);
                     }
-                    // If selection changed, invalidate cache
                     if state.selected_sheet_name != original_selection {
-                        state.ai_selected_rows.clear(); 
+                        state.ai_selected_rows.clear();
                         state.force_filter_recalculation = true;
                         debug!("Sheet selection changed. Forcing filter recalc.");
+                        state.ai_rule_popup_needs_init = true; // Re-init AI popup for new sheet
                     }
                 });
 
-             // Clear selection if sheet becomes invalid (e.g. deleted from another source)
              if let Some(current_sheet_name) = state.selected_sheet_name.as_ref() {
                  if !registry.get_sheet_names_in_category(&state.selected_category).contains(current_sheet_name) {
                      warn!("Selected sheet '{}' no longer valid for category '{:?}'. Clearing selection.", current_sheet_name, state.selected_category);
                      state.selected_sheet_name = None;
-                     state.ai_selected_rows.clear(); 
-                     state.force_filter_recalculation = true; // Invalidate cache
+                     state.ai_selected_rows.clear();
+                     state.force_filter_recalculation = true;
+                     state.ai_rule_popup_needs_init = true;
                  }
              }
-        }); 
+        });
 
-        let selected_category_cache = state.selected_category.clone(); 
-        let selected_sheet_name_cache = state.selected_sheet_name.clone(); 
+        let selected_category_cache = state.selected_category.clone();
+        let selected_sheet_name_cache = state.selected_sheet_name.clone();
         let is_sheet_selected = selected_sheet_name_cache.is_some();
-        let is_ai_busy = matches!(state.ai_mode, AiModeState::Submitting | AiModeState::Reviewing); 
+        let is_ai_busy = matches!(state.ai_mode, AiModeState::Submitting | AiModeState::Reviewing);
 
 
         if ui.add_enabled(is_sheet_selected, egui::Button::new("✏ Rename")).clicked() {
@@ -120,16 +121,13 @@ pub fn show_top_panel(
                 state.show_delete_confirm_popup = true;
             }
         }
-        if ui.add_enabled(is_sheet_selected, egui::Button::new("🧠 AI Rule")).clicked() {
-             if let Some(ref sheet_name) = selected_sheet_name_cache {
-                 let current_rule = registry
-                     .get_sheet(&selected_category_cache, sheet_name)
-                     .and_then(|d| d.metadata.as_ref())
-                     .and_then(|m| m.ai_general_rule.clone())
-                     .unwrap_or_default();
-                 state.ai_general_rule_input = current_rule;
-                 state.show_ai_rule_popup = true;
-             }
+        if ui.add_enabled(is_sheet_selected, egui::Button::new("🧠 AI Config")).clicked() { // Renamed for clarity
+             // --- MODIFIED: Set init flag when opening AI rule popup ---
+             state.show_ai_rule_popup = true;
+             state.ai_rule_popup_needs_init = true;
+             // Initialization of input fields will now happen in ai_rule_popup.rs
+             // based on ai_rule_popup_needs_init and selected sheet.
+             // --- END MODIFIED ---
         }
         if ui.button("⬆ Upload JSON").on_hover_text("Upload a JSON file (will be placed in Root category)").clicked() {
             upload_req_writer.send(RequestInitiateFileUpload);
@@ -139,13 +137,11 @@ pub fn show_top_panel(
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
              if ui.add_enabled(is_sheet_selected && !is_ai_busy, egui::Button::new("➕ Add Row")).clicked()
              {
-                 if let Some(sheet_name) = &state.selected_sheet_name { 
+                 if let Some(sheet_name) = &state.selected_sheet_name {
                      add_row_event_writer.send(AddSheetRowRequest {
-                         category: state.selected_category.clone(), 
+                         category: state.selected_category.clone(),
                          sheet_name: sheet_name.clone(),
                      });
-                     // Optimistically set flag, system will send SheetDataModifiedEvent too
-                    // Set the request flag for scrolling
                     state.request_scroll_to_bottom_on_add = true;
                      state.force_filter_recalculation = true;
                  }
@@ -162,36 +158,35 @@ pub fn show_top_panel(
                  "Select a sheet first"
             } else if is_ai_busy {
                  "Cannot delete rows during AI processing"
-            } else { 
+            } else {
                  "Select rows first using 'Prepare for AI'"
             };
             if ui.add_enabled(can_delete_rows, egui::Button::new("🗑 Delete Rows"))
-                .on_hover_text(delete_hover_text) 
+                .on_hover_text(delete_hover_text)
                 .clicked()
             {
                 if let Some(sheet_name) = &selected_sheet_name_cache {
                     delete_rows_event_writer.send(RequestDeleteRows {
                          category: selected_category_cache.clone(),
                          sheet_name: sheet_name.clone(),
-                         row_indices: state.ai_selected_rows.clone(), 
+                         row_indices: state.ai_selected_rows.clone(),
                     });
                     state.ai_selected_rows.clear();
                     if state.ai_mode == AiModeState::Preparing {
                         state.ai_mode = AiModeState::Idle;
                     }
-                    // Optimistically set flag
                     state.force_filter_recalculation = true;
                 }
             }
-             
+
               if state.ai_mode == AiModeState::Idle {
                    if ui.add_enabled(is_sheet_selected && !is_ai_busy, egui::Button::new("✨ Prepare for AI"))
-                     .on_hover_text("Enable row selection checkboxes for AI or Deletion") 
+                     .on_hover_text("Enable row selection checkboxes for AI or Deletion")
                      .clicked() {
                         state.ai_mode = AiModeState::Preparing;
-                        state.ai_selected_rows.clear(); 
+                        state.ai_selected_rows.clear();
                    }
               }
-        }); 
-    }); 
+        });
+    });
 }

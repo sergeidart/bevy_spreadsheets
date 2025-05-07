@@ -1,6 +1,10 @@
 // src/example_definitions.rs
 use crate::sheets::definitions::{
-    ColumnDataType, ColumnDefinition, ColumnValidator, SheetMetadata,
+    ColumnDataType, ColumnDefinition, SheetMetadata,
+    // --- MODIFIED: Import new default function for model ID ---
+    default_ai_model_id,
+    // --- END MODIFIED ---
+    default_temperature, default_top_k, default_top_p, // Keep these
 };
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Default)]
@@ -51,10 +55,12 @@ pub fn create_example_items_metadata() -> SheetMetadata {
         data_filename: EXAMPLE_ITEMS_FILENAME.to_string(),
         columns,
         ai_general_rule: None,
-        // --- MODIFIED: Added missing AI fields with defaults ---
-        ai_temperature: crate::sheets::definitions::default_temperature(),
-        ai_top_k: crate::sheets::definitions::default_top_k(),
-        ai_top_p: crate::sheets::definitions::default_top_p(),
+        // --- MODIFIED: Initialize new AI model ID field and keep existing params ---
+        ai_model_id: default_ai_model_id(),
+        ai_temperature: default_temperature(),
+        ai_top_k: default_top_k(),
+        ai_top_p: default_top_p(),
+        requested_grounding_with_google_search: todo!(),
         // --- END MODIFIED ---
     }
 }
@@ -91,10 +97,12 @@ pub fn create_simple_config_metadata() -> SheetMetadata {
         data_filename: SIMPLE_CONFIG_FILENAME.to_string(),
         columns,
         ai_general_rule: None,
-        // --- MODIFIED: Added missing AI fields with defaults ---
-        ai_temperature: crate::sheets::definitions::default_temperature(),
-        ai_top_k: crate::sheets::definitions::default_top_k(),
-        ai_top_p: crate::sheets::definitions::default_top_p(),
+        // --- MODIFIED: Initialize new AI model ID field and keep existing params ---
+        ai_model_id: default_ai_model_id(),
+        ai_temperature: default_temperature(),
+        ai_top_k: default_top_k(),
+        ai_top_p: default_top_p(),
+        requested_grounding_with_google_search: todo!(),
         // --- END MODIFIED ---
     }
 }

@@ -99,6 +99,23 @@ impl ColumnDefinition {
     }
 }
 
+// Default function for ai_model_id
+pub fn default_ai_model_id() -> String {
+    "gemini-1.5-flash".to_string() // Default model
+}
+
+// Default functions for existing AI parameters
+pub fn default_temperature() -> Option<f32> { Some(0.9) }
+pub fn default_top_k() -> Option<i32> { Some(1) }
+pub fn default_top_p() -> Option<f32> { Some(1.0) }
+
+// --- CORRECTED: Definition of the default function for grounding ---
+/// Default function for `requested_grounding_with_Google Search` field in `SheetMetadata`.
+pub fn default_grounding_with_google_search() -> Option<bool> {
+    Some(false) // Default to false (or true if you prefer grounding by default)
+}
+// --- END CORRECTION ---
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SheetMetadata {
     pub sheet_name: String,
@@ -109,19 +126,19 @@ pub struct SheetMetadata {
     pub columns: Vec<ColumnDefinition>,
     #[serde(default)]
     pub ai_general_rule: Option<String>,
+    #[serde(default = "default_ai_model_id")]
+    pub ai_model_id: String,
     #[serde(default = "default_temperature")]
     pub ai_temperature: Option<f32>,
     #[serde(default = "default_top_k")]
     pub ai_top_k: Option<i32>,
     #[serde(default = "default_top_p")]
     pub ai_top_p: Option<f32>,
-}
 
-// --- MODIFIED: Made default functions public ---
-pub fn default_temperature() -> Option<f32> { Some(0.9) }
-pub fn default_top_k() -> Option<i32> { Some(1) }
-pub fn default_top_p() -> Option<f32> { Some(1.0) }
-// --- END MODIFIED ---
+    // Use the defined default function for serde
+    #[serde(default = "default_grounding_with_google_search")]
+    pub requested_grounding_with_google_search: Option<bool>,
+}
 
 impl SheetMetadata {
     pub fn create_generic(
@@ -145,9 +162,12 @@ impl SheetMetadata {
             data_filename: filename,
             columns,
             ai_general_rule: None,
+            ai_model_id: default_ai_model_id(),
             ai_temperature: default_temperature(),
             ai_top_k: default_top_k(),
             ai_top_p: default_top_p(),
+            // Call the defined function for initialization
+            requested_grounding_with_google_search: default_grounding_with_google_search(),
         }
     }
 

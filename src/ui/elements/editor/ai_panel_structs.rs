@@ -24,9 +24,8 @@ pub(crate) struct AiPromptPayload { // Changed to pub(crate)
     pub requested_top_p: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub requested_max_output_tokens: Option<i32>,
-    // --- Field name corrected ---
+    // Field name is correct as per your uploaded code
     #[serde(skip_serializing_if = "Option::is_none")]
     pub requested_grounding_with_google_search: Option<bool>,
-    // --- End Field name corrected ---
     pub output_format_instruction: String,
 }

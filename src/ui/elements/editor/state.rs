@@ -68,11 +68,15 @@ pub struct EditorWindowState {
     pub current_ai_suggestion_edit_buffer: Option<(usize, Vec<String>)>,
     pub ai_review_column_choices: Vec<ReviewChoice>,
 
+    pub ai_model_id_input: String,
     pub ai_general_rule_input: String,
     pub ai_temperature_input: f32,
     pub ai_top_k_input: i32,
     pub ai_top_p_input: f32,
     pub show_ai_rule_popup: bool,
+    // --- MODIFIED: Add ai_rule_popup_needs_init flag ---
+    pub ai_rule_popup_needs_init: bool,
+    // --- END MODIFIED ---
     pub ai_prompt_display: String,
 
     pub ai_raw_output_display: String,

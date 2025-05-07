@@ -31,11 +31,6 @@ pub struct ApiKeyDisplayStatus {
 #[derive(Resource, Debug, Default)]
 pub struct SessionApiKey(pub Option<String>);
 
-// -- Removed Keyring Constants --
-// pub const KEYRING_SERVICE_NAME: &str = "bevy_spreadsheets";
-// pub const KEYRING_API_KEY_USERNAME: &str = "GEMINI_API_KEY";
-// -- End Removed Keyring Constants --
-
 fn main() {
     match dotenv() {
         Ok(path) => info!("Loaded .env file from: {:?}", path),
