@@ -3,26 +3,15 @@ use bevy::log::{debug, error, info, warn};
 use bevy::prelude::*;
 use bevy_egui::egui;
 use bevy_tokio_tasks::TokioTasksRuntime;
-
 use crate::sheets::definitions::{SheetMetadata, default_ai_model_id, default_grounding_with_google_search};
 use crate::sheets::events::AiTaskResult;
 use crate::sheets::resources::SheetRegistry;
 use crate::ui::systems::SendEvent;
 use crate::SessionApiKey;
-
-use gemini_client_rs::{
-    types::{
-        Content, ContentPart, GenerateContentRequest, PartResponse, Role, ToolConfig,
-        DynamicRetrieval, DynamicRetrievalConfig, // These should be correct if used by DynamicRetieval variant
-    },
-    GeminiClient, GeminiError,
-};
+use gemini_client_rs::{types::{Content, ContentPart, GenerateContentRequest, PartResponse, Role, ToolConfig,DynamicRetrieval, DynamicRetrievalConfig},GeminiClient, GeminiError,};
 use serde_json::Value as JsonValue;
-
 use super::state::{AiModeState, EditorWindowState};
 
-
-/// Shows the AI mode control panel (buttons for Send, Cancel, Review).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn show_ai_control_panel(
     ui: &mut egui::Ui,
@@ -209,13 +198,6 @@ pub(super) fn show_ai_control_panel(
                         role: Role::User,
                     }],
                     tools: tools_config,
-                    // Placeholder for generation_config if you add it:
-                    // generation_config: Some(gemini_client_rs::types::GenerationConfig {
-                    //     temperature: _generation_config.0,
-                    //     top_k: _generation_config.1,
-                    //     top_p: _generation_config.2,
-                    //     ..Default::default()
-                    // })
                 };
 
                 match client.generate_content(model_name_to_use, &request).await {
@@ -228,7 +210,6 @@ pub(super) fn show_ai_control_panel(
                                         combined_text_from_parts.push_str(&text_part);
                                     }
                                 }
-                                // REMOVED: candidate.tool_code_parts logging as the field doesn't exist
                             }
                         }
 
