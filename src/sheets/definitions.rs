@@ -1,17 +1,13 @@
 // src/sheets/definitions.rs
-// Ensure ColumnDataType and ColumnValidator have Serialize, which they do.
-// Add a helper to get string representation for ColumnValidator if direct serialization is not desired for the prompt.
-use bevy::prelude::warn; 
+use bevy::prelude::warn;
 use serde::{Deserialize, Serialize};
-use std::fmt; // Import fmt for Display trait
+use std::fmt;
 
-/// Defines the type of data expected in a specific column of a sheet grid.
-/// Used for parsing, validation, and UI generation.
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default,
-)] 
+)]
 pub enum ColumnDataType {
-    #[default] 
+    #[default]
     String,
     OptionString,
     Bool,
@@ -38,14 +34,12 @@ pub enum ColumnDataType {
     OptionF64,
 }
 
-// Implement Display for ColumnDataType to easily get its string representation
 impl fmt::Display for ColumnDataType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:?}", self)
     }
 }
 
-/// Defines the validation rule for a column.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum ColumnValidator {
     Basic(ColumnDataType),
@@ -55,7 +49,6 @@ pub enum ColumnValidator {
     },
 }
 
-// Implement Display for ColumnValidator for string representation in JSON
 impl fmt::Display for ColumnValidator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -67,18 +60,16 @@ impl fmt::Display for ColumnValidator {
     }
 }
 
-
-/// Holds all metadata pertaining to a single column.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ColumnDefinition {
-    pub header: String, 
-    pub validator: Option<ColumnValidator>, 
-    pub data_type: ColumnDataType, 
-    pub filter: Option<String>, 
-    #[serde(default)] 
-    pub ai_context: Option<String>, 
-    #[serde(default)] 
-    pub width: Option<f32>, 
+    pub header: String,
+    pub validator: Option<ColumnValidator>,
+    pub data_type: ColumnDataType,
+    pub filter: Option<String>,
+    #[serde(default)]
+    pub ai_context: Option<String>,
+    #[serde(default)]
+    pub width: Option<f32>,
 }
 
 impl ColumnDefinition {
@@ -86,18 +77,18 @@ impl ColumnDefinition {
         ColumnDefinition {
             header,
             validator: Some(ColumnValidator::Basic(data_type)),
-            data_type, 
+            data_type,
             filter: None,
             ai_context: None,
-            width: None, 
+            width: None,
         }
     }
 
-    fn ensure_type_consistency(&mut self) -> bool {
+    pub fn ensure_type_consistency(&mut self) -> bool {
         let expected_type = match &self.validator {
             Some(ColumnValidator::Basic(t)) => *t,
-            Some(ColumnValidator::Linked { .. }) => ColumnDataType::String, 
-            None => ColumnDataType::String, 
+            Some(ColumnValidator::Linked { .. }) => ColumnDataType::String,
+            None => ColumnDataType::String,
         };
         if self.data_type != expected_type {
             self.data_type = expected_type;
@@ -108,25 +99,34 @@ impl ColumnDefinition {
     }
 }
 
-/// Holds the metadata defining the structure and rules of a specific sheet.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SheetMetadata {
     pub sheet_name: String,
     #[serde(default)]
     pub category: Option<String>,
-    pub data_filename: String, 
-
-    #[serde(default)] 
+    pub data_filename: String,
+    #[serde(default)]
     pub columns: Vec<ColumnDefinition>,
-
-    #[serde(default)] 
+    #[serde(default)]
     pub ai_general_rule: Option<String>,
+    #[serde(default = "default_temperature")]
+    pub ai_temperature: Option<f32>,
+    #[serde(default = "default_top_k")]
+    pub ai_top_k: Option<i32>,
+    #[serde(default = "default_top_p")]
+    pub ai_top_p: Option<f32>,
 }
+
+// --- MODIFIED: Made default functions public ---
+pub fn default_temperature() -> Option<f32> { Some(0.9) }
+pub fn default_top_k() -> Option<i32> { Some(1) }
+pub fn default_top_p() -> Option<f32> { Some(1.0) }
+// --- END MODIFIED ---
 
 impl SheetMetadata {
     pub fn create_generic(
         name: String,
-        filename: String, 
+        filename: String,
         num_cols: usize,
         category: Option<String>,
     ) -> Self {
@@ -134,7 +134,7 @@ impl SheetMetadata {
             .map(|i| {
                 ColumnDefinition::new_basic(
                     format!("Column {}", i + 1),
-                    ColumnDataType::String, 
+                    ColumnDataType::String,
                 )
             })
             .collect();
@@ -145,6 +145,9 @@ impl SheetMetadata {
             data_filename: filename,
             columns,
             ai_general_rule: None,
+            ai_temperature: default_temperature(),
+            ai_top_k: default_top_k(),
+            ai_top_p: default_top_p(),
         }
     }
 
@@ -179,11 +182,9 @@ impl SheetMetadata {
     }
 }
 
-/// Represents the actual grid data along with its metadata.
-/// Stored within the SheetRegistry resource.
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct SheetGridData {
-    #[serde(skip)] 
-    pub metadata: Option<SheetMetadata>, 
+    #[serde(skip)]
+    pub metadata: Option<SheetMetadata>,
     pub grid: Vec<Vec<String>>,
 }

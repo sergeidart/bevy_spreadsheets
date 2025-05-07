@@ -2,10 +2,10 @@
 use bevy::{ecs::system::SystemParam, prelude::*};
 use bevy_egui::{egui, EguiContexts};
 use bevy_tokio_tasks::TokioTasksRuntime;
-use egui_extras::{Column, TableBody, TableBuilder}; // Ensure TableBuilder and Column are here
+use egui_extras::{Column, TableBody, TableBuilder};
 use crate::sheets::{
-    definitions::{SheetMetadata},
-    events::{AddSheetRowRequest, RequestDeleteSheet, RequestInitiateFileUpload,RequestRenameSheet, RequestUpdateColumnName, RequestUpdateColumnValidator,UpdateCellEvent, RequestDeleteRows, RequestSheetRevalidation, AiTaskResult, SheetDataModifiedInRegistryEvent},
+    definitions::SheetMetadata,
+    events::{AddSheetRowRequest, RequestDeleteSheet, RequestInitiateFileUpload,RequestRenameSheet, RequestUpdateColumnName, RequestUpdateColumnValidator,UpdateCellEvent, RequestDeleteRows, RequestSheetRevalidation, SheetDataModifiedInRegistryEvent},
     resources::{SheetRegistry, SheetRenderCache},
 };
 use crate::ui::{
@@ -53,7 +53,7 @@ pub fn generic_sheet_editor_ui(
     mut commands: Commands,
     mut sheet_data_modified_events: EventReader<SheetDataModifiedInRegistryEvent>,
     mut api_key_status_res: ResMut<ApiKeyDisplayStatus>,
-    mut session_api_key: ResMut<SessionApiKey>,
+    mut session_api_key_res: ResMut<SessionApiKey>, // This is already a ResMut
 ) {
     let ctx = contexts.ctx_mut();
     let initial_selected_category = state.selected_category.clone();
@@ -72,7 +72,7 @@ pub fn generic_sheet_editor_ui(
             }
             if render_cache_res.get_cell_data(&event.category, &event.sheet_name, 0, 0).is_none()
                 && registry.get_sheet(&event.category, &event.sheet_name).map_or(false, |d| !d.grid.is_empty()) {
-                 sheet_writers.revalidate.send(RequestSheetRevalidation { category: event.category.clone(), sheet_name: event.sheet_name.clone() });
+                 sheet_writers.revalidate.write(RequestSheetRevalidation { category: event.category.clone(), sheet_name: event.sheet_name.clone() });
             }
         }
     }
@@ -81,7 +81,9 @@ pub fn generic_sheet_editor_ui(
     show_rename_popup(ctx, &mut state, &mut sheet_writers.rename_sheet, &ui_feedback);
     show_delete_confirm_popup(ctx, &mut state, &mut sheet_writers.delete_sheet);
     show_ai_rule_popup(ctx, &mut state, &mut registry);
-    show_settings_popup(ctx, &mut state, &mut api_key_status_res, &mut session_api_key);
+    // Pass the ResMut directly where a mutable reference is needed
+    show_settings_popup(ctx, &mut state, &mut api_key_status_res, &mut session_api_key_res);
+
 
     egui::CentralPanel::default().show(ctx, |ui| {
         let text_style = egui::TextStyle::Body;
@@ -94,7 +96,7 @@ pub fn generic_sheet_editor_ui(
             if let Some(sheet_name) = &state.selected_sheet_name {
                 if render_cache_res.get_cell_data(&state.selected_category, sheet_name, 0, 0).is_none()
                     && registry.get_sheet(&state.selected_category, sheet_name).map_or(false, |d| !d.grid.is_empty()) {
-                    sheet_writers.revalidate.send(RequestSheetRevalidation { category: state.selected_category.clone(), sheet_name: sheet_name.clone() });
+                    sheet_writers.revalidate.write(RequestSheetRevalidation { category: state.selected_category.clone(), sheet_name: sheet_name.clone() });
                 }
             }
             state.force_filter_recalculation = true;
@@ -111,7 +113,17 @@ pub fn generic_sheet_editor_ui(
         let current_ai_mode = state.ai_mode;
 
         if matches!(current_ai_mode, AiModeState::Preparing | AiModeState::Submitting | AiModeState::ResultsReady) {
-            show_ai_control_panel(ui, &mut state, &current_category_clone, &current_sheet_name_clone, &runtime, &registry, &mut commands, &*session_api_key);
+            // Pass the ResMut (which derefs to &SessionApiKey) where an immutable reference is needed
+            show_ai_control_panel(
+                ui,
+                &mut state,
+                &current_category_clone,
+                &current_sheet_name_clone,
+                &runtime,
+                &registry,
+                &mut commands,
+                &session_api_key_res,
+            );
             ui.separator();
          }
 
@@ -143,26 +155,33 @@ pub fn generic_sheet_editor_ui(
                              ui.colored_label(egui::Color32::RED, "Metadata inconsistency detected (cols vs filters)...");
                              return;
                         }
-                        egui::ScrollArea::both().auto_shrink([false; 2]).show(ui, |ui| {
-                           let mut table_builder = TableBuilder::new(ui).striped(true).resizable(true).cell_layout(egui::Layout::left_to_right(egui::Align::Center)).min_scrolled_height(0.0);
-                           if num_cols == 0 {
-                                if state.scroll_to_row_index.is_some() { state.scroll_to_row_index = None; }
-                                table_builder = table_builder.column(Column::remainder().resizable(false));
-                           } else {
-                                for i in 0..num_cols {
-                                    let initial_width = metadata.columns.get(i).and_then(|c| c.width).unwrap_or(120.0);
-                                    let col = Column::initial(initial_width).at_least(40.0).resizable(true).clip(true);
-                                    table_builder = table_builder.column(col);
-                                }
-                           }
-                           if let Some(row_idx) = state.scroll_to_row_index {
-                                if num_cols > 0 { table_builder = table_builder.scroll_to_row(row_idx, Some(egui::Align::BOTTOM)); }
-                                state.scroll_to_row_index = None;
-                           }
-                           table_builder
-                               .header(20.0, |header_row| { sheet_table_header(header_row, metadata, selected_name, &mut state); })
-                               .body(|body: TableBody| { sheet_table_body(body, row_height, &current_category_clone, selected_name, &registry, &render_cache_res, sheet_writers.cell_update, &mut state); });
-                        });
+                        egui::ScrollArea::both()
+                            .id_salt("main_sheet_table_scroll_area")
+                            .auto_shrink([false; 2])
+                            .show(ui, |ui| {
+                               let mut table_builder = TableBuilder::new(ui)
+                                   .striped(true)
+                                   .resizable(true)
+                                   .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                                   .min_scrolled_height(0.0);
+                               if num_cols == 0 {
+                                    if state.scroll_to_row_index.is_some() { state.scroll_to_row_index = None; }
+                                    table_builder = table_builder.column(Column::remainder().resizable(false));
+                               } else {
+                                    for i in 0..num_cols {
+                                        let initial_width = metadata.columns.get(i).and_then(|c| c.width).unwrap_or(120.0);
+                                        let col = Column::initial(initial_width).at_least(40.0).resizable(true).clip(true);
+                                        table_builder = table_builder.column(col);
+                                    }
+                               }
+                               if let Some(row_idx) = state.scroll_to_row_index {
+                                    if num_cols > 0 { table_builder = table_builder.scroll_to_row(row_idx, Some(egui::Align::BOTTOM)); }
+                                    state.scroll_to_row_index = None;
+                               }
+                               table_builder
+                                   .header(20.0, |header_row| { sheet_table_header(header_row, metadata, selected_name, &mut state); })
+                                   .body(|body: TableBody| { sheet_table_body(body, row_height, &current_category_clone, selected_name, &registry, &render_cache_res, sheet_writers.cell_update, &mut state); });
+                            });
                     } else {
                          warn!("Metadata object missing for sheet '{:?}/{}' even though sheet data exists.", current_category_clone, selected_name);
                          ui.colored_label(egui::Color32::YELLOW, format!("Metadata missing for sheet '{:?}/{}'.", current_category_clone, selected_name));
@@ -172,8 +191,23 @@ pub fn generic_sheet_editor_ui(
                  if current_category_clone.is_some() { ui.vertical_centered(|ui| { ui.label("Select a sheet from the category."); }); }
                  else { ui.vertical_centered(|ui| { ui.label("Select a category and sheet, or upload JSON."); }); }
             }
-        } else if current_ai_mode == AiModeState::Reviewing {
-             // Placeholder for when review panel is active and table is hidden
         }
+
+        ui.separator();
+        ui.strong("AI Output / Log:");
+        egui::ScrollArea::vertical()
+            .id_salt("ai_raw_output_log_scroll_area")
+            .max_height(100.0)
+            .auto_shrink([false; 2])
+            .show(ui, |ui| {
+                let mut display_text_clone = state.ai_raw_output_display.clone();
+                ui.add_sized(
+                    ui.available_size(),
+                    egui::TextEdit::multiline(&mut display_text_clone)
+                        .font(egui::TextStyle::Monospace)
+                        .interactive(false)
+                        .desired_width(f32::INFINITY)
+                );
+            });
     });
 }

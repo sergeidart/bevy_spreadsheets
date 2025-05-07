@@ -1,10 +1,8 @@
 // src/example_definitions.rs
 use crate::sheets::definitions::{
-    ColumnDataType, ColumnDefinition, ColumnValidator, SheetMetadata, // Use ColumnDefinition
+    ColumnDataType, ColumnDefinition, ColumnValidator, SheetMetadata,
 };
 
-// --- Example Struct ---
-// (This struct remains unchanged as it's just for conceptual mapping)
 #[derive(serde::Serialize, serde::Deserialize, Debug, Default)]
 pub struct ExampleItem {
     pub id: String,
@@ -14,9 +12,8 @@ pub struct ExampleItem {
     pub enabled: bool,
 }
 
-// --- Metadata for the Example Sheet ---
 const EXAMPLE_ITEMS_SHEET_NAME: &str = "ExampleItems";
-const EXAMPLE_ITEMS_FILENAME: &str = "ExampleItems.json"; // Filename only
+const EXAMPLE_ITEMS_FILENAME: &str = "ExampleItems.json";
 const EXAMPLE_ITEMS_COLUMN_TYPES: &[ColumnDataType] = &[
     ColumnDataType::String,
     ColumnDataType::OptionString,
@@ -40,28 +37,30 @@ pub fn create_example_items_metadata() -> SheetMetadata {
         "ExampleItems headers/types length mismatch!"
     );
 
-    // --- CORRECTED: Create Vec<ColumnDefinition> ---
     let columns: Vec<ColumnDefinition> = EXAMPLE_ITEMS_HEADERS
         .iter()
         .zip(EXAMPLE_ITEMS_COLUMN_TYPES.iter())
         .map(|(&header, &data_type)| {
-            // Create ColumnDefinition using the helper
             ColumnDefinition::new_basic(header.to_string(), data_type)
         })
         .collect();
 
     SheetMetadata {
         sheet_name: EXAMPLE_ITEMS_SHEET_NAME.to_string(),
-        category: None, // Default sheets are in the root category
-        data_filename: EXAMPLE_ITEMS_FILENAME.to_string(), // Filename only
-        columns, // Use the new 'columns' field
-        ai_general_rule: None, // Initialize new AI field
+        category: None,
+        data_filename: EXAMPLE_ITEMS_FILENAME.to_string(),
+        columns,
+        ai_general_rule: None,
+        // --- MODIFIED: Added missing AI fields with defaults ---
+        ai_temperature: crate::sheets::definitions::default_temperature(),
+        ai_top_k: crate::sheets::definitions::default_top_k(),
+        ai_top_p: crate::sheets::definitions::default_top_p(),
+        // --- END MODIFIED ---
     }
 }
 
-// --- Metadata for Another Example Sheet ---
 const SIMPLE_CONFIG_SHEET_NAME: &str = "SimpleConfig";
-const SIMPLE_CONFIG_FILENAME: &str = "SimpleConfig.json"; // Filename only
+const SIMPLE_CONFIG_FILENAME: &str = "SimpleConfig.json";
 const SIMPLE_CONFIG_COLUMN_TYPES: &[ColumnDataType] = &[
     ColumnDataType::String,
     ColumnDataType::String,
@@ -78,7 +77,6 @@ pub fn create_simple_config_metadata() -> SheetMetadata {
         "SimpleConfig headers/types length mismatch!"
     );
 
-    // --- CORRECTED: Create Vec<ColumnDefinition> ---
     let columns: Vec<ColumnDefinition> = SIMPLE_CONFIG_HEADERS
         .iter()
         .zip(SIMPLE_CONFIG_COLUMN_TYPES.iter())
@@ -89,9 +87,14 @@ pub fn create_simple_config_metadata() -> SheetMetadata {
 
     SheetMetadata {
         sheet_name: SIMPLE_CONFIG_SHEET_NAME.to_string(),
-        category: None, // Default sheets are in the root category
-        data_filename: SIMPLE_CONFIG_FILENAME.to_string(), // Filename only
-        columns, // Use the new 'columns' field
-        ai_general_rule: None, // Initialize new AI field
+        category: None,
+        data_filename: SIMPLE_CONFIG_FILENAME.to_string(),
+        columns,
+        ai_general_rule: None,
+        // --- MODIFIED: Added missing AI fields with defaults ---
+        ai_temperature: crate::sheets::definitions::default_temperature(),
+        ai_top_k: crate::sheets::definitions::default_top_k(),
+        ai_top_p: crate::sheets::definitions::default_top_p(),
+        // --- END MODIFIED ---
     }
 }

@@ -8,22 +8,26 @@ use std::hash::{Hash, Hasher};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AiModeState {
-    #[default] Idle, Preparing, Submitting, ResultsReady, Reviewing,
+    #[default]
+    Idle,
+    Preparing,
+    Submitting,
+    ResultsReady,
+    Reviewing,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ValidatorTypeChoice {
-    #[default] Basic, Linked,
+    #[default]
+    Basic,
+    Linked,
 }
 
-// --- NEW: Enum for review choices per column ---
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReviewChoice {
     Original,
     AI,
 }
-// --- END NEW ---
-
 
 fn calculate_filters_hash(filters: &Vec<Option<String>>) -> u64 {
     let mut s = std::collections::hash_map::DefaultHasher::new();
@@ -33,7 +37,6 @@ fn calculate_filters_hash(filters: &Vec<Option<String>>) -> u64 {
 
 #[derive(Default, Resource)]
 pub struct EditorWindowState {
-    // ... (other general, rename, delete, column options fields remain the same) ...
     pub selected_category: Option<String>,
     pub selected_sheet_name: Option<String>,
     pub show_rename_popup: bool,
@@ -57,55 +60,47 @@ pub struct EditorWindowState {
     pub options_link_target_column_index: Option<usize>,
     pub linked_column_cache: HashMap<(String, usize), HashSet<String>>,
 
-
-    // --- MODIFIED: AI Interaction State ---
     pub ai_mode: AiModeState,
-    pub ai_selected_rows: HashSet<usize>, // Used for Prepare mode selection
-    pub ai_suggestions: HashMap<usize, Vec<String>>, // Stores results ready for review
-    pub ai_review_queue: Vec<usize>, // Indices of rows with suggestions
-    pub ai_current_review_index: Option<usize>, // Index within ai_review_queue
-    // --- NEW: Fields for inline review ---
-    pub current_ai_suggestion_edit_buffer: Option<(usize, Vec<String>)>, // (original_row_index, editable_suggestion)
-    pub ai_review_column_choices: Vec<ReviewChoice>, // Choices for the current review item
-    // --- END NEW ---
-    // AI Rule State
+    pub ai_selected_rows: HashSet<usize>,
+    pub ai_suggestions: HashMap<usize, Vec<String>>,
+    pub ai_review_queue: Vec<usize>,
+    pub ai_current_review_index: Option<usize>,
+    pub current_ai_suggestion_edit_buffer: Option<(usize, Vec<String>)>,
+    pub ai_review_column_choices: Vec<ReviewChoice>,
+
     pub ai_general_rule_input: String,
+    pub ai_temperature_input: f32,
+    pub ai_top_k_input: i32,
+    pub ai_top_p_input: f32,
     pub show_ai_rule_popup: bool,
     pub ai_prompt_display: String,
-    // --- END MODIFIED ---
 
+    pub ai_raw_output_display: String,
 
-    // Settings State
     pub show_settings_popup: bool,
     pub settings_new_api_key_input: String,
 
-    // Filter Cache
     pub filtered_row_indices_cache: HashMap<(Option<String>, String, u64), Vec<usize>>,
     pub force_filter_recalculation: bool,
 
-    // Scrolling State
     pub request_scroll_to_bottom_on_add: bool,
     pub scroll_to_row_index: Option<usize>,
 }
 
 impl EditorWindowState {
-    // invalidate_current_sheet_filter_cache remains the same
     pub fn invalidate_current_sheet_filter_cache(&mut self, registry: &SheetRegistry) {
-         if let Some(sheet_name) = &self.selected_sheet_name {
-             let cat = self.selected_category.clone();
-             let name = sheet_name.clone();
-             if let Some(sheet_data) = registry.get_sheet(&cat, &name) {
-                  if let Some(metadata) = &sheet_data.metadata {
-                     let filters_hash = calculate_filters_hash(&metadata.get_filters());
-                     let cache_key = (cat.clone(), name.clone(), filters_hash);
-                     self.filtered_row_indices_cache.remove(&cache_key);
-                 }
-             }
-             self.filtered_row_indices_cache.retain(|(s_cat, s_name, _), _| {
-                 !(*s_cat == cat && *s_name == name)
-             });
-             self.force_filter_recalculation = true;
-             debug!("Invalidated filter cache for sheet: '{:?}/{}'", cat, name);
-         }
-     }
+        if let Some(sheet_name) = &self.selected_sheet_name {
+            let cat = self.selected_category.clone();
+            let name = sheet_name.clone();
+            if let Some(sheet_data) = registry.get_sheet(&cat, &name) {
+                if let Some(metadata) = &sheet_data.metadata {
+                    let filters_hash = calculate_filters_hash(&metadata.get_filters());
+                    let cache_key = (cat.clone(), name.clone(), filters_hash);
+                    self.filtered_row_indices_cache.remove(&cache_key);
+                }
+            }
+            self.force_filter_recalculation = true;
+            debug!("Invalidated filter cache for sheet: '{:?}/{}'", cat, name);
+        }
+    }
 }

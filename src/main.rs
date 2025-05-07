@@ -1,5 +1,4 @@
 // src/main.rs
-
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
 use bevy::{
@@ -15,6 +14,7 @@ use winit::window::Icon as WinitIcon;
 
 use bevy_egui::EguiPlugin;
 use bevy_tokio_tasks::TokioTasksPlugin;
+use dotenvy::dotenv;
 
 mod sheets;
 mod ui;
@@ -23,30 +23,32 @@ mod example_definitions;
 use sheets::SheetsPlugin;
 use ui::EditorUiPlugin;
 
-// KEYRING constants are no longer strictly needed here if we fully remove keyring usage
-// const KEYRING_SERVICE_NAME: &str = "bevy_spreadsheet_ai";
-// const KEYRING_API_KEY_USERNAME: &str = "llm_api_key";
-
 #[derive(Resource, Debug, Default)]
 pub struct ApiKeyDisplayStatus {
     pub status: String,
 }
 
-// --- NEW: Resource to hold the API key for the current session ---
 #[derive(Resource, Debug, Default)]
 pub struct SessionApiKey(pub Option<String>);
-// --- END NEW ---
+
+// -- Removed Keyring Constants --
+// pub const KEYRING_SERVICE_NAME: &str = "bevy_spreadsheets";
+// pub const KEYRING_API_KEY_USERNAME: &str = "GEMINI_API_KEY";
+// -- End Removed Keyring Constants --
 
 fn main() {
+    match dotenv() {
+        Ok(path) => info!("Loaded .env file from: {:?}", path),
+        Err(_) => info!(".env file not found or failed to load. API key must be set via UI or other means."),
+    }
+
     App::new()
         .insert_resource(WinitSettings {
             focused_mode: UpdateMode::Continuous,
-            unfocused_mode: UpdateMode::reactive_low_power(Duration::from_secs_f32(1.0 / 5.0)),
+            unfocused_mode: UpdateMode::reactive_low_power(Duration::from_secs_f32(1.0 / 1.0)),
         })
         .init_resource::<ApiKeyDisplayStatus>()
-        // --- NEW: Initialize SessionApiKey resource ---
         .init_resource::<SessionApiKey>()
-        // --- END NEW ---
         .add_plugins(
             DefaultPlugins
                 .set(WindowPlugin {
@@ -58,7 +60,7 @@ fn main() {
                 })
                 .set(LogPlugin {
                     level: bevy::log::Level::INFO,
-                    filter: "wgpu=error,naga=warn,bevy_tokio_tasks=warn".to_string(),
+                    filter: "wgpu=error,naga=warn,bevy_tokio_tasks=warn,hyper=warn,reqwest=warn,gemini_client_rs=info".to_string(),
                     ..default()
                 }),
         )
@@ -69,19 +71,32 @@ fn main() {
         .add_plugins(SheetsPlugin)
         .add_plugins(EditorUiPlugin)
         .add_systems(Startup, (
-            initialize_api_key_status_startup, // Renamed and modified system
+            initialize_api_key_status_startup,
             set_window_icon,
         ))
         .run();
 }
 
-// --- MODIFIED: Simplified startup system ---
-fn initialize_api_key_status_startup(mut api_key_status_res: ResMut<ApiKeyDisplayStatus>) {
-    // Since the key is session-only, it's never set on startup from persistent storage.
-    info!("API Key is session-only. Initial status: No Key Set (Session).");
-    api_key_status_res.status = "No Key Set (Session)".to_string();
+fn initialize_api_key_status_startup(
+    mut api_key_status_res: ResMut<ApiKeyDisplayStatus>,
+    mut session_api_key: ResMut<SessionApiKey>,
+) {
+    if let Ok(env_key) = std::env::var("GEMINI_API_KEY") {
+        if !env_key.is_empty() {
+            info!("GEMINI_API_KEY found in environment. Populating SessionApiKey.");
+            session_api_key.0 = Some(env_key);
+            api_key_status_res.status = "Key Set (Session from Env)".to_string();
+            return;
+        }
+    }
+    // If not from env, check if already set (e.g. by previous session if persistence was ever used, though now it's transient)
+    if session_api_key.0.is_some() {
+        api_key_status_res.status = "Key Set (Session)".to_string();
+    } else {
+        api_key_status_res.status = "No Key Set (Session)".to_string();
+        info!("API Key not set in SessionApiKey. User needs to set it via UI for AI features.");
+    }
 }
-// --- END MODIFIED ---
 
 fn set_window_icon(
      primary_window_query: Query<Entity, With<PrimaryWindow>>,
@@ -109,7 +124,7 @@ fn set_window_icon(
                      match WinitIcon::from_rgba(rgba_data, width, height) {
                          Ok(winit_icon) => {
                              primary_winit_window.set_window_icon(Some(winit_icon));
-                             info!("Successfully set window icon using 'image' crate and 'winit::window::Icon' from: {}", icon_path);
+                             info!("Successfully set window icon from: {}", icon_path);
                          }
                          Err(e) => {
                              warn!("Failed to create winit::window::Icon: {:?}", e);

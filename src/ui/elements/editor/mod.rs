@@ -11,6 +11,7 @@ pub mod main_editor; // The main assembly function
 pub mod ai_control_panel;
 pub mod ai_review_ui;
 pub mod ai_helpers;
+pub mod ai_panel_structs;
 
 
 // Re-export the main UI function and potentially the state if needed elsewhere

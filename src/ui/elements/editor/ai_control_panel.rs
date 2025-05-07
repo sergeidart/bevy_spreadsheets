@@ -1,36 +1,26 @@
 // src/ui/elements/editor/ai_control_panel.rs
+use bevy::log::{debug, error, info, warn};
 use bevy::prelude::*;
 use bevy_egui::egui;
 use bevy_tokio_tasks::TokioTasksRuntime;
-use serde::{Deserialize, Serialize};
-use std::time::Duration;
 
+use crate::sheets::definitions::SheetMetadata;
 use crate::sheets::events::AiTaskResult;
 use crate::sheets::resources::SheetRegistry;
-use crate::sheets::definitions::{SheetMetadata, ColumnDefinition, ColumnDataType, ColumnValidator};
-// Import ReviewChoice and the setup_review_for_index helper
-use super::state::{AiModeState, EditorWindowState, ReviewChoice};
-use super::ai_helpers::{setup_review_for_index, exit_review_mode}; // Added exit_review_mode
 use crate::ui::systems::SendEvent;
 use crate::SessionApiKey;
 
+use gemini_client_rs::{
+    types::{Content, ContentPart, GenerateContentRequest, PartResponse, Role, ToolConfig},
+    GeminiClient, GeminiError,
+};
+// Ensure serde_json::Value is available
+use serde_json::Value as JsonValue;
 
-#[derive(Serialize, Deserialize, Debug)]
-struct AiColumnContext {
-    header: String,
-    original_value: String,
-    data_type: String,
-    validator: Option<String>,
-    ai_column_context: Option<String>,
-    width: Option<f32>,
-}
+use super::state::{AiModeState, EditorWindowState};
 
-#[derive(Serialize, Deserialize, Debug)]
-struct AiPromptData {
-    general_sheet_rule: Option<String>,
-    columns: Vec<AiColumnContext>,
-}
-
+/// Shows the AI mode control panel (buttons for Send, Cancel, Review).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn show_ai_control_panel(
     ui: &mut egui::Ui,
     state: &mut EditorWindowState,
@@ -46,7 +36,14 @@ pub(super) fn show_ai_control_panel(
         ui.separator();
 
         let can_send = state.ai_mode == AiModeState::Preparing
-            && !state.ai_selected_rows.is_empty();
+            && !state.ai_selected_rows.is_empty()
+            && session_api_key.0.is_some();
+
+        let mut hover_text_send = "Send selected row(s) for AI processing (currently processes first selected)".to_string();
+        if session_api_key.0.is_none() {
+            hover_text_send = "API Key not set. Please set it in Settings.".to_string();
+        }
+
         let send_button_text = if state.ai_selected_rows.len() > 1 {
             format!("🚀 Send to AI ({} Rows)", state.ai_selected_rows.len())
         } else {
@@ -55,7 +52,7 @@ pub(super) fn show_ai_control_panel(
 
         if ui
             .add_enabled(can_send, egui::Button::new(send_button_text))
-            .on_hover_text("Send selected row(s) for AI processing (processes first selected)")
+            .on_hover_text(hover_text_send)
             .clicked()
         {
             info!(
@@ -63,7 +60,6 @@ pub(super) fn show_ai_control_panel(
                 state.ai_selected_rows
             );
             state.ai_mode = AiModeState::Submitting;
-            state.ai_prompt_display = "Generating prompt...".to_string();
             ui.ctx().request_repaint();
 
             let task_category = selected_category_clone.clone();
@@ -76,134 +72,192 @@ pub(super) fn show_ai_control_panel(
                 .cloned()
                 .unwrap_or_default();
 
-            let mut ai_prompt_struct = AiPromptData {
-                general_sheet_rule: None,
-                columns: Vec::new(),
+            let (general_rule_opt, column_contexts, row_data) = {
+                let sheet_data_opt =
+                    registry.get_sheet(&task_category, &task_sheet_name);
+                let metadata_opt_ref = sheet_data_opt.and_then(|d| d.metadata.as_ref());
+
+                let rule = metadata_opt_ref.and_then(|m| m.ai_general_rule.clone());
+                let contexts: Vec<Option<String>> = metadata_opt_ref
+                    .map(|m| {
+                        m.columns
+                            .iter()
+                            .map(|c| c.ai_context.clone())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let data = sheet_data_opt
+                    .and_then(|d| d.grid.get(task_row_index))
+                    .cloned()
+                    .unwrap_or_default();
+                
+                (rule, contexts, data)
             };
-            let mut generation_error: Option<String> = None;
-
-            if let Some(sheet_data) = registry.get_sheet(&task_category, &task_sheet_name) {
-                if let Some(metadata) = &sheet_data.metadata {
-                    ai_prompt_struct.general_sheet_rule = metadata.ai_general_rule.clone();
-                    if let Some(row_data) = sheet_data.grid.get(task_row_index) {
-                        for (col_idx, cell_value) in row_data.iter().enumerate() {
-                            if let Some(col_def) = metadata.columns.get(col_idx) {
-                                ai_prompt_struct.columns.push(AiColumnContext {
-                                    header: col_def.header.clone(),
-                                    original_value: cell_value.clone(),
-                                    data_type: col_def.data_type.to_string(),
-                                    validator: col_def.validator.as_ref().map(|v| v.to_string()),
-                                    ai_column_context: col_def.ai_context.clone(),
-                                    width: col_def.width,
-                                });
-                            } else {
-                                warn!("Row {} in sheet '{:?}/{}' has more cells than column definitions. Skipping extra cell data for AI prompt.", task_row_index, task_category, task_sheet_name);
-                                ai_prompt_struct.columns.push(AiColumnContext {
-                                    header: format!("Unknown Column {}", col_idx + 1),
-                                    original_value: cell_value.clone(),
-                                    data_type: "String".to_string(),
-                                    validator: None,
-                                    ai_column_context: None,
-                                    width: None,
-                                });
-                            }
-                        }
-                    } else {
-                        generation_error = Some(format!("Selected row index {} out of bounds for sheet '{:?}/{}'.", task_row_index, task_category, task_sheet_name));
-                    }
-                } else {
-                    generation_error = Some(format!("Metadata not found for sheet '{:?}/{}'.", task_category, task_sheet_name));
-                }
-            } else {
-                generation_error = Some(format!("Sheet '{:?}/{}' not found.", task_category, task_sheet_name));
-            }
-
-            let prompt_json_string = match serde_json::to_string_pretty(&ai_prompt_struct) {
-                Ok(json_str) => json_str,
-                Err(e) => {
-                    generation_error = Some(format!("Failed to serialize AI prompt data: {}", e));
-                    "Error generating prompt JSON.".to_string()
-                }
-            };
-            state.ai_prompt_display = prompt_json_string.clone();
-
-            if let Some(err_msg) = generation_error {
-                error!("AI Prompt Generation Error: {}", err_msg);
-                state.ai_mode = AiModeState::Preparing;
-                state.ai_prompt_display = format!("Error generating prompt:\n{}", err_msg);
-                return;
-            }
 
             let commands_entity = commands.spawn_empty().id();
-            let current_api_key: Option<String> = session_api_key.0.clone();
+            let api_key_for_task = session_api_key.0.clone();
 
             runtime.spawn_background_task(move |mut ctx| async move {
                 info!(
                     "Background AI task started for sheet '{:?}/{}' row: {}",
                     task_category, task_sheet_name, task_row_index
                 );
-                debug!("AI Task received prompt JSON:\n{}", prompt_json_string);
 
                 struct TaskResultData {
                     original_row_index: usize,
                     result: Result<Vec<String>, String>,
+                    raw_response: Option<String>,
                 }
-
-                let api_key_result: Result<String, String> = match current_api_key {
-                    Some(key) if !key.is_empty() => Ok(key),
-                    Some(_) => Err("API Key is empty in session!".to_string()),
-                    None => Err("No API Key set in current session.".to_string()),
-                };
 
                 let mut task_result_data = TaskResultData {
                     original_row_index: task_row_index,
-                    result: Err("Task did not complete.".to_string()),
+                    result: Err("AI task did not complete successfully.".to_string()),
+                    raw_response: None,
+                };
+                
+                let api_key_value = match api_key_for_task {
+                    Some(key) if !key.is_empty() => key,
+                    _ => {
+                        let err_msg = "API Key not found or empty in session.".to_string();
+                        error!("{}", err_msg);
+                        task_result_data.result = Err(err_msg.clone());
+                        task_result_data.raw_response = Some(format!("Error: {}", err_msg));
+                        
+                        ctx.run_on_main_thread(move |mut world_ctx| {
+                            world_ctx.world.commands().entity(commands_entity).insert(
+                                SendEvent::<AiTaskResult> { 
+                                    event: AiTaskResult {
+                                        original_row_index: task_result_data.original_row_index,
+                                        result: task_result_data.result,
+                                        raw_response: task_result_data.raw_response,
+                                    }
+                                },
+                            );
+                        }).await;
+                        return;
+                    }
                 };
 
-                match api_key_result {
-                    Ok(_api_key_from_session) => {
-                        info!("Simulated API Key Check (from session): [REDACTED] - OK");
-                        let parsed_prompt: Result<AiPromptData, _> = serde_json::from_str(&prompt_json_string);
-                        match parsed_prompt {
-                            Ok(prompt_data) => {
-                                info!("Simulating *SUCCESSFUL* AI call with parsed prompt data...");
-                                tokio::time::sleep(Duration::from_secs(1)).await;
+                let system_instruction_content: Option<Content> = 
+                    general_rule_opt.map(|rule_text| Content {
+                        parts: vec![ContentPart::Text(rule_text)],
+                        role: Role::System,
+                    });
 
-                                let mut processed_row: Vec<String> = Vec::new();
-                                for col_ctx in prompt_data.columns.iter() {
-                                    let mut current_val = col_ctx.original_value.clone();
-                                    if let Some(rule) = &prompt_data.general_sheet_rule {
-                                        if rule.to_lowercase().contains("uppercase all") {
-                                            current_val = current_val.to_uppercase();
-                                        }
+                let user_prompt_text = format!(
+                    "Considering the overall rules (if any were provided separately as a system instruction), and the following column-specific contexts and row data:\nColumn Contexts: {:?}\nRow Data: {:?}\n\nTask: Apply these rules and contexts to the Row Data. Return ONLY the modified row data as a JSON array of strings.",
+                    column_contexts, row_data
+                );
+                if system_instruction_content.is_some() {
+                    info!("System Instruction will be sent to Gemini.");
+                }
+                info!("User Prompt for Gemini (contents):\n{}", user_prompt_text);
+
+                let client = GeminiClient::new(api_key_value);
+                let model_name = "gemini-1.5-flash";
+
+                let request = GenerateContentRequest {
+                    system_instruction: system_instruction_content,
+                    contents: vec![Content {
+                        parts: vec![ContentPart::Text(user_prompt_text.clone())],
+                        role: Role::User,
+                    }],
+                    tools: None,
+                };
+                
+                match client.generate_content(model_name, &request).await {
+                    Ok(response) => {
+                        let mut combined_text_from_parts = String::new();
+                        if let Some(candidates) = response.candidates {
+                            for candidate in candidates {
+                                for part in candidate.content.parts {
+                                    if let PartResponse::Text(text_part) = part {
+                                        combined_text_from_parts.push_str(&text_part);
                                     }
-                                    if let Some(col_rule) = &col_ctx.ai_column_context {
-                                        if col_rule.to_lowercase().contains("append processed") {
-                                            current_val = format!("{} [AI Processed]", current_val);
-                                        }
-                                    }
-                                    if current_val == col_ctx.original_value && !current_val.contains("[Simulated OK]") {
-                                         current_val = format!("{} [Simulated OK]", current_val);
-                                     }
-                                    processed_row.push(current_val);
                                 }
-                                task_result_data.result = Ok(processed_row);
-                            }
-                            Err(e) => {
-                                 let err_msg = format!("Internal Simulation Error: Failed to parse prompt JSON back in task: {}", e);
-                                 error!("{}", err_msg);
-                                 task_result_data.result = Err(err_msg);
                             }
                         }
-                        info!("Simulated AI call finished.");
-                    }
-                    Err(err_msg) => {
-                        error!("Session API Key Error: {}", err_msg);
-                        task_result_data.result = Err(err_msg);
-                    }
-                };
+                        
+                        task_result_data.raw_response = Some(combined_text_from_parts.clone());
 
-                tokio::time::sleep(Duration::from_millis(150)).await;
+                        if !combined_text_from_parts.is_empty() {
+                            info!("Gemini raw response (before cleaning): '{}'", combined_text_from_parts);
+                            
+                            let trimmed_text = combined_text_from_parts.trim();
+                            let bom_cleaned_text = if trimmed_text.starts_with('\u{FEFF}') {
+                                let mut chars = trimmed_text.chars();
+                                chars.next(); 
+                                chars.as_str()
+                            } else {
+                                trimmed_text
+                            };
+
+                            // Attempt to strip Markdown fences
+                            let mut text_to_parse = bom_cleaned_text;
+                            if (text_to_parse.starts_with("```json") || text_to_parse.starts_with("```")) 
+                                && text_to_parse.ends_with("```") {
+                                text_to_parse = text_to_parse.trim_start_matches("```json"); // Handles ```json
+                                text_to_parse = text_to_parse.trim_start_matches("```");    // Handles ```
+                                text_to_parse = text_to_parse.trim_end_matches("```");
+                                text_to_parse = text_to_parse.trim(); // Trim whitespace around the actual JSON content
+                                info!("Text after Markdown fence removal: '{}'", text_to_parse);
+                            } else {
+                                info!("No Markdown fences detected or not matching expected pattern. Parsing as is (after BOM/trim).");
+                            }
+                            
+                            if text_to_parse.is_empty() {
+                                let empty_after_clean_msg = format!(
+                                    "AI response was empty or became empty after cleaning/extraction. Original raw: '{}'",
+                                    combined_text_from_parts
+                                );
+                                warn!("{}",empty_after_clean_msg);
+                                task_result_data.result = Err(empty_after_clean_msg);
+                            } else {
+                                // Parse into Vec<JsonValue> first to handle nulls correctly
+                                match serde_json::from_str::<Vec<JsonValue>>(text_to_parse) {
+                                    Ok(json_values) => {
+                                        let suggestions: Vec<String> = json_values.into_iter().map(|val| {
+                                            match val {
+                                                JsonValue::String(s) => s,
+                                                JsonValue::Null => String::new(), // Convert JSON null to empty string
+                                                JsonValue::Number(n) => n.to_string(),
+                                                JsonValue::Bool(b) => b.to_string(),
+                                                // For complex types (Array/Object), convert to their string representation
+                                                // or handle as an error/empty string if not expected.
+                                                // The prompt asks for an array of strings, so these are less likely.
+                                                _ => {
+                                                    warn!("Unexpected JSON value type in array, converting to string: {}", val);
+                                                    val.to_string() 
+                                                }
+                                            }
+                                        }).collect();
+                                        task_result_data.result = Ok(suggestions);
+                                        info!("Successfully parsed Gemini response into suggestions.");
+                                    }
+                                    Err(e) => {
+                                        let parse_err_msg = format!(
+                                            "Failed to parse AI JSON response: {}. Text Attempted: '{}'", 
+                                            e, text_to_parse
+                                        );
+                                        error!("{}", parse_err_msg);
+                                        task_result_data.result = Err(parse_err_msg);
+                                    }
+                                }
+                            }
+                        } else {
+                            let no_text_msg = "AI response was empty (no text parts found).".to_string();
+                            warn!("{}", no_text_msg);
+                            task_result_data.result = Err(no_text_msg.clone());
+                            // raw_response is already Some("") or the original empty string
+                        }
+                    }
+                    Err(e) => { 
+                        let err_msg = format!("Gemini Error: {}", e.to_string());
+                        error!("{}", err_msg);
+                        task_result_data.result = Err(err_msg.clone());
+                        task_result_data.raw_response = Some(err_msg);
+                    }
+                }
 
                 ctx.run_on_main_thread(move |mut world_ctx| {
                     info!("Sending AiTaskResult event via Commands.");
@@ -212,6 +266,7 @@ pub(super) fn show_ai_control_panel(
                             event: AiTaskResult {
                                 original_row_index: task_result_data.original_row_index,
                                 result: task_result_data.result,
+                                raw_response: task_result_data.raw_response,
                             },
                         },
                     );
@@ -220,30 +275,12 @@ pub(super) fn show_ai_control_panel(
             });
         }
 
-        if state.ai_mode == AiModeState::Submitting || state.ai_mode == AiModeState::ResultsReady {
-            if !state.ai_prompt_display.is_empty() {
-                ui.separator();
-                ui.collapsing("Show AI Prompt Context", |ui| {
-                    egui::ScrollArea::both().max_height(100.0).show(ui, |ui| {
-                        let mut display_text_clone = state.ai_prompt_display.clone();
-                        let text_edit_widget = egui::TextEdit::multiline(&mut display_text_clone)
-                            .font(egui::TextStyle::Monospace)
-                            .interactive(false);
-                        ui.add(text_edit_widget);
-                    });
-                });
-            }
-        }
-
         if state.ai_mode == AiModeState::Preparing
             || state.ai_mode == AiModeState::ResultsReady
-            || state.ai_mode == AiModeState::Submitting
         {
             if ui.button("❌ Cancel AI Mode").clicked() {
-                // Use exit_review_mode for consistent cleanup
-                exit_review_mode(state); // This will also clear suggestions, queue, etc.
-                                         // and set mode to Idle
-                state.ai_prompt_display.clear(); // Specifically clear prompt
+                info!("Cancelling AI mode.");
+                super::ai_helpers::exit_review_mode(state);
             }
         }
 
@@ -256,31 +293,23 @@ pub(super) fn show_ai_control_panel(
                 )
                 .clicked()
             {
-                info!("Starting review process (inline)...");
-                state.ai_review_queue = state.ai_suggestions.keys().cloned().collect();
+                info!("Starting review process for {} suggestions...", num_results);
+                state.ai_mode = AiModeState::Reviewing;
+                state.ai_review_queue =
+                    state.ai_suggestions.keys().cloned().collect();
                 state.ai_review_queue.sort_unstable();
-                state.ai_current_review_index = None; // Will be set by setup_review_for_index
-
-                let mut first_review_setup = false;
-                let mut current_idx_in_queue = 0;
-                while current_idx_in_queue < state.ai_review_queue.len() {
-                    if setup_review_for_index(state, current_idx_in_queue) {
-                        state.ai_mode = AiModeState::Reviewing;
-                        first_review_setup = true;
-                        break;
-                    }
-                    current_idx_in_queue += 1;
-                }
-
-                if !first_review_setup {
-                    warn!("Review initiation failed: No valid suggestions found in the queue to set up.");
-                    exit_review_mode(state); // Clean up if no items are reviewable
+                if !state.ai_review_queue.is_empty() {
+                    super::ai_helpers::setup_review_for_index(state, 0);
+                } else {
+                    warn!("Review initiated but no suggestions in queue. Exiting review mode.");
+                    super::ai_helpers::exit_review_mode(state);
                 }
             }
         }
 
         if state.ai_mode == AiModeState::Submitting {
             ui.spinner();
+            ui.label("Processing with AI...");
         }
     });
 }

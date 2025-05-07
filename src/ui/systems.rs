@@ -1,12 +1,10 @@
 // src/ui/systems.rs
 use crate::{
     sheets::events::{AiTaskResult, SheetOperationFeedback},
-    // --- MODIFIED: Import EditorWindowState as it's now a Resource ---
     ui::{
-        elements::editor::state::{AiModeState, EditorWindowState}, // Keep AiModeState
+        elements::editor::state::{AiModeState, EditorWindowState},
         UiFeedbackState,
     },
-    // --- END MODIFIED ---
 };
 use bevy::prelude::*;
 use std::any;
@@ -18,28 +16,27 @@ pub fn handle_ui_feedback(
     let mut last_message = None;
     for event in feedback_events.read() {
         last_message = Some((event.message.clone(), event.is_error));
+        // Prioritize showing the first non-error, or the last error
         if !event.is_error {
-             break;
+            break;
         }
     }
     if let Some((msg, is_error)) = last_message {
-         ui_feedback_state.last_message = msg;
-         ui_feedback_state.is_error = is_error;
-         if is_error {
-             warn!("UI Feedback (Error): {}", ui_feedback_state.last_message);
-         } else {
-             info!("UI Feedback: {}", ui_feedback_state.last_message);
-         }
+        ui_feedback_state.last_message = msg;
+        ui_feedback_state.is_error = is_error;
+        if is_error {
+            warn!("UI Feedback (Error): {}", ui_feedback_state.last_message);
+        } else {
+            info!("UI Feedback: {}", ui_feedback_state.last_message);
+        }
     }
 }
 
-// --- MODIFIED: Change Local to ResMut ---
 pub fn handle_ai_task_results(
     mut ev_ai_results: EventReader<AiTaskResult>,
-    mut state: ResMut<EditorWindowState>, // Changed from Local
+    mut state: ResMut<EditorWindowState>,
     mut feedback_writer: EventWriter<SheetOperationFeedback>,
 ) {
-// --- END MODIFIED ---
     debug!("handle_ai_task_results checking for events. Current AI Mode: {:?}", state.ai_mode);
     if state.ai_mode != AiModeState::Submitting && state.ai_mode != AiModeState::ResultsReady {
         if !ev_ai_results.is_empty() {
@@ -48,30 +45,38 @@ pub fn handle_ai_task_results(
                 "Ignoring {} AI result(s) received while not in Submitting/ResultsReady state (current: {:?})",
                 event_count, state.ai_mode
             );
-            ev_ai_results.clear();
+            ev_ai_results.clear(); // Consume events
         }
         return;
     }
 
     let mut received_at_least_one_result = false;
-    let mut all_tasks_successful = true;
-
-    if !ev_ai_results.is_empty() {
-        debug!("Processing {} AiTaskResult events.", ev_ai_results.len());
-    }
+    let mut all_tasks_successful_this_batch = true; // Track success for this batch of events
 
     for ev in ev_ai_results.read() {
         received_at_least_one_result = true;
         info!(
-            "Received AI task result for row {}",
-            ev.original_row_index
+            "Received AI task result for row {}. Raw response present: {}",
+            ev.original_row_index,
+            ev.raw_response.is_some()
         );
+
+        // Update the raw output display first
+        if let Some(raw) = &ev.raw_response {
+            state.ai_raw_output_display = raw.clone();
+        } else if let Err(e) = &ev.result {
+            // If no raw response but there's an error, display the error
+            state.ai_raw_output_display = format!("Error processing AI result for row {}: {}", ev.original_row_index, e);
+        }
+
+
         match &ev.result {
             Ok(suggestion) => {
-                info!("  Success: {:?}", suggestion);
+                info!("  AI Task Success for row {}: {:?}", ev.original_row_index, suggestion);
                 state
                     .ai_suggestions
                     .insert(ev.original_row_index, suggestion.clone());
+                // Don't clear ai_raw_output_display here, let it show the successful raw response
             }
             Err(err_msg) => {
                 error!("  AI Task Failure for row {}: {}", ev.original_row_index, err_msg);
@@ -79,27 +84,22 @@ pub fn handle_ai_task_results(
                     message: format!("AI Error (Row {}): {}", ev.original_row_index, err_msg),
                     is_error: true,
                 });
-                if all_tasks_successful {
-                    state.ai_prompt_display = format!(
-                        "AI Processing Error for row {}:\n{}\n\n{}",
-                        ev.original_row_index,
-                        err_msg,
-                        state.ai_prompt_display.lines().skip_while(|l| l.starts_with("AI Processing Error")).collect::<Vec<_>>().join("\n")
-                    );
-                }
-                all_tasks_successful = false;
+                // The raw_output_display is already set with the error or raw response
+                all_tasks_successful_this_batch = false;
             }
         }
     }
 
     if received_at_least_one_result && state.ai_mode == AiModeState::Submitting {
-        if all_tasks_successful {
-            info!("All AI results received successfully, moving to ResultsReady state.");
+        if all_tasks_successful_this_batch {
+            info!("All AI results in this batch processed successfully, moving to ResultsReady state.");
             state.ai_mode = AiModeState::ResultsReady;
+            // state.ai_prompt_display can remain to show what was sent
         } else {
-            error!("One or more AI tasks failed. Reverting to Preparing state.");
-            state.ai_mode = AiModeState::Preparing;
-            state.ai_suggestions.clear();
+            error!("One or more AI tasks failed in this batch. Reverting to Preparing state.");
+            state.ai_mode = AiModeState::Preparing; // Or Idle, depending on desired flow
+            state.ai_suggestions.clear(); // Clear any partial suggestions
+            // state.ai_raw_output_display will show the last error/raw output
         }
     }
 }
@@ -126,7 +126,7 @@ pub fn forward_events<E: Event + Clone + std::fmt::Debug>(
         debug!("Forwarding event type '{}' #{}: {:?}", *event_type_name, count, send_event_component.event);
         writer.send(send_event_component.event.clone());
         commands.entity(entity).remove::<SendEvent<E>>();
-        commands.entity(entity).despawn_recursive();
+        commands.entity(entity).despawn_recursive(); // Despawn entity after forwarding
     }
 
     if count > 0 {
