@@ -8,7 +8,7 @@ use crate::sheets::events::AiTaskResult;
 use crate::sheets::resources::SheetRegistry;
 use crate::ui::systems::SendEvent;
 use crate::SessionApiKey;
-use gemini_client_rs::{types::{Content, ContentPart, GenerateContentRequest, PartResponse, Role, ToolConfig,DynamicRetrieval, DynamicRetrievalConfig},GeminiClient, GeminiError,};
+use gemini_client_rs::{types::{Content, ContentPart, GenerateContentRequest, PartResponse, Role, ToolConfig,DynamicRetrieval, DynamicRetrievalConfig},GeminiClient, GeminiError,}; // Ensure DynamicRetrieval types are correctly imported
 use serde_json::Value as JsonValue;
 use super::state::{AiModeState, EditorWindowState};
 
@@ -102,7 +102,7 @@ pub(super) fn show_ai_control_panel(
 
                 let grounding = metadata_opt_ref
                     .and_then(|m| m.requested_grounding_with_google_search)
-                    .unwrap_or_else(|| default_grounding_with_google_search().unwrap_or(true));
+                    .unwrap_or_else(|| default_grounding_with_google_search().unwrap_or(true)); // Default to true if not specified
 
                 (model_id, rule, contexts, data, gen_conf, grounding)
             };
@@ -175,13 +175,11 @@ pub(super) fn show_ai_control_panel(
                 let tools_config = if enable_grounding {
                     info!("Google Search Grounding is ENABLED for this request.");
                     Some(vec![
-                        // CORRECTED: Use DynamicRetieval as suggested by the compiler hint
-                        ToolConfig::DynamicRetieval {
+                        ToolConfig::DynamicRetieval { // Using the corrected enum variant
                             google_search_retrieval: DynamicRetrieval {
                                 dynamic_retrieval_config: DynamicRetrievalConfig {
-                                    mode: "MODE_AUTO".to_string(),
-                                    // CORRECTED: Added dynamic_threshold as required by the struct definition
-                                    dynamic_threshold: 0.5, // Default or from config if MODE_DYNAMIC
+                                    mode: "MODE_AUTO".to_string(), // or other valid modes like "MODE_DYNAMIC"
+                                    dynamic_threshold: 0.5, // Example threshold, adjust as needed if MODE_DYNAMIC
                                 },
                             },
                         }
@@ -197,7 +195,7 @@ pub(super) fn show_ai_control_panel(
                         parts: vec![ContentPart::Text(user_prompt_text.clone())],
                         role: Role::User,
                     }],
-                    tools: tools_config,
+                    tools: tools_config, // Pass the configured tools
                 };
 
                 match client.generate_content(model_name_to_use, &request).await {
@@ -227,19 +225,68 @@ pub(super) fn show_ai_control_panel(
                                 trimmed_text
                             };
 
-                            let mut text_to_parse = bom_cleaned_text;
-                            if (text_to_parse.starts_with("```json") || text_to_parse.starts_with("```"))
-                                && text_to_parse.ends_with("```") {
-                                text_to_parse = text_to_parse.trim_start_matches("```json");
-                                text_to_parse = text_to_parse.trim_start_matches("```");
-                                text_to_parse = text_to_parse.trim_end_matches("```");
-                                text_to_parse = text_to_parse.trim();
-                                info!("Text after Markdown fence removal: '{}'", text_to_parse);
+                            // Attempt to strip markdown fences first
+                            let initial_text_for_bracket_search = if (bom_cleaned_text.starts_with("```json") || bom_cleaned_text.starts_with("```"))
+                                && bom_cleaned_text.ends_with("```") {
+                                let stripped = bom_cleaned_text
+                                    .trim_start_matches("```json")
+                                    .trim_start_matches("```")
+                                    .trim_end_matches("```")
+                                    .trim();
+                                info!("Text after Markdown fence removal: '{}'", stripped);
+                                stripped
                             } else {
-                                info!("No Markdown fences detected or not matching expected pattern. Parsing as is (after BOM/trim).");
-                            }
+                                info!("No Markdown fences detected or not matching pattern. Using text as is (after BOM/trim) for bracket search: '{}'", bom_cleaned_text);
+                                bom_cleaned_text 
+                            };
 
-                            if text_to_parse.is_empty() {
+                            // --- New Logic: Extract content within the first complete '[]' pair ---
+                            let mut final_text_to_parse = initial_text_for_bracket_search; // Default to text after markdown stripping
+
+                            if !initial_text_for_bracket_search.is_empty() {
+                                let mut open_brackets = 0;
+                                let mut first_start_bracket_idx_opt = None;
+                                let mut matching_end_bracket_idx_opt = None;
+
+                                for (i, char_c) in initial_text_for_bracket_search.char_indices() {
+                                    if char_c == '[' {
+                                        if open_brackets == 0 {
+                                            first_start_bracket_idx_opt = Some(i);
+                                        }
+                                        open_brackets += 1;
+                                    } else if char_c == ']' {
+                                        if open_brackets > 0 { // Ensure there was an opening bracket to match
+                                            open_brackets -= 1;
+                                            if open_brackets == 0 && first_start_bracket_idx_opt.is_some() {
+                                                // This ']' closes the first '['
+                                                matching_end_bracket_idx_opt = Some(i);
+                                                break; // Found the complete first pair
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if let (Some(start_idx), Some(end_idx)) = (first_start_bracket_idx_opt, matching_end_bracket_idx_opt) {
+                                    if end_idx > start_idx { // Sanity check for valid slice
+                                        final_text_to_parse = &initial_text_for_bracket_search[start_idx..(end_idx + 1)];
+                                        info!("Successfully extracted content by first matching brackets: '{}'", final_text_to_parse);
+                                    } else {
+                                        info!("Bracket indices invalid after matching (start_idx={}, end_idx={}). Will attempt to parse text after markdown strip: '{}'", start_idx, end_idx, initial_text_for_bracket_search);
+                                        // final_text_to_parse remains initial_text_for_bracket_search
+                                    }
+                                } else {
+                                    if first_start_bracket_idx_opt.is_some() && matching_end_bracket_idx_opt.is_none() {
+                                         info!("Opening '[' found at index {} but no matching ']' for the first complete array. Will attempt to parse text after markdown strip: '{}'", first_start_bracket_idx_opt.unwrap(), initial_text_for_bracket_search);
+                                    } else if first_start_bracket_idx_opt.is_none() {
+                                         info!("No opening '[' found. Will attempt to parse text after markdown strip: '{}'", initial_text_for_bracket_search);
+                                    }
+                                    // final_text_to_parse remains initial_text_for_bracket_search
+                                }
+                            }
+                            // --- End of New Logic ---
+
+
+                            if final_text_to_parse.is_empty() {
                                 let empty_after_clean_msg = format!(
                                     "AI response was empty or became empty after cleaning/extraction. Original raw: '{}'",
                                     combined_text_from_parts
@@ -247,7 +294,7 @@ pub(super) fn show_ai_control_panel(
                                 warn!("{}",empty_after_clean_msg);
                                 task_result_data.result = Err(empty_after_clean_msg);
                             } else {
-                                match serde_json::from_str::<Vec<JsonValue>>(text_to_parse) {
+                                match serde_json::from_str::<Vec<JsonValue>>(final_text_to_parse) {
                                     Ok(json_values) => {
                                         let suggestions: Vec<String> = json_values.into_iter().map(|val| {
                                             match val {
@@ -262,12 +309,12 @@ pub(super) fn show_ai_control_panel(
                                             }
                                         }).collect();
                                         task_result_data.result = Ok(suggestions);
-                                        info!("Successfully parsed Gemini response into suggestions.");
+                                        info!("Successfully parsed AI response into suggestions.");
                                     }
                                     Err(e) => {
                                         let parse_err_msg = format!(
                                             "Failed to parse AI JSON response: {}. Text Attempted: '{}'",
-                                            e, text_to_parse
+                                            e, final_text_to_parse
                                         );
                                         error!("{}", parse_err_msg);
                                         task_result_data.result = Err(parse_err_msg);
@@ -278,6 +325,7 @@ pub(super) fn show_ai_control_panel(
                             let no_text_msg = "AI response was empty (no text parts found).".to_string();
                             warn!("{}", no_text_msg);
                             task_result_data.result = Err(no_text_msg.clone());
+                            task_result_data.raw_response = Some(no_text_msg);
                         }
                     }
                     Err(e) => {
