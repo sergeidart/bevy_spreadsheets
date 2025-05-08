@@ -27,6 +27,17 @@ use super::ai_helpers;
 use crate::ApiKeyDisplayStatus;
 use crate::SessionApiKey;
 
+// --- MODIFICATION: Add Visual Copier resources and events ---
+use crate::visual_copier::{
+    resources::VisualCopierManager,
+    events::{
+        PickFolderRequest, QueueTopPanelCopyEvent, ReverseTopPanelFoldersEvent,
+    },
+};
+// --- END MODIFICATION ---
+
+
+// SystemParam to bundle sheet-related event writers
 #[derive(SystemParam)]
 pub struct SheetEventWriters<'w, 's> {
     add_row: EventWriter<'w, AddSheetRowRequest>,
@@ -41,11 +52,24 @@ pub struct SheetEventWriters<'w, 's> {
     _marker: std::marker::PhantomData<&'s ()>,
 }
 
+// --- MODIFICATION: Add Visual Copier event writers to a new SystemParam ---
+// SystemParam to bundle visual copier event writers for the top panel
+#[derive(SystemParam)]
+pub struct CopierEventWriters<'w, 's> {
+    pick_folder: EventWriter<'w, PickFolderRequest>,
+    queue_top_panel_copy: EventWriter<'w, QueueTopPanelCopyEvent>,
+    reverse_folders: EventWriter<'w, ReverseTopPanelFoldersEvent>,
+    _marker: std::marker::PhantomData<&'s ()>,
+}
+// --- END MODIFICATION ---
+
+
+// --- MODIFICATION: Add VisualCopierManager and CopierEventWriters to system signature ---
 #[allow(clippy::too_many_arguments)]
 pub fn generic_sheet_editor_ui(
     mut contexts: EguiContexts,
     mut state: ResMut<EditorWindowState>,
-    mut sheet_writers: SheetEventWriters,
+    mut sheet_writers: SheetEventWriters, // Use the SystemParam
     mut registry: ResMut<SheetRegistry>,
     render_cache_res: Res<SheetRenderCache>,
     ui_feedback: Res<UiFeedbackState>,
@@ -53,12 +77,18 @@ pub fn generic_sheet_editor_ui(
     mut commands: Commands,
     mut sheet_data_modified_events: EventReader<SheetDataModifiedInRegistryEvent>,
     mut api_key_status_res: ResMut<ApiKeyDisplayStatus>,
-    mut session_api_key_res: ResMut<SessionApiKey>, // This is already a ResMut
+    mut session_api_key_res: ResMut<SessionApiKey>,
+    // Visual Copier Resources/Events
+    mut copier_manager: ResMut<VisualCopierManager>,
+    mut copier_writers: CopierEventWriters, // Use the SystemParam
 ) {
+// --- END MODIFICATION ---
+
     let ctx = contexts.ctx_mut();
     let initial_selected_category = state.selected_category.clone();
     let initial_selected_sheet_name = state.selected_sheet_name.clone();
 
+    // --- Event handling for sheet data modification (remains the same) ---
     for event in sheet_data_modified_events.read() {
         if state.selected_category == event.category && state.selected_sheet_name.as_ref() == Some(&event.sheet_name) {
             debug!("main_editor: Received SheetDataModifiedInRegistryEvent for current sheet '{:?}/{}'. Forcing filter recalc.", event.category, event.sheet_name);
@@ -70,18 +100,19 @@ pub fn generic_sheet_editor_ui(
                 }
                 state.request_scroll_to_bottom_on_add = false;
             }
+            // Check if render cache needs update (simple check, might need refinement)
             if render_cache_res.get_cell_data(&event.category, &event.sheet_name, 0, 0).is_none()
                 && registry.get_sheet(&event.category, &event.sheet_name).map_or(false, |d| !d.grid.is_empty()) {
-                 sheet_writers.revalidate.write(RequestSheetRevalidation { category: event.category.clone(), sheet_name: event.sheet_name.clone() });
+                 sheet_writers.revalidate.send(RequestSheetRevalidation { category: event.category.clone(), sheet_name: event.sheet_name.clone() });
             }
         }
     }
 
+    // --- Popups (remain the same) ---
     show_column_options_popup(ctx, &mut state, &mut sheet_writers.column_rename, &mut sheet_writers.column_validator, &mut registry);
     show_rename_popup(ctx, &mut state, &mut sheet_writers.rename_sheet, &ui_feedback);
     show_delete_confirm_popup(ctx, &mut state, &mut sheet_writers.delete_sheet);
     show_ai_rule_popup(ctx, &mut state, &mut registry);
-    // Pass the ResMut directly where a mutable reference is needed
     show_settings_popup(ctx, &mut state, &mut api_key_status_res, &mut session_api_key_res);
 
 
@@ -89,14 +120,29 @@ pub fn generic_sheet_editor_ui(
         let text_style = egui::TextStyle::Body;
         let row_height = ui.text_style_height(&text_style) + ui.style().spacing.item_spacing.y;
 
-        show_top_panel(ui, &mut state, &registry, sheet_writers.add_row, sheet_writers.upload_req, sheet_writers.delete_rows);
+        // --- MODIFICATION: Pass copier_manager and copier_writers to show_top_panel ---
+        show_top_panel(
+            ui,
+            &mut state,
+            &registry,
+            sheet_writers.add_row, // Pass individual writers from SystemParam
+            sheet_writers.upload_req,
+            sheet_writers.delete_rows,
+            // Visual Copier args
+            copier_manager,
+            copier_writers.pick_folder,
+            copier_writers.queue_top_panel_copy,
+            copier_writers.reverse_folders,
+        );
+        // --- END MODIFICATION ---
 
+        // --- Rest of the UI logic (sheet change detection, feedback, AI panels, table) remains the same ---
         if initial_selected_category != state.selected_category || initial_selected_sheet_name != state.selected_sheet_name {
             debug!("Selected sheet or category changed by UI interaction.");
             if let Some(sheet_name) = &state.selected_sheet_name {
                 if render_cache_res.get_cell_data(&state.selected_category, sheet_name, 0, 0).is_none()
                     && registry.get_sheet(&state.selected_category, sheet_name).map_or(false, |d| !d.grid.is_empty()) {
-                    sheet_writers.revalidate.write(RequestSheetRevalidation { category: state.selected_category.clone(), sheet_name: sheet_name.clone() });
+                    sheet_writers.revalidate.send(RequestSheetRevalidation { category: state.selected_category.clone(), sheet_name: sheet_name.clone() });
                 }
             }
             state.force_filter_recalculation = true;
@@ -113,7 +159,6 @@ pub fn generic_sheet_editor_ui(
         let current_ai_mode = state.ai_mode;
 
         if matches!(current_ai_mode, AiModeState::Preparing | AiModeState::Submitting | AiModeState::ResultsReady) {
-            // Pass the ResMut (which derefs to &SessionApiKey) where an immutable reference is needed
             show_ai_control_panel(
                 ui,
                 &mut state,
@@ -153,7 +198,7 @@ pub fn generic_sheet_editor_ui(
                         let num_cols = metadata.columns.len();
                         if metadata.get_filters().len() != num_cols && num_cols > 0 {
                              ui.colored_label(egui::Color32::RED, "Metadata inconsistency detected (cols vs filters)...");
-                             return;
+                             return; // Early return on inconsistency
                         }
                         egui::ScrollArea::both()
                             .id_salt("main_sheet_table_scroll_area")
@@ -193,6 +238,7 @@ pub fn generic_sheet_editor_ui(
             }
         }
 
+        // --- AI Output Log (remains the same) ---
         ui.separator();
         ui.strong("AI Output / Log:");
         egui::ScrollArea::vertical()
@@ -205,9 +251,9 @@ pub fn generic_sheet_editor_ui(
                     ui.available_size(),
                     egui::TextEdit::multiline(&mut display_text_clone)
                         .font(egui::TextStyle::Monospace)
-                        .interactive(false)
+                        .interactive(false) // Make it read-only
                         .desired_width(f32::INFINITY)
                 );
             });
-    });
+    }); // End CentralPanel
 }

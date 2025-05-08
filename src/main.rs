@@ -13,15 +13,20 @@ use image::ImageFormat as CrateImageFormat;
 use winit::window::Icon as WinitIcon;
 
 use bevy_egui::EguiPlugin;
-use bevy_tokio_tasks::TokioTasksPlugin;
+use bevy_tokio_tasks::TokioTasksPlugin; // Make sure this is present
 use dotenvy::dotenv;
 
+// --- MODIFICATION: Add visual_copier module ---
 mod sheets;
 mod ui;
 mod example_definitions;
+mod visual_copier; // Declare the new module
 
 use sheets::SheetsPlugin;
 use ui::EditorUiPlugin;
+use visual_copier::VisualCopierPlugin; // Import the plugin
+
+// --- END MODIFICATION ---
 
 #[derive(Resource, Debug, Default)]
 pub struct ApiKeyDisplayStatus {
@@ -55,16 +60,20 @@ fn main() {
                 })
                 .set(LogPlugin {
                     level: bevy::log::Level::INFO,
-                    filter: "wgpu=error,naga=warn,bevy_tokio_tasks=warn,hyper=warn,reqwest=warn,gemini_client_rs=info".to_string(),
+                    // Adjusted filter to include visual_copier logs
+                    filter: "wgpu=error,naga=warn,bevy_tokio_tasks=warn,hyper=warn,reqwest=warn,gemini_client_rs=info,visual_copier=info".to_string(),
                     ..default()
                 }),
         )
         .add_plugins(EguiPlugin {
             enable_multipass_for_primary_context: true,
         })
-        .add_plugins(TokioTasksPlugin::default())
+        .add_plugins(TokioTasksPlugin::default()) // Ensure this is added
         .add_plugins(SheetsPlugin)
         .add_plugins(EditorUiPlugin)
+        // --- MODIFICATION: Add the VisualCopierPlugin ---
+        .add_plugins(VisualCopierPlugin)
+        // --- END MODIFICATION ---
         .add_systems(Startup, (
             initialize_api_key_status_startup,
             set_window_icon,
@@ -72,6 +81,7 @@ fn main() {
         .run();
 }
 
+// Functions initialize_api_key_status_startup and set_window_icon remain the same
 fn initialize_api_key_status_startup(
     mut api_key_status_res: ResMut<ApiKeyDisplayStatus>,
     mut session_api_key: ResMut<SessionApiKey>,
@@ -84,7 +94,6 @@ fn initialize_api_key_status_startup(
             return;
         }
     }
-    // If not from env, check if already set (e.g. by previous session if persistence was ever used, though now it's transient)
     if session_api_key.0.is_some() {
         api_key_status_res.status = "Key Set (Session)".to_string();
     } else {

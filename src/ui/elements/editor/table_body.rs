@@ -2,11 +2,10 @@
 use crate::sheets::{
     definitions::{ColumnValidator, SheetMetadata},
     events::UpdateCellEvent,
-    // ADDED SheetRenderCache, REMOVED SheetValidationState
-    resources::{SheetRegistry, SheetRenderCache}, //SheetValidationState
+    resources::{SheetRegistry, SheetRenderCache},
 };
 use crate::ui::common::edit_cell_widget;
-use crate::ui::elements::editor::state::{AiModeState, EditorWindowState};
+use crate::ui::elements::editor::state::{AiModeState, EditorWindowState}; // AiModeState used for condition
 use bevy::log::{debug, trace, error, warn};
 use bevy::prelude::*;
 use bevy_egui::egui;
@@ -60,8 +59,7 @@ pub fn sheet_table_body(
     category: &Option<String>,
     sheet_name: &str,
     registry: &SheetRegistry,
-    // validation_state_res: &SheetValidationState, // REMOVED
-    render_cache: &SheetRenderCache, // ADDED
+    render_cache: &SheetRenderCache,
     mut cell_update_writer: EventWriter<UpdateCellEvent>,
     state: &mut EditorWindowState,
 ) -> bool {
@@ -84,7 +82,7 @@ pub fn sheet_table_body(
         }
     };
 
-    let grid_data = &sheet_data_ref.grid; // Still needed for filtering logic
+    let grid_data = &sheet_data_ref.grid;
     let num_cols = metadata_ref.columns.len();
     let validators: Vec<Option<ColumnValidator>> = metadata_ref.columns.iter().map(|c| c.validator.clone()).collect();
 
@@ -139,8 +137,6 @@ pub fn sheet_table_body(
                     }
                 };
 
-            // Check if the original row exists in the actual grid data
-            // This is a safeguard, as filtered_indices should only contain valid indices.
             let current_row_actual_data_ref_opt = grid_data.get(original_row_index);
 
             if let Some(current_row_actual_data_ref) = current_row_actual_data_ref_opt {
@@ -154,7 +150,9 @@ pub fn sheet_table_body(
 
                 for c_idx in 0..num_cols {
                     ui_row.col(|ui| {
-                         if c_idx == 0 && state.ai_mode == AiModeState::Preparing {
+                        // Enable checkboxes if AI mode is preparing OR delete row mode is active
+                        let show_checkbox = (state.ai_mode == AiModeState::Preparing && !state.delete_row_mode_active) || state.delete_row_mode_active;
+                        if c_idx == 0 && show_checkbox {
                             let mut is_selected = state.ai_selected_rows.contains(&original_row_index);
                             let response = ui.add(egui::Checkbox::without_text(&mut is_selected));
                             if response.changed() {
@@ -171,19 +169,16 @@ pub fn sheet_table_body(
                             .with(original_row_index)
                             .with(c_idx);
 
-                        // edit_cell_widget now takes render_cache
                         if let Some(new_value) = edit_cell_widget(
                             ui,
                             cell_id,
-                            // current_cell_string is no longer passed directly;
-                            // edit_cell_widget gets it from render_cache
                             &validator_opt_for_cell,
                             category,
                             sheet_name,
                             original_row_index,
                             c_idx,
                             registry,
-                            render_cache, // Pass render_cache
+                            render_cache,
                             state,
                         ) {
                             cell_update_writer.send(UpdateCellEvent {

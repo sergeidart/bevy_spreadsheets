@@ -10,7 +10,7 @@ use std::hash::{Hash, Hasher};
 pub enum AiModeState {
     #[default]
     Idle,
-    Preparing,
+    Preparing, // Rows can be selected for AI or deletion
     Submitting,
     ResultsReady,
     Reviewing,
@@ -61,7 +61,7 @@ pub struct EditorWindowState {
     pub linked_column_cache: HashMap<(String, usize), HashSet<String>>,
 
     pub ai_mode: AiModeState,
-    pub ai_selected_rows: HashSet<usize>,
+    pub ai_selected_rows: HashSet<usize>, // Reused for Delete Row mode
     pub ai_suggestions: HashMap<usize, Vec<String>>,
     pub ai_review_queue: Vec<usize>,
     pub ai_current_review_index: Option<usize>,
@@ -74,14 +74,11 @@ pub struct EditorWindowState {
     pub ai_top_k_input: i32,
     pub ai_top_p_input: f32,
     pub show_ai_rule_popup: bool,
-    // --- MODIFIED: Add ai_rule_popup_needs_init flag ---
     pub ai_rule_popup_needs_init: bool,
-    // --- END MODIFIED ---
     pub ai_prompt_display: String,
-
     pub ai_raw_output_display: String,
 
-    pub show_settings_popup: bool,
+    pub show_settings_popup: bool, // This is the old "settings" / AI Settings
     pub settings_new_api_key_input: String,
 
     pub filtered_row_indices_cache: HashMap<(Option<String>, String, u64), Vec<usize>>,
@@ -89,6 +86,10 @@ pub struct EditorWindowState {
 
     pub request_scroll_to_bottom_on_add: bool,
     pub scroll_to_row_index: Option<usize>,
+
+    // New states for top panel UX pass
+    pub show_quick_copy_bar: bool,
+    pub delete_row_mode_active: bool,
 }
 
 impl EditorWindowState {
@@ -106,5 +107,12 @@ impl EditorWindowState {
             self.force_filter_recalculation = true;
             debug!("Invalidated filter cache for sheet: '{:?}/{}'", cat, name);
         }
+    }
+
+    /// Call this when switching between AI mode and Delete Row mode to ensure clean state.
+    pub fn reset_selection_modes(&mut self) {
+        self.ai_mode = AiModeState::Idle;
+        self.delete_row_mode_active = false;
+        self.ai_selected_rows.clear();
     }
 }
