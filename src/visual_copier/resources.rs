@@ -79,20 +79,20 @@ impl From<fs_extra::error::Error> for CopyError {
 pub struct VisualCopierManager {
     pub copy_tasks: Vec<CopyTask>,
     pub next_id: usize,
-    // These top panel paths will now be saved/loaded
     pub top_panel_from_folder: Option<PathBuf>,
     pub top_panel_to_folder: Option<PathBuf>,
-    // Status should be transient, not saved
-    #[serde(skip, default = "default_status_string")] // Skip saving, provide default on load
+    // --- NEW FIELD ---
+    #[serde(default)] // Default to false if missing during load
+    pub copy_top_panel_on_exit: bool, // Save this preference
+    // --- END NEW FIELD ---
+    #[serde(skip, default = "default_status_string")]
     #[reflect(skip_serializing)]
     pub top_panel_copy_status: String,
-    // Transient state flags, not serialized
     #[serde(skip)]
     #[reflect(skip_serializing)]
-    pub is_saving_on_exit: bool, // Flag to manage save on close
+    pub is_saving_on_exit: bool,
 }
 
-// Helper function needed for serde(default = ...) on skipped fields
 fn default_status_string() -> String {
     "Idle".to_string()
 }
@@ -107,7 +107,6 @@ impl VisualCopierManager {
     }
 
     /// Recalculates the next_id based on the highest existing ID in copy_tasks.
-    /// Should be called after loading tasks.
     pub fn recalculate_next_id(&mut self) {
         self.next_id = self.copy_tasks.iter()
             .map(|task| task.id)
@@ -121,7 +120,7 @@ impl VisualCopierManager {
         self.top_panel_copy_status = default_status_string();
         for task in self.copy_tasks.iter_mut() {
             if task.status.starts_with("Copying...") || task.status.starts_with("Queued...") || task.status.starts_with("Error:") {
-                 task.status = "Idle".to_string(); // Reset status on load
+                 task.status = "Idle".to_string();
             }
         }
         self.is_saving_on_exit = false;

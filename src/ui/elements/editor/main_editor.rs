@@ -1,6 +1,9 @@
 // src/ui/elements/editor/main_editor.rs
-// Added AppExit
-use bevy::{app::AppExit, ecs::system::SystemParam, prelude::*};
+// --- MODIFIED: Change AppExit import ---
+// use bevy::{app::AppExit, ecs::system::SystemParam, prelude::*};
+use bevy::ecs::system::SystemParam;
+use bevy::prelude::*;
+// --- END MODIFIED ---
 use bevy_egui::{egui, EguiContexts};
 use bevy_tokio_tasks::TokioTasksRuntime;
 use egui_extras::{Column, TableBody, TableBuilder};
@@ -32,6 +35,10 @@ use crate::visual_copier::{
     resources::VisualCopierManager,
     events::{
         PickFolderRequest, QueueTopPanelCopyEvent, ReverseTopPanelFoldersEvent,
+        VisualCopierStateChanged,
+        // --- ADDED: Import RequestAppExit ---
+        RequestAppExit,
+        // --- END ADDED ---
     },
 };
 
@@ -57,6 +64,7 @@ pub struct CopierEventWriters<'w, 's> {
     pick_folder: EventWriter<'w, PickFolderRequest>,
     queue_top_panel_copy: EventWriter<'w, QueueTopPanelCopyEvent>,
     reverse_folders: EventWriter<'w, ReverseTopPanelFoldersEvent>,
+    state_changed: EventWriter<'w, VisualCopierStateChanged>,
     _marker: std::marker::PhantomData<&'s ()>,
 }
 
@@ -76,16 +84,17 @@ pub fn generic_sheet_editor_ui(
     mut session_api_key_res: ResMut<SessionApiKey>,
     mut copier_manager: ResMut<VisualCopierManager>,
     mut copier_writers: CopierEventWriters,
-    // Added app_exit_writer
-    mut app_exit_writer: EventWriter<AppExit>,
+    // --- MODIFIED: Changed parameter type ---
+    // mut app_exit_writer: EventWriter<AppExit>,
+    mut request_app_exit_writer: EventWriter<RequestAppExit>, // Changed writer type
+    // --- END MODIFIED ---
 ) {
 
     let ctx = contexts.ctx_mut();
     let initial_selected_category = state.selected_category.clone();
     let initial_selected_sheet_name = state.selected_sheet_name.clone();
 
-    // --- Event handling for sheet data modification ---
-    // (Remains the same)
+    // (Event handling, Popups remain the same)
     for event in sheet_data_modified_events.read() {
         if state.selected_category == event.category && state.selected_sheet_name.as_ref() == Some(&event.sheet_name) {
             debug!("main_editor: Received SheetDataModifiedInRegistryEvent for current sheet '{:?}/{}'. Forcing filter recalc.", event.category, event.sheet_name);
@@ -104,8 +113,6 @@ pub fn generic_sheet_editor_ui(
         }
     }
 
-    // --- Popups ---
-    // (Remain the same)
     show_column_options_popup(ctx, &mut state, &mut sheet_writers.column_rename, &mut sheet_writers.column_validator, &mut registry);
     show_rename_popup(ctx, &mut state, &mut sheet_writers.rename_sheet, &ui_feedback);
     show_delete_confirm_popup(ctx, &mut state, &mut sheet_writers.delete_sheet);
@@ -124,17 +131,17 @@ pub fn generic_sheet_editor_ui(
             &registry,
             sheet_writers.add_row,
             sheet_writers.upload_req,
-            // delete_rows writer removed from here
             copier_manager,
             copier_writers.pick_folder,
             copier_writers.queue_top_panel_copy,
             copier_writers.reverse_folders,
-            // Pass app_exit_writer
-            app_exit_writer,
+            // --- MODIFIED: Pass the RequestAppExit writer ---
+            request_app_exit_writer, // Pass the correct writer
+            // --- END MODIFIED ---
+            copier_writers.state_changed,
         );
 
-        // --- Rest of the UI logic ---
-        // (Sheet change detection remains the same)
+        // (Rest of the CentralPanel UI remains the same)
         if initial_selected_category != state.selected_category || initial_selected_sheet_name != state.selected_sheet_name {
             debug!("Selected sheet or category changed by UI interaction.");
             if let Some(sheet_name) = &state.selected_sheet_name {
@@ -146,21 +153,18 @@ pub fn generic_sheet_editor_ui(
             state.force_filter_recalculation = true;
         }
 
-        // (Feedback display remains the same)
         if !ui_feedback.last_message.is_empty() {
             let text_color = if ui_feedback.is_error { egui::Color32::RED } else { ui.style().visuals.text_color() };
             ui.colored_label(text_color, &ui_feedback.last_message);
         }
 
-        // --- Conditional Control Panels ---
         let current_category_clone = state.selected_category.clone();
         let current_sheet_name_clone = state.selected_sheet_name.clone();
         let current_ai_mode = state.ai_mode;
-        let delete_row_mode_active = state.delete_row_mode_active; // Cache state
+        let delete_row_mode_active = state.delete_row_mode_active;
 
-        let mut control_panel_shown = false; // Track if any control panel was shown
+        let mut control_panel_shown = false;
 
-        // Show AI Control Panel
         if matches!(current_ai_mode, AiModeState::Preparing | AiModeState::Submitting | AiModeState::ResultsReady) {
             ui.separator();
             show_ai_control_panel(
@@ -176,26 +180,20 @@ pub fn generic_sheet_editor_ui(
             control_panel_shown = true;
          }
 
-        // Show Delete Row Control Panel
         if delete_row_mode_active {
-             // Avoid double separator if AI panel also shown (unlikely but possible)
              if !control_panel_shown { ui.separator(); }
              show_delete_row_control_panel(
                  ui,
                  &mut state,
-                 sheet_writers.delete_rows, // Pass the writer here
+                 sheet_writers.delete_rows,
              );
              control_panel_shown = true;
         }
 
-        // Add separator after control panels if either was shown
         if control_panel_shown {
             ui.separator();
         }
 
-
-        // --- AI Review Panel or Main Table ---
-        // (Remains the same)
         if current_ai_mode == AiModeState::Reviewing {
             if current_sheet_name_clone.is_some() {
                  draw_inline_ai_review_panel(ui, &mut state, &current_category_clone, &current_sheet_name_clone, &registry, &mut sheet_writers.cell_update);
@@ -214,14 +212,15 @@ pub fn generic_sheet_editor_ui(
                     ui.vertical_centered(|ui| { ui.label(format!("Sheet '{:?}/{}' no longer exists...", current_category_clone, selected_name)); });
                     if state.selected_sheet_name.as_deref() == Some(selected_name.as_str()) {
                         state.selected_sheet_name = None;
-                        ai_helpers::exit_review_mode(&mut state);
+                        state.reset_selection_modes();
                         state.force_filter_recalculation = true;
                     }
                 } else if let Some(sheet_data_ref) = sheet_data_ref_opt {
                      if let Some(metadata) = &sheet_data_ref.metadata {
                         let num_cols = metadata.columns.len();
                         if metadata.get_filters().len() != num_cols && num_cols > 0 {
-                             ui.colored_label(egui::Color32::RED, "Metadata inconsistency detected (cols vs filters)...");
+                             error!("Metadata inconsistency detected (cols vs filters) for sheet '{:?}/{}'. Revalidation might be needed.", current_category_clone, selected_name);
+                             ui.colored_label(egui::Color32::RED, "Metadata inconsistency detected...");
                              return;
                         }
                         egui::ScrollArea::both()
@@ -244,7 +243,9 @@ pub fn generic_sheet_editor_ui(
                                     }
                                }
                                if let Some(row_idx) = state.scroll_to_row_index {
-                                    if num_cols > 0 { table_builder = table_builder.scroll_to_row(row_idx, Some(egui::Align::BOTTOM)); }
+                                    if num_cols > 0 {
+                                        table_builder = table_builder.scroll_to_row(row_idx, Some(egui::Align::BOTTOM));
+                                    }
                                     state.scroll_to_row_index = None;
                                }
                                table_builder
@@ -262,8 +263,6 @@ pub fn generic_sheet_editor_ui(
             }
         }
 
-        // --- AI Output Log ---
-        // (Remains the same)
         ui.separator();
         ui.strong("AI Output / Log:");
         egui::ScrollArea::vertical()

@@ -29,29 +29,29 @@ pub struct FolderPickedEvent {
     pub path: Option<PathBuf>, // None if selection was cancelled
 }
 
-// --- NEW Specific Folder Update Events ---
+// --- Specific Folder Update Events (Keep as before) ---
 #[derive(Event, Debug, Clone)]
 pub struct UpdateTaskStartFolderEvent {
     pub task_id: usize,
-    pub path: Option<PathBuf>, // Option to handle cancellation or clearing
+    pub path: Option<PathBuf>,
 }
 
 #[derive(Event, Debug, Clone)]
 pub struct UpdateTaskEndFolderEvent {
     pub task_id: usize,
-    pub path: Option<PathBuf>, // Option to handle cancellation or clearing
+    pub path: Option<PathBuf>,
 }
 
 #[derive(Event, Debug, Clone)]
 pub struct UpdateTopPanelFromFolderEvent {
-    pub path: Option<PathBuf>, // Option to handle cancellation or clearing
+    pub path: Option<PathBuf>,
 }
 
 #[derive(Event, Debug, Clone)]
 pub struct UpdateTopPanelToFolderEvent {
-    pub path: Option<PathBuf>, // Option to handle cancellation or clearing
+    pub path: Option<PathBuf>,
 }
-// --- END NEW Specific Folder Update Events ---
+// --- End Specific Folder Update Events ---
 
 /// Event to initiate a copy operation for a specific task ID.
 #[derive(Event, Debug)]
@@ -72,7 +72,16 @@ pub struct ReverseTopPanelFoldersEvent;
 /// Event to report the result of a copy operation.
 #[derive(Event, Debug, Clone)]
 pub struct CopyOperationResultEvent {
-    /// If Some, this ID is for a specific CopyTask. If None, it's for the top panel.
-    pub task_id: Option<usize>, // None for top panel copy
-    pub result: Result<String, CopyError>, // Ok contains success message (e.g., with timestamp), Err contains CopyError
+    pub task_id: Option<usize>,
+    pub result: Result<String, CopyError>,
 }
+
+/// Event sent when the VisualCopierManager state (paths, copy_on_exit flag) has changed and should be persisted.
+#[derive(Event, Debug, Clone)]
+pub struct VisualCopierStateChanged;
+
+// --- NEW EVENT FOR CUSTOM EXIT FLOW ---
+/// Event sent by UI to request application exit, allowing pre-exit actions.
+#[derive(Event, Debug, Clone)]
+pub struct RequestAppExit;
+// --- END NEW EVENT ---

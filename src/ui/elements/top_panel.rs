@@ -4,19 +4,24 @@ use crate::sheets::events::{
 };
 use crate::sheets::resources::SheetRegistry;
 use crate::ui::elements::editor::state::{AiModeState, EditorWindowState};
-// Added AppExit import
-use bevy::{app::AppExit, prelude::*}; // AppExit is an enum
+// --- MODIFIED: Remove AppExit import ---
+// use bevy::{app::AppExit, prelude::*};
+use bevy::prelude::*;
+// --- END MODIFIED ---
 use bevy_egui::egui;
 
 use crate::visual_copier::{
     resources::VisualCopierManager,
     events::{
         PickFolderRequest, QueueTopPanelCopyEvent, ReverseTopPanelFoldersEvent,
+        VisualCopierStateChanged,
+        // --- ADDED: Import RequestAppExit ---
+        RequestAppExit,
+        // --- END ADDED ---
     },
 };
 
-/// Helper function to truncate a path string to fit within a given pixel width.
-// (truncate_path_string function remains the same as previous version)
+// --- truncate_path_string function remains the same ---
 fn truncate_path_string(path_str: &str, max_width_pixels: f32, ui: &egui::Ui) -> String {
     if path_str.is_empty() {
         return "".to_string();
@@ -81,18 +86,21 @@ pub fn show_top_panel(
     registry: &SheetRegistry,
     mut add_row_event_writer: EventWriter<AddSheetRowRequest>,
     mut upload_req_writer: EventWriter<RequestInitiateFileUpload>,
-    // delete_rows_event_writer removed here
     mut copier_manager: ResMut<VisualCopierManager>,
     mut pick_folder_writer: EventWriter<PickFolderRequest>,
     mut queue_top_panel_copy_writer: EventWriter<QueueTopPanelCopyEvent>,
     mut reverse_folders_writer: EventWriter<ReverseTopPanelFoldersEvent>,
-    mut app_exit_writer: EventWriter<AppExit>,
+    // --- MODIFIED: Changed parameter type ---
+    // mut app_exit_writer: EventWriter<AppExit>,
+    mut request_app_exit_writer: EventWriter<RequestAppExit>,
+    // --- END MODIFIED ---
+    mut state_changed_writer: EventWriter<VisualCopierStateChanged>,
 ) {
     egui::TopBottomPanel::top("main_top_controls_panel")
         .show_inside(ui, |ui| {
             // --- Row 1: Sheet Management and Quick Copy ---
             ui.horizontal(|ui| {
-                // Category Selector
+                // (Sheet selection logic remains the same)
                 ui.label("Category:");
                 let categories = registry.get_categories();
                 let selected_category_text = state.selected_category.as_deref().unwrap_or("Root (Uncategorized)");
@@ -131,14 +139,10 @@ pub fn show_top_panel(
                     state.ai_rule_popup_needs_init = true;
                 }
 
-                // Upload Json Button (Second item)
                 if ui.button("⬆ Upload JSON").on_hover_text("Upload a JSON file (will be placed in Root category)").clicked() {
                     upload_req_writer.send(RequestInitiateFileUpload);
                 }
-
                 ui.separator();
-
-                // Sheet Selector
                 ui.label("Sheet:");
                 let sheets_in_category = registry.get_sheet_names_in_category(&state.selected_category);
                 ui.add_enabled_ui(!sheets_in_category.is_empty() || state.selected_sheet_name.is_some(), |ui| {
@@ -161,7 +165,6 @@ pub fn show_top_panel(
                          state.force_filter_recalculation = true;
                          state.ai_rule_popup_needs_init = true;
                     }
-
                     if let Some(current_sheet_name) = state.selected_sheet_name.as_ref() {
                         if !registry.get_sheet_names_in_category(&state.selected_category).contains(current_sheet_name) {
                             state.selected_sheet_name = None;
@@ -175,7 +178,6 @@ pub fn show_top_panel(
                 let is_sheet_selected = state.selected_sheet_name.is_some();
                 let can_interact_with_sheet = is_sheet_selected && state.ai_mode == AiModeState::Idle && !state.delete_row_mode_active;
 
-                // Rename Button
                 if ui.add_enabled(can_interact_with_sheet, egui::Button::new("✏ Rename")).clicked() {
                     if let Some(ref name_to_rename) = state.selected_sheet_name {
                         state.rename_target_category = state.selected_category.clone();
@@ -184,8 +186,6 @@ pub fn show_top_panel(
                         state.show_rename_popup = true;
                     }
                 }
-
-                // Delete Sheet Button
                 if ui.add_enabled(can_interact_with_sheet, egui::Button::new("🗑 Delete Sheet")).clicked() {
                     if let Some(ref name_to_delete) = state.selected_sheet_name {
                         state.delete_target_category = state.selected_category.clone();
@@ -194,26 +194,25 @@ pub fn show_top_panel(
                     }
                 }
 
-                // Copy Button
-                if ui.button("📋 Copy").clicked() {
+                // Copy Button (Toggle)
+                let copy_button_text = if state.show_quick_copy_bar { "❌ Close Copy" } else { "📋 Copy" };
+                if ui.button(copy_button_text).clicked() {
                     state.show_quick_copy_bar = !state.show_quick_copy_bar;
                 }
 
-                // --- App Exit Button (Far Right) ---
+                // App Exit Button
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // --- MODIFIED: Send RequestAppExit ---
                     if ui.add(egui::Button::new("❌ App Exit")).clicked() {
-                        info!("'App Exit' button clicked. Sending AppExit event.");
-                        // --- FIX: Send the AppExit::Success variant ---
-                        app_exit_writer.send(AppExit::Success);
-                        // --- END FIX ---
+                        info!("'App Exit' button clicked. Sending RequestAppExit event.");
+                        request_app_exit_writer.send(RequestAppExit); // Send RequestAppExit
                     }
+                    // --- END MODIFIED ---
                 });
-                // --- End App Exit Button ---
             });
 
 
             // Quick Copy Bar (conditionally rendered)
-            // (Remains the same)
             if state.show_quick_copy_bar {
                 ui.group(|ui| {
                     ui.horizontal(|ui| {
@@ -223,22 +222,14 @@ pub fn show_top_panel(
                         if ui.button("FROM").on_hover_text("Select source folder").clicked() {
                             pick_folder_writer.send(PickFolderRequest { for_task_id: None, is_start_folder: true });
                         }
-                        let from_path_str = copier_manager.top_panel_from_folder.as_ref().map_or_else(
-                            || "None".to_string(),
-                            |p| p.display().to_string()
-                        );
-                        ui.label(truncate_path_string(&from_path_str, MAX_PATH_DISPLAY_WIDTH, ui))
-                          .on_hover_text(&from_path_str);
+                        let from_path_str = copier_manager.top_panel_from_folder.as_ref().map_or_else(|| "None".to_string(), |p| p.display().to_string());
+                        ui.label(truncate_path_string(&from_path_str, MAX_PATH_DISPLAY_WIDTH, ui)).on_hover_text(&from_path_str);
 
                         if ui.button("TO").on_hover_text("Select destination folder").clicked() {
                             pick_folder_writer.send(PickFolderRequest { for_task_id: None, is_start_folder: false });
                         }
-                        let to_path_str = copier_manager.top_panel_to_folder.as_ref().map_or_else(
-                            || "None".to_string(),
-                            |p| p.display().to_string()
-                        );
-                        ui.label(truncate_path_string(&to_path_str, MAX_PATH_DISPLAY_WIDTH, ui))
-                          .on_hover_text(&to_path_str);
+                        let to_path_str = copier_manager.top_panel_to_folder.as_ref().map_or_else(|| "None".to_string(), |p| p.display().to_string());
+                        ui.label(truncate_path_string(&to_path_str, MAX_PATH_DISPLAY_WIDTH, ui)).on_hover_text(&to_path_str);
 
                         if ui.button("Swap ↔").clicked() {
                             reverse_folders_writer.send(ReverseTopPanelFoldersEvent);
@@ -249,58 +240,52 @@ pub fn show_top_panel(
                             queue_top_panel_copy_writer.send(QueueTopPanelCopyEvent);
                         }
                         ui.label(&copier_manager.top_panel_copy_status);
+
+                        ui.separator();
+
+                        // --- Checkbox interaction sends event ---
+                        let checkbox_response = ui.checkbox(&mut copier_manager.copy_top_panel_on_exit, "Copy on Exit")
+                            .on_hover_text("If checked, performs this Quick Copy operation synchronously just before the application closes via 'App Exit'.");
+
+                        if checkbox_response.changed() {
+                            state_changed_writer.send(VisualCopierStateChanged);
+                            info!("'Copy on Exit' checkbox changed to: {}", copier_manager.copy_top_panel_on_exit);
+                        }
+                        // --- End checkbox interaction ---
                     });
                 });
             }
             ui.separator();
 
             // --- Row 2: Mode Toggles and Add Row ---
-            // (Remains the same)
+            // (This row remains the same)
             ui.horizontal(|ui| {
                 let is_sheet_selected = state.selected_sheet_name.is_some();
-
-                // --- AI Button (Toggles Prepare/Cancel) ---
                 if state.ai_mode == AiModeState::Idle {
                     let can_prepare_ai = is_sheet_selected && !state.delete_row_mode_active;
-                    if ui.add_enabled(can_prepare_ai, egui::Button::new("✨ Prepare for AI"))
-                        .on_hover_text("Enable row selection and AI controls")
-                        .clicked()
-                    {
+                    if ui.add_enabled(can_prepare_ai, egui::Button::new("✨ Prepare for AI")).on_hover_text("Enable row selection and AI controls").clicked() {
                         state.ai_mode = AiModeState::Preparing;
                         state.ai_selected_rows.clear();
                     }
                 } else {
-                    // Show Cancel button if in any non-idle AI state
                     if ui.button("❌ Cancel AI Mode").clicked() {
                         state.reset_selection_modes();
                     }
                 }
-                // --- End AI Button ---
-
                 ui.separator();
-
-                // --- Delete Row Button (Toggles Mode/Cancel) ---
                 if !state.delete_row_mode_active {
                     let can_delete_row = is_sheet_selected && state.ai_mode == AiModeState::Idle;
-                    if ui.add_enabled(can_delete_row, egui::Button::new("🗑️ Delete Row"))
-                        .on_hover_text("Enable row selection for deletion")
-                        .clicked()
-                    {
+                    if ui.add_enabled(can_delete_row, egui::Button::new("🗑️ Delete Row")).on_hover_text("Enable row selection for deletion").clicked() {
                         state.delete_row_mode_active = true;
                         state.ai_selected_rows.clear();
                     }
                 } else {
-                    // Show Cancel button if delete mode is active
                     if ui.button("❌ Cancel Delete").clicked() {
                         state.delete_row_mode_active = false;
                         state.ai_selected_rows.clear();
                     }
                 }
-                // --- End Delete Row Button ---
-
                 ui.separator();
-
-                // --- Add Row Section ---
                 let can_add_row = is_sheet_selected && state.ai_mode == AiModeState::Idle && !state.delete_row_mode_active;
                 if ui.add_enabled(can_add_row, egui::Button::new("➕ Add Row")).clicked() {
                     if let Some(sheet_name) = &state.selected_sheet_name {
@@ -312,13 +297,11 @@ pub fn show_top_panel(
                         state.force_filter_recalculation = true;
                     }
                 }
-                // --- End Add Row Section ---
             });
         });
 }
 
-// --- Control Panel for Delete Row Mode ---
-// (show_delete_row_control_panel function remains the same)
+// --- show_delete_row_control_panel function remains the same ---
 pub(crate) fn show_delete_row_control_panel(
     ui: &mut egui::Ui,
     state: &mut EditorWindowState,
@@ -342,8 +325,7 @@ pub(crate) fn show_delete_row_control_panel(
                     sheet_name: sheet_name.clone(),
                     row_indices: state.ai_selected_rows.clone(),
                 });
-                // Reset state after sending event
-                state.delete_row_mode_active = false;
+                state.delete_row_mode_active = false; // Automatically exit delete mode
                 state.ai_selected_rows.clear();
                 state.force_filter_recalculation = true;
             }

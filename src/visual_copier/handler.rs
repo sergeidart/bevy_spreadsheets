@@ -1,20 +1,28 @@
 // src/visual_copier/handler.rs
 
 use bevy::prelude::*;
-use rfd::FileDialog; // Ensure rfd is a dependency if not already
+use rfd::FileDialog;
 
+use super::io::save_copier_manager_to_file; // Keep save import
 use super::resources::VisualCopierManager;
 use super::events::*; // Imports all events from events.rs
+
 
 /// Handles the `AddNewCopyTaskEvent` to add a new task to the manager.
 pub(crate) fn handle_add_new_copy_task_event_system(
     mut events: EventReader<AddNewCopyTaskEvent>,
     mut manager: ResMut<VisualCopierManager>,
+    mut state_changed_writer: EventWriter<VisualCopierStateChanged>,
 ) {
+    let mut changed = false;
     for _event in events.read() {
         let new_id = manager.get_next_id();
         manager.copy_tasks.push(super::resources::CopyTask::new(new_id));
         info!("VisualCopier: Added new copy task with ID {}", new_id);
+        changed = true;
+    }
+    if changed {
+        state_changed_writer.send(VisualCopierStateChanged);
     }
 }
 
@@ -22,18 +30,25 @@ pub(crate) fn handle_add_new_copy_task_event_system(
 pub(crate) fn handle_remove_copy_task_event_system(
     mut events: EventReader<RemoveCopyTaskEvent>,
     mut manager: ResMut<VisualCopierManager>,
+    mut state_changed_writer: EventWriter<VisualCopierStateChanged>,
 ) {
+    let mut changed = false;
     for event in events.read() {
         let id_to_remove = event.0;
-        if manager.copy_tasks.iter().any(|task| task.id == id_to_remove) {
-            manager.copy_tasks.retain(|task| task.id != id_to_remove);
+        let initial_len = manager.copy_tasks.len();
+        manager.copy_tasks.retain(|task| task.id != id_to_remove);
+        if manager.copy_tasks.len() < initial_len {
             info!("VisualCopier: Removed copy task with ID {}", id_to_remove);
+            changed = true;
         } else {
             warn!(
                 "VisualCopier: Attempted to remove non-existent task with ID {}",
                 id_to_remove
             );
         }
+    }
+    if changed {
+        state_changed_writer.send(VisualCopierStateChanged);
     }
 }
 
@@ -54,10 +69,9 @@ pub(crate) fn handle_pick_folder_request_system(
     }
 }
 
-/// MODIFIED: Handles the `FolderPickedEvent` to send specific update events.
+/// Handles the `FolderPickedEvent` to send specific update events.
 pub(crate) fn handle_folder_picked_event_system(
     mut events: EventReader<FolderPickedEvent>,
-    // EventWriters for the new specific update events
     mut update_task_start_folder_writer: EventWriter<UpdateTaskStartFolderEvent>,
     mut update_task_end_folder_writer: EventWriter<UpdateTaskEndFolderEvent>,
     mut update_top_panel_from_folder_writer: EventWriter<UpdateTopPanelFromFolderEvent>,
@@ -106,19 +120,27 @@ pub(crate) fn handle_folder_picked_event_system(
 pub(crate) fn apply_task_start_folder_update_system(
     mut events: EventReader<UpdateTaskStartFolderEvent>,
     mut manager: ResMut<VisualCopierManager>,
+    mut state_changed_writer: EventWriter<VisualCopierStateChanged>,
 ) {
+    let mut changed = false;
     for event in events.read() {
         if let Some(task) = manager.copy_tasks.iter_mut().find(|t| t.id == event.task_id) {
-            task.start_folder = event.path.clone();
-            task.status = if event.path.is_some() {
-                "Start folder set.".to_string()
-            } else {
-                "Start folder selection cancelled/cleared.".to_string()
-            };
-            info!("VisualCopier: Task {} start folder updated: {:?}", event.task_id, event.path);
+            if task.start_folder != event.path {
+                task.start_folder = event.path.clone();
+                task.status = if event.path.is_some() {
+                    "Start folder set.".to_string()
+                } else {
+                    "Start folder selection cancelled/cleared.".to_string()
+                };
+                info!("VisualCopier: Task {} start folder updated: {:?}", event.task_id, event.path);
+                changed = true;
+            }
         } else {
             warn!("VisualCopier: Task {} not found for start folder update.", event.task_id);
         }
+    }
+    if changed {
+        state_changed_writer.send(VisualCopierStateChanged);
     }
 }
 
@@ -126,19 +148,27 @@ pub(crate) fn apply_task_start_folder_update_system(
 pub(crate) fn apply_task_end_folder_update_system(
     mut events: EventReader<UpdateTaskEndFolderEvent>,
     mut manager: ResMut<VisualCopierManager>,
+    mut state_changed_writer: EventWriter<VisualCopierStateChanged>,
 ) {
+    let mut changed = false;
     for event in events.read() {
         if let Some(task) = manager.copy_tasks.iter_mut().find(|t| t.id == event.task_id) {
-            task.end_folder = event.path.clone();
-            task.status = if event.path.is_some() {
-                "End folder set.".to_string()
-            } else {
-                "End folder selection cancelled/cleared.".to_string()
-            };
-            info!("VisualCopier: Task {} end folder updated: {:?}", event.task_id, event.path);
+             if task.end_folder != event.path {
+                task.end_folder = event.path.clone();
+                task.status = if event.path.is_some() {
+                    "End folder set.".to_string()
+                } else {
+                    "End folder selection cancelled/cleared.".to_string()
+                };
+                info!("VisualCopier: Task {} end folder updated: {:?}", event.task_id, event.path);
+                changed = true;
+            }
         } else {
             warn!("VisualCopier: Task {} not found for end folder update.", event.task_id);
         }
+    }
+    if changed {
+        state_changed_writer.send(VisualCopierStateChanged);
     }
 }
 
@@ -146,15 +176,23 @@ pub(crate) fn apply_task_end_folder_update_system(
 pub(crate) fn apply_top_panel_from_folder_update_system(
     mut events: EventReader<UpdateTopPanelFromFolderEvent>,
     mut manager: ResMut<VisualCopierManager>,
+    mut state_changed_writer: EventWriter<VisualCopierStateChanged>,
 ) {
+    let mut changed = false;
     for event in events.read() {
-        manager.top_panel_from_folder = event.path.clone();
-        manager.top_panel_copy_status = if event.path.is_some() {
-            "Top panel 'From' folder set.".to_string()
-        } else {
-            "Top panel 'From' folder selection cancelled/cleared.".to_string()
-        };
-        info!("VisualCopier: Top panel 'From' folder updated: {:?}", event.path);
+        if manager.top_panel_from_folder != event.path {
+            manager.top_panel_from_folder = event.path.clone();
+            manager.top_panel_copy_status = if event.path.is_some() {
+                "Top panel 'From' folder set.".to_string()
+            } else {
+                "Top panel 'From' folder selection cancelled/cleared.".to_string()
+            };
+            info!("VisualCopier: Top panel 'From' folder updated: {:?}", event.path);
+            changed = true;
+        }
+    }
+    if changed {
+        state_changed_writer.send(VisualCopierStateChanged);
     }
 }
 
@@ -162,15 +200,23 @@ pub(crate) fn apply_top_panel_from_folder_update_system(
 pub(crate) fn apply_top_panel_to_folder_update_system(
     mut events: EventReader<UpdateTopPanelToFolderEvent>,
     mut manager: ResMut<VisualCopierManager>,
+    mut state_changed_writer: EventWriter<VisualCopierStateChanged>,
 ) {
+    let mut changed = false;
     for event in events.read() {
-        manager.top_panel_to_folder = event.path.clone();
-        manager.top_panel_copy_status = if event.path.is_some() {
-            "Top panel 'To' folder set.".to_string()
-        } else {
-            "Top panel 'To' folder selection cancelled/cleared.".to_string()
-        };
-        info!("VisualCopier: Top panel 'To' folder updated: {:?}", event.path);
+        if manager.top_panel_to_folder != event.path {
+            manager.top_panel_to_folder = event.path.clone();
+            manager.top_panel_copy_status = if event.path.is_some() {
+                "Top panel 'To' folder set.".to_string()
+            } else {
+                "Top panel 'To' folder selection cancelled/cleared.".to_string()
+            };
+            info!("VisualCopier: Top panel 'To' folder updated: {:?}", event.path);
+            changed = true;
+        }
+    }
+    if changed {
+        state_changed_writer.send(VisualCopierStateChanged);
     }
 }
 
@@ -178,25 +224,25 @@ pub(crate) fn apply_top_panel_to_folder_update_system(
 
 
 /// Handles the `ReverseTopPanelFoldersEvent`.
-/// CORRECTED: Uses Option::take() to avoid simultaneous mutable borrows.
 pub(crate) fn handle_reverse_top_panel_folders_event_system(
     mut events: EventReader<ReverseTopPanelFoldersEvent>,
     mut manager: ResMut<VisualCopierManager>,
+    mut state_changed_writer: EventWriter<VisualCopierStateChanged>,
 ) {
     let mut event_occurred = false;
     for _event in events.read() {
         event_occurred = true;
-        break; // Only need to act once per frame if event occurs
+        break;
     }
 
     if event_occurred {
-        // Safely swap the fields using a temporary variable and Option::take()
-        let temp = manager.top_panel_from_folder.take(); // Removes value from 'from', leaving None
-        manager.top_panel_from_folder = manager.top_panel_to_folder.take(); // Removes value from 'to', assigns to 'from'
-        manager.top_panel_to_folder = temp; // Assigns original 'from' value (now in temp) to 'to'
+        let temp = manager.top_panel_from_folder.take();
+        manager.top_panel_from_folder = manager.top_panel_to_folder.take();
+        manager.top_panel_to_folder = temp;
 
         manager.top_panel_copy_status = "Folders reversed.".to_string();
         info!("VisualCopier: Top panel folders reversed.");
+        state_changed_writer.send(VisualCopierStateChanged);
     }
 }
 
@@ -318,7 +364,7 @@ pub(crate) fn handle_copy_operation_result_event_system(
                     );
                 }
             }
-            None => {
+            None => { // This is for the Top Panel Copy
                 if manager.top_panel_copy_status.starts_with("Copying...") {
                      match &event.result {
                         Ok(success_msg) => manager.top_panel_copy_status = success_msg.clone(),
@@ -335,6 +381,21 @@ pub(crate) fn handle_copy_operation_result_event_system(
                     );
                 }
             }
+        }
+    }
+}
+
+/// Saves the VisualCopierManager state whenever a `VisualCopierStateChanged` event is received.
+pub(crate) fn handle_visual_copier_state_change_and_save_system(
+    mut events: EventReader<VisualCopierStateChanged>,
+    manager: Res<VisualCopierManager>, // Use Res, not ResMut if only reading for save
+) {
+    if !events.is_empty() {
+        events.clear(); // Consume all events for this frame
+        info!("VisualCopier: State changed, attempting immediate save...");
+        match save_copier_manager_to_file(&manager) {
+            Ok(_) => info!("VisualCopier: Successfully saved copier state after change."),
+            Err(e) => error!("VisualCopier: Failed to save copier state after change: {}", e),
         }
     }
 }
