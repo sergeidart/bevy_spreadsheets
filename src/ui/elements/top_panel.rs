@@ -4,9 +4,9 @@ use crate::sheets::events::{
 };
 use crate::sheets::resources::SheetRegistry;
 use crate::ui::elements::editor::state::{AiModeState, EditorWindowState};
-use bevy::prelude::*;
+// Added AppExit import
+use bevy::{app::AppExit, prelude::*}; // AppExit is an enum
 use bevy_egui::egui;
-// Removed: use std::path::Path; // Not directly used
 
 use crate::visual_copier::{
     resources::VisualCopierManager,
@@ -16,6 +16,7 @@ use crate::visual_copier::{
 };
 
 /// Helper function to truncate a path string to fit within a given pixel width.
+// (truncate_path_string function remains the same as previous version)
 fn truncate_path_string(path_str: &str, max_width_pixels: f32, ui: &egui::Ui) -> String {
     if path_str.is_empty() {
         return "".to_string();
@@ -80,11 +81,12 @@ pub fn show_top_panel(
     registry: &SheetRegistry,
     mut add_row_event_writer: EventWriter<AddSheetRowRequest>,
     mut upload_req_writer: EventWriter<RequestInitiateFileUpload>,
-    mut delete_rows_event_writer: EventWriter<RequestDeleteRows>,
+    // delete_rows_event_writer removed here
     mut copier_manager: ResMut<VisualCopierManager>,
     mut pick_folder_writer: EventWriter<PickFolderRequest>,
     mut queue_top_panel_copy_writer: EventWriter<QueueTopPanelCopyEvent>,
     mut reverse_folders_writer: EventWriter<ReverseTopPanelFoldersEvent>,
+    mut app_exit_writer: EventWriter<AppExit>,
 ) {
     egui::TopBottomPanel::top("main_top_controls_panel")
         .show_inside(ui, |ui| {
@@ -196,9 +198,22 @@ pub fn show_top_panel(
                 if ui.button("📋 Copy").clicked() {
                     state.show_quick_copy_bar = !state.show_quick_copy_bar;
                 }
+
+                // --- App Exit Button (Far Right) ---
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.add(egui::Button::new("❌ App Exit")).clicked() {
+                        info!("'App Exit' button clicked. Sending AppExit event.");
+                        // --- FIX: Send the AppExit::Success variant ---
+                        app_exit_writer.send(AppExit::Success);
+                        // --- END FIX ---
+                    }
+                });
+                // --- End App Exit Button ---
             });
 
+
             // Quick Copy Bar (conditionally rendered)
+            // (Remains the same)
             if state.show_quick_copy_bar {
                 ui.group(|ui| {
                     ui.horizontal(|ui| {
@@ -239,97 +254,49 @@ pub fn show_top_panel(
             }
             ui.separator();
 
-            // --- Row 2: AI Operations and Row Management ---
+            // --- Row 2: Mode Toggles and Add Row ---
+            // (Remains the same)
             ui.horizontal(|ui| {
                 let is_sheet_selected = state.selected_sheet_name.is_some();
 
-                // --- AI Section ---
-                match state.ai_mode {
-                    AiModeState::Idle => {
-                        if !state.delete_row_mode_active { // Only show if not in delete mode
-                            if ui.add_enabled(is_sheet_selected, egui::Button::new("✨ Prepare for AI")).clicked() {
-                                state.ai_mode = AiModeState::Preparing;
-                                state.ai_selected_rows.clear();
-                            }
-                        } else {
-                            // Optionally show a disabled button or nothing when delete mode is active
-                             ui.add_enabled(false, egui::Button::new("✨ Prepare for AI"))
-                                .on_disabled_hover_text("Cancel Delete Row mode first");
-                        }
+                // --- AI Button (Toggles Prepare/Cancel) ---
+                if state.ai_mode == AiModeState::Idle {
+                    let can_prepare_ai = is_sheet_selected && !state.delete_row_mode_active;
+                    if ui.add_enabled(can_prepare_ai, egui::Button::new("✨ Prepare for AI"))
+                        .on_hover_text("Enable row selection and AI controls")
+                        .clicked()
+                    {
+                        state.ai_mode = AiModeState::Preparing;
+                        state.ai_selected_rows.clear();
                     }
-                    AiModeState::Preparing => {
-                        ui.label(egui::RichText::new("AI Mode: Preparing Selection").color(egui::Color32::LIGHT_BLUE));
-                        // Edit AI Config Button
-                        if ui.button("Edit AI Config").on_hover_text("Edit sheet-specific AI model, rules, and parameters").clicked() {
-                            state.show_ai_rule_popup = true;
-                            state.ai_rule_popup_needs_init = true;
-                        }
-                        // General Settings Button (API Key)
-                        if ui.button("⚙ Settings").on_hover_text("Configure API Key (Session)").clicked() {
-                            state.show_settings_popup = true;
-                        }
-                        // Cancel AI Mode Button
-                        if ui.button("Cancel AI Mode").clicked() {
-                            state.reset_selection_modes();
-                        }
-                        // "Send to AI" button is shown in the ai_control_panel below
-                    }
-                    AiModeState::Submitting => {
-                        ui.label(egui::RichText::new("AI Mode: Submitting...").color(egui::Color32::LIGHT_BLUE));
-                        // Maybe add a cancel button here later if task cancellation is implemented
-                    }
-                    AiModeState::ResultsReady => {
-                        ui.label(egui::RichText::new("AI Mode: Results Ready").color(egui::Color32::LIGHT_GREEN));
-                        // "Review Suggestions" button shown in ai_control_panel
-                         if ui.button("Cancel AI Mode").clicked() { // Allow cancelling before review
-                            state.reset_selection_modes();
-                        }
-                    }
-                     AiModeState::Reviewing => {
-                        ui.label(egui::RichText::new("AI Mode: Reviewing...").color(egui::Color32::YELLOW));
-                         // Cancel/Apply/Skip shown in review panel
+                } else {
+                    // Show Cancel button if in any non-idle AI state
+                    if ui.button("❌ Cancel AI Mode").clicked() {
+                        state.reset_selection_modes();
                     }
                 }
-                // --- End AI Section ---
+                // --- End AI Button ---
 
                 ui.separator();
 
-                // --- Delete Row Section ---
-                if state.ai_mode == AiModeState::Idle { // Only allow entering delete mode if AI is Idle
-                    if ui.add_enabled(is_sheet_selected, egui::Button::new("🗑️ Delete Row")).clicked() {
-                        state.delete_row_mode_active = !state.delete_row_mode_active;
-                        if state.delete_row_mode_active {
-                            state.ai_selected_rows.clear();
-                        } else {
-                            state.ai_selected_rows.clear();
-                        }
-                    }
-                    if state.delete_row_mode_active {
-                        ui.label(egui::RichText::new("Row Deletion Mode").color(egui::Color32::YELLOW));
-                        let can_delete_selected_rows = is_sheet_selected && !state.ai_selected_rows.is_empty();
-                        if ui.add_enabled(can_delete_selected_rows, egui::Button::new("Delete Selected")).clicked() {
-                             if let Some(sheet_name) = &state.selected_sheet_name {
-                                delete_rows_event_writer.send(RequestDeleteRows {
-                                    category: state.selected_category.clone(),
-                                    sheet_name: sheet_name.clone(),
-                                    row_indices: state.ai_selected_rows.clone(),
-                                });
-                                state.ai_selected_rows.clear();
-                                state.delete_row_mode_active = false;
-                                state.force_filter_recalculation = true;
-                            }
-                        }
-                        if ui.button("Cancel Delete").clicked() {
-                            state.delete_row_mode_active = false;
-                            state.ai_selected_rows.clear();
-                        }
+                // --- Delete Row Button (Toggles Mode/Cancel) ---
+                if !state.delete_row_mode_active {
+                    let can_delete_row = is_sheet_selected && state.ai_mode == AiModeState::Idle;
+                    if ui.add_enabled(can_delete_row, egui::Button::new("🗑️ Delete Row"))
+                        .on_hover_text("Enable row selection for deletion")
+                        .clicked()
+                    {
+                        state.delete_row_mode_active = true;
+                        state.ai_selected_rows.clear();
                     }
                 } else {
-                     // Show disabled Delete Row button if AI mode is active
-                     ui.add_enabled(false, egui::Button::new("🗑️ Delete Row"))
-                        .on_disabled_hover_text("Cancel AI mode first");
+                    // Show Cancel button if delete mode is active
+                    if ui.button("❌ Cancel Delete").clicked() {
+                        state.delete_row_mode_active = false;
+                        state.ai_selected_rows.clear();
+                    }
                 }
-                // --- End Delete Row Section ---
+                // --- End Delete Row Button ---
 
                 ui.separator();
 
@@ -346,11 +313,40 @@ pub fn show_top_panel(
                     }
                 }
                 // --- End Add Row Section ---
-
-                // Removed the general settings button from the right end as it's now part of the AI Mode Preparing state
-                // ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                //     // ... settings button was here ...
-                // });
             });
         });
+}
+
+// --- Control Panel for Delete Row Mode ---
+// (show_delete_row_control_panel function remains the same)
+pub(crate) fn show_delete_row_control_panel(
+    ui: &mut egui::Ui,
+    state: &mut EditorWindowState,
+    mut delete_rows_event_writer: EventWriter<RequestDeleteRows>,
+) {
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new("Row Deletion Mode Active").color(egui::Color32::YELLOW).strong());
+        ui.separator();
+
+        let is_sheet_selected = state.selected_sheet_name.is_some();
+        let can_delete_selected_rows = is_sheet_selected && !state.ai_selected_rows.is_empty();
+        let delete_button_text = format!("Delete Selected ({})", state.ai_selected_rows.len());
+
+        if ui.add_enabled(can_delete_selected_rows, egui::Button::new(delete_button_text))
+             .on_hover_text("Delete the rows currently selected in the table below")
+             .clicked()
+        {
+            if let Some(sheet_name) = &state.selected_sheet_name {
+                delete_rows_event_writer.send(RequestDeleteRows {
+                    category: state.selected_category.clone(),
+                    sheet_name: sheet_name.clone(),
+                    row_indices: state.ai_selected_rows.clone(),
+                });
+                // Reset state after sending event
+                state.delete_row_mode_active = false;
+                state.ai_selected_rows.clear();
+                state.force_filter_recalculation = true;
+            }
+        }
+    });
 }

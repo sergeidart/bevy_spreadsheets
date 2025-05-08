@@ -1,19 +1,21 @@
 // src/visual_copier/io.rs
 
-use super::resources::CopyTask;
-use directories_next::ProjectDirs; // Ensure this crate is added to Cargo.toml
+// Use the Manager struct
+use super::resources::VisualCopierManager;
+use directories_next::ProjectDirs;
 use std::fs;
 use std::io::{self, BufReader, BufWriter};
 use std::path::PathBuf;
-use bevy::prelude::{error, info}; // Use bevy's logging macros
+use bevy::prelude::{error, info, warn}; // Use warn for specific cases
 
-// Constants for configuration directory and file
+// Constants remain the same
 const QUALIFIER: &str = "com";
 const ORGANIZATION: &str = "BevyAppOrg";
 const APPLICATION: &str = "BevyVisualCopierApp";
-const CONFIG_FILE: &str = "visual_copier_tasks.json";
+const CONFIG_FILE: &str = "visual_copier_manager_state.json"; // Renamed file
 
 /// Helper function to get the configuration file path.
+// (get_config_path function remains the same)
 fn get_config_path() -> io::Result<PathBuf> {
     if let Some(proj_dirs) = ProjectDirs::from(QUALIFIER, ORGANIZATION, APPLICATION) {
         let config_dir = proj_dirs.config_dir();
@@ -28,42 +30,42 @@ fn get_config_path() -> io::Result<PathBuf> {
     }
 }
 
-/// Loads copy tasks from the configuration file.
-pub fn load_copy_tasks_from_file() -> io::Result<Vec<CopyTask>> {
+
+/// Loads the VisualCopierManager state from the configuration file.
+/// Returns a default manager if the file doesn't exist or fails to parse.
+pub fn load_copier_manager_from_file() -> io::Result<VisualCopierManager> {
     let config_file = get_config_path()?;
 
     if !config_file.exists() {
-        info!("VisualCopier: Config file not found at {:?}. Starting with no tasks.", config_file);
-        return Ok(Vec::new()); // No file, so no tasks
+        info!("VisualCopier: Config file not found at {:?}. Starting with default state.", config_file);
+        return Ok(VisualCopierManager::default()); // Return default manager
     }
 
-    info!("VisualCopier: Loading copy tasks from {:?}", config_file);
-    let file = fs::File::open(&config_file)?; // Borrow config_file here
+    info!("VisualCopier: Loading copier state from {:?}", config_file);
+    let file = fs::File::open(&config_file)?;
     let reader = BufReader::new(file);
 
     match serde_json::from_reader(reader) {
-        Ok(tasks) => Ok(tasks),
+        Ok(manager) => Ok(manager),
         Err(e) => {
-            // Borrow config_file for the error message
-            error!("VisualCopier: Error loading or parsing config file {:?}: {}. Starting with no tasks.", &config_file, e);
-            Ok(Vec::new()) // Return default (empty Vec) on error
+            // Log error but still return a default manager
+            error!("VisualCopier: Error loading or parsing config file {:?}: {}. Starting with default state.", &config_file, e);
+            Ok(VisualCopierManager::default()) // Return default manager on error
         }
     }
 }
 
-/// Saves copy tasks to the configuration file.
-pub fn save_copy_tasks_to_file(copy_tasks: &[CopyTask]) -> io::Result<()> {
+/// Saves the VisualCopierManager state to the configuration file.
+pub fn save_copier_manager_to_file(manager: &VisualCopierManager) -> io::Result<()> {
     let config_file = get_config_path()?;
-    info!("VisualCopier: Saving {} copy tasks to {:?}", copy_tasks.len(), &config_file); // Borrow config_file
+    info!("VisualCopier: Saving {} tasks and top panel paths to {:?}", manager.copy_tasks.len(), &config_file);
 
-    let file = fs::File::create(&config_file)?; // Borrow config_file here
+    let file = fs::File::create(&config_file)?;
     let writer = BufWriter::new(file);
 
-    // Use map_err to handle potential serialization errors
-    serde_json::to_writer_pretty(writer, copy_tasks).map_err(|e| {
-        // Borrow config_file for the error message
-        error!("VisualCopier: Failed to serialize copy tasks to {:?}: {}", &config_file, e);
-        io::Error::new(io::ErrorKind::Other, e) // Convert serde error to io::Error
+    serde_json::to_writer_pretty(writer, manager).map_err(|e| {
+        error!("VisualCopier: Failed to serialize copier state to {:?}: {}", &config_file, e);
+        io::Error::new(io::ErrorKind::Other, e)
     })?;
 
     Ok(())

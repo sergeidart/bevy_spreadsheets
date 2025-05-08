@@ -8,7 +8,7 @@ use crate::sheets::events::AiTaskResult;
 use crate::sheets::resources::SheetRegistry;
 use crate::ui::systems::SendEvent;
 use crate::SessionApiKey;
-use gemini_client_rs::{types::{Content, ContentPart, GenerateContentRequest, PartResponse, Role, ToolConfig,DynamicRetrieval, DynamicRetrievalConfig},GeminiClient, GeminiError,}; // Ensure DynamicRetrieval types are correctly imported
+use gemini_client_rs::{types::{Content, ContentPart, GenerateContentRequest, PartResponse, Role, ToolConfig,DynamicRetrieval, DynamicRetrievalConfig},GeminiClient, GeminiError,};
 use serde_json::Value as JsonValue;
 use super::state::{AiModeState, EditorWindowState};
 
@@ -24,16 +24,34 @@ pub(super) fn show_ai_control_panel(
     session_api_key: &SessionApiKey,
 ) {
     ui.horizontal(|ui| {
+
+        // --- NEW: Settings Button ---
+        if ui.button("⚙ Settings").on_hover_text("Configure API Key (Session)").clicked() {
+            state.show_settings_popup = true;
+        }
+
+        // --- NEW: Edit AI Config Button ---
+        if ui.button("Edit AI Config").on_hover_text("Edit sheet-specific AI model, rules, and parameters").clicked() {
+            state.show_ai_rule_popup = true;
+            state.ai_rule_popup_needs_init = true;
+        }
+
+        ui.separator();
+
+        // --- Existing Status Label ---
         ui.label(format!("✨ AI Mode: {:?}", state.ai_mode));
         ui.separator();
 
-        let can_send = state.ai_mode == AiModeState::Preparing
+        // --- Existing Send to AI Button Logic ---
+        let can_send = (state.ai_mode == AiModeState::Preparing || state.ai_mode == AiModeState::ResultsReady) // Allow sending even if results are ready (resubmit)
             && !state.ai_selected_rows.is_empty()
             && session_api_key.0.is_some();
 
         let mut hover_text_send = "Send selected row(s) for AI processing (currently processes first selected)".to_string();
         if session_api_key.0.is_none() {
             hover_text_send = "API Key not set. Please set it in Settings.".to_string();
+        } else if state.ai_selected_rows.is_empty() {
+            hover_text_send = "Select at least one row first.".to_string();
         }
 
         let send_button_text = if state.ai_selected_rows.len() > 1 {
@@ -52,8 +70,12 @@ pub(super) fn show_ai_control_panel(
                 state.ai_selected_rows
             );
             state.ai_mode = AiModeState::Submitting;
+            state.ai_suggestions.clear(); // Clear previous suggestions on new submission
+            state.ai_review_queue.clear();
+            state.current_ai_suggestion_edit_buffer = None;
             ui.ctx().request_repaint();
 
+            // --- Task Spawning Logic (remains the same) ---
             let task_category = selected_category_clone.clone();
             let task_sheet_name =
                 selected_sheet_name_clone.clone().unwrap_or_default();
@@ -62,14 +84,14 @@ pub(super) fn show_ai_control_panel(
                 .iter()
                 .next()
                 .cloned()
-                .unwrap_or_default();
+                .unwrap_or_default(); // Still processes first selected for now
 
             let (
                 active_model_id,
                 general_rule_opt,
                 column_contexts,
                 row_data,
-                _generation_config, // Keep if you plan to use it later with a GenerationConfig struct
+                _generation_config,
                 enable_grounding,
             ) = {
                 let sheet_data_opt =
@@ -102,7 +124,7 @@ pub(super) fn show_ai_control_panel(
 
                 let grounding = metadata_opt_ref
                     .and_then(|m| m.requested_grounding_with_google_search)
-                    .unwrap_or_else(|| default_grounding_with_google_search().unwrap_or(true)); // Default to true if not specified
+                    .unwrap_or_else(|| default_grounding_with_google_search().unwrap_or(true));
 
                 (model_id, rule, contexts, data, gen_conf, grounding)
             };
@@ -175,11 +197,11 @@ pub(super) fn show_ai_control_panel(
                 let tools_config = if enable_grounding {
                     info!("Google Search Grounding is ENABLED for this request.");
                     Some(vec![
-                        ToolConfig::DynamicRetieval { // Using the corrected enum variant
+                        ToolConfig::DynamicRetieval {
                             google_search_retrieval: DynamicRetrieval {
                                 dynamic_retrieval_config: DynamicRetrievalConfig {
-                                    mode: "MODE_AUTO".to_string(), // or other valid modes like "MODE_DYNAMIC"
-                                    dynamic_threshold: 0.5, // Example threshold, adjust as needed if MODE_DYNAMIC
+                                    mode: "MODE_AUTO".to_string(),
+                                    dynamic_threshold: 0.5,
                                 },
                             },
                         }
@@ -195,7 +217,7 @@ pub(super) fn show_ai_control_panel(
                         parts: vec![ContentPart::Text(user_prompt_text.clone())],
                         role: Role::User,
                     }],
-                    tools: tools_config, // Pass the configured tools
+                    tools: tools_config,
                 };
 
                 match client.generate_content(model_name_to_use, &request).await {
@@ -225,7 +247,6 @@ pub(super) fn show_ai_control_panel(
                                 trimmed_text
                             };
 
-                            // Attempt to strip markdown fences first
                             let initial_text_for_bracket_search = if (bom_cleaned_text.starts_with("```json") || bom_cleaned_text.starts_with("```"))
                                 && bom_cleaned_text.ends_with("```") {
                                 let stripped = bom_cleaned_text
@@ -237,11 +258,10 @@ pub(super) fn show_ai_control_panel(
                                 stripped
                             } else {
                                 info!("No Markdown fences detected or not matching pattern. Using text as is (after BOM/trim) for bracket search: '{}'", bom_cleaned_text);
-                                bom_cleaned_text 
+                                bom_cleaned_text
                             };
 
-                            // --- New Logic: Extract content within the first complete '[]' pair ---
-                            let mut final_text_to_parse = initial_text_for_bracket_search; // Default to text after markdown stripping
+                            let mut final_text_to_parse = initial_text_for_bracket_search;
 
                             if !initial_text_for_bracket_search.is_empty() {
                                 let mut open_brackets = 0;
@@ -255,24 +275,22 @@ pub(super) fn show_ai_control_panel(
                                         }
                                         open_brackets += 1;
                                     } else if char_c == ']' {
-                                        if open_brackets > 0 { // Ensure there was an opening bracket to match
+                                        if open_brackets > 0 {
                                             open_brackets -= 1;
                                             if open_brackets == 0 && first_start_bracket_idx_opt.is_some() {
-                                                // This ']' closes the first '['
                                                 matching_end_bracket_idx_opt = Some(i);
-                                                break; // Found the complete first pair
+                                                break;
                                             }
                                         }
                                     }
                                 }
 
                                 if let (Some(start_idx), Some(end_idx)) = (first_start_bracket_idx_opt, matching_end_bracket_idx_opt) {
-                                    if end_idx > start_idx { // Sanity check for valid slice
+                                    if end_idx > start_idx {
                                         final_text_to_parse = &initial_text_for_bracket_search[start_idx..(end_idx + 1)];
                                         info!("Successfully extracted content by first matching brackets: '{}'", final_text_to_parse);
                                     } else {
                                         info!("Bracket indices invalid after matching (start_idx={}, end_idx={}). Will attempt to parse text after markdown strip: '{}'", start_idx, end_idx, initial_text_for_bracket_search);
-                                        // final_text_to_parse remains initial_text_for_bracket_search
                                     }
                                 } else {
                                     if first_start_bracket_idx_opt.is_some() && matching_end_bracket_idx_opt.is_none() {
@@ -280,11 +298,8 @@ pub(super) fn show_ai_control_panel(
                                     } else if first_start_bracket_idx_opt.is_none() {
                                          info!("No opening '[' found. Will attempt to parse text after markdown strip: '{}'", initial_text_for_bracket_search);
                                     }
-                                    // final_text_to_parse remains initial_text_for_bracket_search
                                 }
                             }
-                            // --- End of New Logic ---
-
 
                             if final_text_to_parse.is_empty() {
                                 let empty_after_clean_msg = format!(
@@ -350,17 +365,11 @@ pub(super) fn show_ai_control_panel(
                 })
                 .await;
             });
+            // --- End Task Spawning Logic ---
         }
+        // --- End Send to AI Button Logic ---
 
-        if state.ai_mode == AiModeState::Preparing
-            || state.ai_mode == AiModeState::ResultsReady
-        {
-            if ui.button("❌ Cancel AI Mode").clicked() {
-                info!("Cancelling AI mode.");
-                super::ai_helpers::exit_review_mode(state);
-            }
-        }
-
+        // --- Review Suggestions Button (conditionally shown) ---
         if state.ai_mode == AiModeState::ResultsReady {
             let num_results = state.ai_suggestions.len();
             if ui
@@ -383,10 +392,11 @@ pub(super) fn show_ai_control_panel(
                 }
             }
         }
+        // --- End Review Suggestions Button ---
 
         if state.ai_mode == AiModeState::Submitting {
             ui.spinner();
-            ui.label("Processing with AI...");
+            // ui.label("Processing with AI..."); // Label moved to status
         }
     });
 }

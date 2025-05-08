@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
-use thiserror::Error; // Keep the use statement
+use thiserror::Error;
 
 /// Represents a single copy task configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Reflect)]
@@ -38,9 +38,7 @@ impl CopyTask {
 }
 
 /// Error types for copy operations.
-// --- MODIFICATION: Add #[derive(Error)] ---
 #[derive(Error, Debug, Clone, Reflect)]
-// --- END MODIFICATION ---
 pub enum CopyError {
     #[error("I/O error: {0}")]
     Io(String), // Store String to be Reflect-friendly
@@ -81,14 +79,24 @@ impl From<fs_extra::error::Error> for CopyError {
 pub struct VisualCopierManager {
     pub copy_tasks: Vec<CopyTask>,
     pub next_id: usize,
+    // These top panel paths will now be saved/loaded
     pub top_panel_from_folder: Option<PathBuf>,
     pub top_panel_to_folder: Option<PathBuf>,
+    // Status should be transient, not saved
+    #[serde(skip, default = "default_status_string")] // Skip saving, provide default on load
+    #[reflect(skip_serializing)]
     pub top_panel_copy_status: String,
     // Transient state flags, not serialized
     #[serde(skip)]
     #[reflect(skip_serializing)]
     pub is_saving_on_exit: bool, // Flag to manage save on close
 }
+
+// Helper function needed for serde(default = ...) on skipped fields
+fn default_status_string() -> String {
+    "Idle".to_string()
+}
+
 
 impl VisualCopierManager {
     /// Gets the next available ID for a new copy task.
@@ -106,5 +114,16 @@ impl VisualCopierManager {
             .max()
             .map_or(0, |max_id| max_id + 1);
         debug!("VisualCopierManager: Recalculated next_id to {}", self.next_id);
+    }
+
+    /// Resets transient status fields after loading.
+    pub fn reset_transient_state(&mut self) {
+        self.top_panel_copy_status = default_status_string();
+        for task in self.copy_tasks.iter_mut() {
+            if task.status.starts_with("Copying...") || task.status.starts_with("Queued...") || task.status.starts_with("Error:") {
+                 task.status = "Idle".to_string(); // Reset status on load
+            }
+        }
+        self.is_saving_on_exit = false;
     }
 }
