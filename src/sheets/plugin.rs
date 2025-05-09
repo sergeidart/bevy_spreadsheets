@@ -9,9 +9,9 @@ use super::events::{
     RequestUpdateColumnName, RequestUpdateColumnValidator,
     SheetOperationFeedback, UpdateCellEvent, RequestUpdateColumnWidth,
     SheetDataModifiedInRegistryEvent, RequestSheetRevalidation,
-    RequestDeleteColumns, RequestAddColumn,
-    // NEW: Import RequestReorderColumn
-    RequestReorderColumn,
+    RequestDeleteColumns, RequestAddColumn, RequestReorderColumn,
+    // NEW: Import RequestCreateNewSheet
+    RequestCreateNewSheet,
 };
 use super::systems; 
 use crate::ui::systems::handle_ai_task_results; 
@@ -48,8 +48,9 @@ impl Plugin for SheetsPlugin {
 
         app.add_event::<AddSheetRowRequest>()
             .add_event::<RequestAddColumn>()
-            // NEW: Register RequestReorderColumn event
             .add_event::<RequestReorderColumn>()
+            // NEW: Register RequestCreateNewSheet event
+            .add_event::<RequestCreateNewSheet>()
             .add_event::<JsonSheetUploaded>()
             .add_event::<RequestRenameSheet>()
             .add_event::<RequestDeleteSheet>()
@@ -100,8 +101,9 @@ impl Plugin for SheetsPlugin {
                 systems::logic::handle_delete_request,
                 systems::logic::handle_add_row_request,
                 systems::logic::handle_add_column_request,
-                // NEW: Add system for reordering columns
                 systems::logic::handle_reorder_column_request,
+                // NEW: Add system for creating sheets
+                systems::logic::handle_create_new_sheet_request,
                 systems::logic::handle_delete_rows_request,
                 systems::logic::handle_delete_columns_request,
                 systems::logic::handle_update_column_name,

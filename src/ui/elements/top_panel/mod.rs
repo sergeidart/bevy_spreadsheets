@@ -1,0 +1,174 @@
+// src/ui/elements/top_panel/mod.rs
+use bevy::prelude::*;
+use bevy_egui::egui;
+
+use crate::sheets::{
+    events::{
+        AddSheetRowRequest, RequestAddColumn, RequestDeleteColumns, RequestDeleteRows,
+        RequestInitiateFileUpload,
+    },
+    resources::SheetRegistry,
+};
+use crate::ui::elements::editor::state::EditorWindowState;
+use crate::visual_copier::{
+    events::{
+        PickFolderRequest, QueueTopPanelCopyEvent, RequestAppExit, ReverseTopPanelFoldersEvent,
+        VisualCopierStateChanged,
+    },
+    resources::VisualCopierManager,
+};
+
+// Declare sub-modules
+mod sheet_management_bar;
+mod quick_copy_bar;
+mod sheet_interaction_modes;
+// MODIFIED: Make controls module public
+pub mod controls { 
+    // MODIFIED: Make delete_mode_panel public within controls
+    pub mod delete_mode_panel; 
+}
+
+// Re-export the main function that will be called by main_editor.rs
+pub use self::orchestrator::show_top_panel_orchestrator;
+
+// Keep truncate_path_string here
+pub(super) fn truncate_path_string(path_str: &str, max_width_pixels: f32, ui: &egui::Ui) -> String {
+    if path_str.is_empty() {
+        return "".to_string();
+    }
+    let font_id_val = egui::TextStyle::Body.resolve(ui.style());
+    let galley = ui.fonts(|f| {
+        f.layout_no_wrap(
+            path_str.to_string(),
+            font_id_val.clone(),
+            egui::Color32::PLACEHOLDER,
+        )
+    });
+
+    if galley.size().x <= max_width_pixels {
+        return path_str.to_string();
+    }
+
+    let ellipsis = "...";
+    let ellipsis_width = ui.fonts(|f| {
+        f.layout_no_wrap(
+            ellipsis.to_string(),
+            font_id_val.clone(),
+            egui::Color32::PLACEHOLDER,
+        )
+    })
+    .size()
+    .x;
+
+    if ellipsis_width > max_width_pixels {
+        let mut fitting_ellipsis = String::new();
+        let mut current_ellipsis_width = 0.0;
+        for c in ellipsis.chars() {
+            let char_s = c.to_string();
+            let char_w = ui.fonts(|f| {
+                f.layout_no_wrap(char_s.clone(), font_id_val.clone(), egui::Color32::PLACEHOLDER)
+            })
+            .size()
+            .x;
+            if current_ellipsis_width + char_w <= max_width_pixels {
+                fitting_ellipsis.push(c);
+                current_ellipsis_width += char_w;
+            } else {
+                break;
+            }
+        }
+        return fitting_ellipsis;
+    }
+
+    let mut truncated_len = 0;
+    let mut current_width = 0.0;
+
+    for (idx, char_instance) in path_str.char_indices() {
+        let char_s = match path_str.get(idx..idx + char_instance.len_utf8()) {
+            Some(s) => s,
+            None => break,
+        };
+        let char_w = ui.fonts(|f| {
+            f.layout_no_wrap(char_s.to_string(), font_id_val.clone(), egui::Color32::PLACEHOLDER)
+        })
+        .size()
+        .x;
+
+        if current_width + char_w + ellipsis_width > max_width_pixels {
+            break;
+        }
+        current_width += char_w;
+        truncated_len = idx + char_instance.len_utf8();
+    }
+
+    if truncated_len == 0 && !path_str.is_empty() {
+        return ellipsis.to_string();
+    } else if path_str.is_empty() {
+        return "".to_string();
+    }
+
+    format!("{}{}", &path_str[..truncated_len], ellipsis)
+}
+
+mod orchestrator {
+    use super::*; 
+    use crate::ui::elements::editor::state::SheetInteractionState; 
+
+    #[allow(clippy::too_many_arguments)]
+    // MODIFIED: Generic over 'w (world lifetime for EventWriters).
+    pub fn show_top_panel_orchestrator<'w>( 
+        ui: &mut egui::Ui,
+        state: &mut EditorWindowState,
+        registry: &SheetRegistry,
+        // MODIFIED: EventWriters now only use 'w
+        mut add_row_event_writer: EventWriter<'w, AddSheetRowRequest>,
+        mut add_column_event_writer: EventWriter<'w, RequestAddColumn>,
+        mut upload_req_writer: EventWriter<'w, RequestInitiateFileUpload>,
+        mut copier_manager: ResMut<VisualCopierManager>, 
+        mut pick_folder_writer: EventWriter<'w, PickFolderRequest>,
+        mut queue_top_panel_copy_writer: EventWriter<'w, QueueTopPanelCopyEvent>,
+        mut reverse_folders_writer: EventWriter<'w, ReverseTopPanelFoldersEvent>,
+        mut request_app_exit_writer: EventWriter<'w, RequestAppExit>,
+        mut state_changed_writer: EventWriter<'w, VisualCopierStateChanged>,
+    ) {
+        egui::TopBottomPanel::top("main_top_controls_panel_refactored")
+            .show_inside(ui, |ui| {
+                ui.horizontal(|ui_h| {
+                    sheet_management_bar::show_sheet_management_controls(
+                        ui_h,
+                        state,
+                        registry,
+                        sheet_management_bar::SheetManagementEventWriters {
+                            upload_req_writer: &mut upload_req_writer,
+                            request_app_exit_writer: &mut request_app_exit_writer,
+                        },
+                    );
+                });
+
+                quick_copy_bar::show_quick_copy_controls(
+                    ui, 
+                    state,
+                    &mut copier_manager, 
+                    quick_copy_bar::QuickCopyEventWriters {
+                        pick_folder_writer: &mut pick_folder_writer,
+                        queue_top_panel_copy_writer: &mut queue_top_panel_copy_writer,
+                        reverse_folders_writer: &mut reverse_folders_writer,
+                        state_changed_writer: &mut state_changed_writer,
+                    },
+                );
+                ui.separator();
+
+                ui.horizontal(|ui_h| {
+                    sheet_interaction_modes::show_sheet_interaction_mode_buttons(
+                        ui_h,
+                        state,
+                        sheet_interaction_modes::InteractionModeEventWriters {
+                            add_row_event_writer: &mut add_row_event_writer,
+                            add_column_event_writer: &mut add_column_event_writer,
+                        },
+                    );
+                });
+                ui.add_space(5.0); 
+            });
+    }
+}

@@ -5,19 +5,25 @@ use std::collections::HashSet;
 
 use super::definitions::{ColumnDefinition, ColumnValidator, SheetGridData}; 
 
+// NEW: Event for creating a new sheet
+#[derive(Event, Debug, Clone)]
+pub struct RequestCreateNewSheet {
+    pub desired_name: String,
+    pub category: Option<String>, // None for root category
+}
+
 #[derive(Event, Debug, Clone)]
 pub struct AddSheetRowRequest {
     pub category: Option<String>,
     pub sheet_name: String,
 }
-
+// ... (rest of the existing events remain the same) ...
 #[derive(Event, Debug, Clone)]
 pub struct RequestAddColumn {
     pub category: Option<String>,
     pub sheet_name: String,
 }
 
-// NEW: Event for reordering a column
 #[derive(Event, Debug, Clone)]
 pub struct RequestReorderColumn {
     pub category: Option<String>,

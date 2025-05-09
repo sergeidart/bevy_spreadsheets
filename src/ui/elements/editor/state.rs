@@ -54,13 +54,17 @@ pub struct ColumnDragState {
 pub struct EditorWindowState {
     pub selected_category: Option<String>,
     pub selected_sheet_name: Option<String>,
+    
+    // Popups related to selected sheet
     pub show_rename_popup: bool,
     pub rename_target_category: Option<String>,
     pub rename_target_sheet: String,
-    pub new_name_input: String,
+    pub new_name_input: String, // Used by rename sheet and new sheet
+    
     pub show_delete_confirm_popup: bool,
     pub delete_target_category: Option<String>,
     pub delete_target_sheet: String,
+    
     pub show_column_options_popup: bool,
     pub options_column_target_category: Option<String>,
     pub options_column_target_sheet: String,
@@ -75,6 +79,13 @@ pub struct EditorWindowState {
     pub options_link_target_column_index: Option<usize>,
     pub linked_column_cache: HashMap<(String, usize), HashSet<String>>,
 
+    // NEW: State for New Sheet Popup
+    pub show_new_sheet_popup: bool,
+    pub new_sheet_name_input: String, // Re-using new_name_input is an option, but separate is cleaner
+    pub new_sheet_target_category: Option<String>,
+
+
+    // AI Mode specific state
     pub ai_mode: AiModeState,
     pub ai_selected_rows: HashSet<usize>, 
     pub ai_suggestions: HashMap<usize, Vec<String>>,
@@ -93,21 +104,22 @@ pub struct EditorWindowState {
     pub ai_prompt_display: String,
     pub ai_raw_output_display: String,
 
+    // General Settings Popup
     pub show_settings_popup: bool, 
     pub settings_new_api_key_input: String,
 
+    // Table rendering helpers
     pub filtered_row_indices_cache: HashMap<(Option<String>, String, u64), Vec<usize>>,
     pub force_filter_recalculation: bool,
-
-    // MODIFIED: Renamed for clarity
     pub request_scroll_to_new_row: bool,
     pub scroll_to_row_index: Option<usize>,
     
+    // UI Toggles
     pub show_quick_copy_bar: bool,
 
+    // Core Interaction Mode
     pub current_interaction_mode: SheetInteractionState,
     pub selected_columns_for_deletion: HashSet<usize>,
-
     pub column_drag_state: ColumnDragState,
 }
 

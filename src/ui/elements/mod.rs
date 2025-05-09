@@ -4,5 +4,5 @@
 pub mod editor;
 // Popups module (directory)
 pub mod popups;
-// Top panel module (file)
+// MODIFIED: top_panel is now a directory/module
 pub mod top_panel;

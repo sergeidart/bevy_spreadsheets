@@ -10,7 +10,7 @@ use crate::sheets::{
         AddSheetRowRequest, RequestDeleteSheet, RequestInitiateFileUpload, RequestRenameSheet, 
         RequestUpdateColumnName, RequestUpdateColumnValidator, UpdateCellEvent, RequestDeleteRows, 
         RequestSheetRevalidation, SheetDataModifiedInRegistryEvent, RequestDeleteColumns,
-        RequestAddColumn, RequestReorderColumn,
+        RequestAddColumn, RequestReorderColumn, RequestCreateNewSheet,
     },
     resources::{SheetRegistry, SheetRenderCache},
 };
@@ -19,8 +19,12 @@ use crate::ui::{
         popups::{
             show_ai_rule_popup, show_column_options_popup,
             show_delete_confirm_popup, show_rename_popup, show_settings_popup,
+            show_new_sheet_popup,
         },
-        top_panel::{show_top_panel, show_delete_mode_control_panel},
+        top_panel::show_top_panel_orchestrator,
+        // Corrected path for public function, assuming delete_mode_panel.rs makes its function pub
+        top_panel::controls::delete_mode_panel::show_delete_mode_active_controls,
+
     },
     UiFeedbackState,
 };
@@ -42,31 +46,31 @@ use crate::visual_copier::{
     },
 };
 
-
+// SystemParam EventWriters are EventWriter<'w, 's, T>
+// The 's lifetime is part of the SystemParam machinery.
 #[derive(SystemParam)]
-pub struct SheetEventWriters<'w, 's> {
-    add_row: EventWriter<'w, AddSheetRowRequest>,
-    add_column: EventWriter<'w, RequestAddColumn>,
-    rename_sheet: EventWriter<'w, RequestRenameSheet>,
-    delete_sheet: EventWriter<'w, RequestDeleteSheet>,
-    upload_req: EventWriter<'w, RequestInitiateFileUpload>,
-    column_rename: EventWriter<'w, RequestUpdateColumnName>,
-    column_validator: EventWriter<'w, RequestUpdateColumnValidator>,
-    cell_update: EventWriter<'w, UpdateCellEvent>,
-    delete_rows: EventWriter<'w, RequestDeleteRows>,
-    delete_columns: EventWriter<'w, RequestDeleteColumns>,
-    reorder_column: EventWriter<'w, RequestReorderColumn>,
-    revalidate: EventWriter<'w, RequestSheetRevalidation>,
-    _marker: std::marker::PhantomData<&'s ()>,
+pub struct SheetEventWriters<'w> {
+    pub add_row: EventWriter<'w, AddSheetRowRequest>, 
+    pub add_column: EventWriter<'w, RequestAddColumn>, 
+    pub create_sheet: EventWriter<'w, RequestCreateNewSheet>, 
+    pub rename_sheet: EventWriter<'w, RequestRenameSheet>, 
+    pub delete_sheet: EventWriter<'w, RequestDeleteSheet>, 
+    pub upload_req: EventWriter<'w, RequestInitiateFileUpload>, 
+    pub column_rename: EventWriter<'w, RequestUpdateColumnName>, 
+    pub column_validator: EventWriter<'w, RequestUpdateColumnValidator>, 
+    pub cell_update: EventWriter<'w, UpdateCellEvent>, 
+    pub delete_rows: EventWriter<'w, RequestDeleteRows>, 
+    pub delete_columns: EventWriter<'w, RequestDeleteColumns>, 
+    pub reorder_column: EventWriter<'w, RequestReorderColumn>, 
+    pub revalidate: EventWriter<'w, RequestSheetRevalidation>, 
 }
 
 #[derive(SystemParam)]
-pub struct CopierEventWriters<'w, 's> {
-    pick_folder: EventWriter<'w, PickFolderRequest>,
-    queue_top_panel_copy: EventWriter<'w, QueueTopPanelCopyEvent>,
-    reverse_folders: EventWriter<'w, ReverseTopPanelFoldersEvent>,
-    state_changed: EventWriter<'w, VisualCopierStateChanged>,
-    _marker: std::marker::PhantomData<&'s ()>,
+pub struct CopierEventWriters<'w> {
+    pub pick_folder: EventWriter<'w, PickFolderRequest>, 
+    pub queue_top_panel_copy: EventWriter<'w, QueueTopPanelCopyEvent>, 
+    pub reverse_folders: EventWriter<'w, ReverseTopPanelFoldersEvent>, 
+    pub state_changed: EventWriter<'w, VisualCopierStateChanged>, 
 }
 
 
@@ -74,7 +78,9 @@ pub struct CopierEventWriters<'w, 's> {
 pub fn generic_sheet_editor_ui(
     mut contexts: EguiContexts,
     mut state: ResMut<EditorWindowState>,
+    // These SystemParams correctly bring in EventWriters with 'w and 's lifetimes
     mut sheet_writers: SheetEventWriters,
+    mut copier_writers: CopierEventWriters,
     mut registry: ResMut<SheetRegistry>,
     render_cache_res: Res<SheetRenderCache>,
     ui_feedback: Res<UiFeedbackState>,
@@ -84,8 +90,8 @@ pub fn generic_sheet_editor_ui(
     mut api_key_status_res: ResMut<ApiKeyDisplayStatus>,
     mut session_api_key_res: ResMut<SessionApiKey>,
     mut copier_manager: ResMut<VisualCopierManager>,
-    mut copier_writers: CopierEventWriters,
-    mut request_app_exit_writer: EventWriter<RequestAppExit>,
+    // This EventWriter is taken directly, not part of a SystemParam struct here
+    mut request_app_exit_writer: EventWriter<RequestAppExit>, 
 ) {
 
     let ctx = contexts.ctx_mut(); 
@@ -97,16 +103,14 @@ pub fn generic_sheet_editor_ui(
             debug!("main_editor: Received SheetDataModifiedInRegistryEvent for current sheet '{:?}/{}'. Forcing filter recalc.", event.category, event.sheet_name);
             state.force_filter_recalculation = true;
             
-            // MODIFIED: Scroll to top (index 0) when request_scroll_to_new_row is set
             if state.request_scroll_to_new_row {
-                // Check if sheet has rows before trying to scroll
                 if let Some(sheet_data) = registry.get_sheet(&event.category, &event.sheet_name) {
                     if !sheet_data.grid.is_empty() {
-                        state.scroll_to_row_index = Some(0); // Scroll to the top
+                        state.scroll_to_row_index = Some(0); 
                          debug!("Scrolling to new row at top (index 0) for sheet '{:?}/{}'.", event.category, event.sheet_name);
                     }
                 }
-                state.request_scroll_to_new_row = false; // Consume the request
+                state.request_scroll_to_new_row = false; 
             }
 
             if render_cache_res.get_cell_data(&event.category, &event.sheet_name, 0, 0).is_none()
@@ -121,24 +125,26 @@ pub fn generic_sheet_editor_ui(
     show_delete_confirm_popup(ctx, &mut state, &mut sheet_writers.delete_sheet);
     show_ai_rule_popup(ctx, &mut state, &mut registry);
     show_settings_popup(ctx, &mut state, &mut api_key_status_res, &mut session_api_key_res);
+    show_new_sheet_popup(ctx, &mut state, &mut sheet_writers.create_sheet);
 
 
     egui::CentralPanel::default().show(ctx, |ui| {
         let text_style = egui::TextStyle::Body;
         let row_height = ui.text_style_height(&text_style) + ui.style().spacing.item_spacing.y;
 
-        show_top_panel(
+        // Pass the individual EventWriter fields from the SystemParam structs
+        show_top_panel_orchestrator(
             ui,
             &mut state,
             &registry,
             sheet_writers.add_row,
-            sheet_writers.add_column, 
+            sheet_writers.add_column,
             sheet_writers.upload_req,
-            copier_manager,
+            copier_manager, 
             copier_writers.pick_folder,
             copier_writers.queue_top_panel_copy,
             copier_writers.reverse_folders,
-            request_app_exit_writer,
+            request_app_exit_writer, 
             copier_writers.state_changed,
         );
         
@@ -186,11 +192,14 @@ pub fn generic_sheet_editor_ui(
 
         if current_interaction_mode == SheetInteractionState::DeleteModeActive {
              if !control_panel_shown { ui.separator(); } 
-             show_delete_mode_control_panel(
+             show_delete_mode_active_controls(
                  ui,
                  &mut state,
-                 sheet_writers.delete_rows,
-                 sheet_writers.delete_columns, 
+                 // Pass mutable references to the EventWriters from the SystemParam struct
+                 crate::ui::elements::top_panel::controls::delete_mode_panel::DeleteModeEventWriters {
+                    delete_rows_event_writer: &mut sheet_writers.delete_rows,
+                    delete_columns_event_writer: &mut sheet_writers.delete_columns,
+                 }
              );
              control_panel_shown = true;
         }
@@ -198,7 +207,7 @@ pub fn generic_sheet_editor_ui(
         if control_panel_shown {
             ui.separator();
         }
-
+        
         if current_interaction_mode == SheetInteractionState::AiModeActive && state.ai_mode == AiModeState::Reviewing {
             if current_sheet_name_clone.is_some() {
                  draw_inline_ai_review_panel(ui, &mut state, &current_category_clone, &current_sheet_name_clone, &registry, &mut sheet_writers.cell_update);
@@ -249,12 +258,7 @@ pub fn generic_sheet_editor_ui(
                                }
                                if let Some(row_idx) = state.scroll_to_row_index {
                                     if num_cols > 0 { 
-                                        // MODIFIED: Ensure scroll_to_row is appropriate for TableBuilder
-                                        // The scroll_to_row method is on Table directly if using egui_extras 0.18+
-                                        // For older versions, or if TableBuilder doesn't have it directly,
-                                        // one might need to manage scroll through ScrollArea state.
-                                        // Assuming TableBuilder has scroll_to_row:
-                                        table_builder = table_builder.scroll_to_row(row_idx, Some(egui::Align::TOP)); // Scroll to TOP for new row at index 0
+                                        table_builder = table_builder.scroll_to_row(row_idx, Some(egui::Align::TOP)); 
                                     }
                                     state.scroll_to_row_index = None; 
                                }
