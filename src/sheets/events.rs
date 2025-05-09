@@ -3,13 +3,27 @@ use bevy::prelude::Event;
 use std::path::PathBuf;
 use std::collections::HashSet;
 
-use super::definitions::{ColumnDefinition, ColumnValidator, SheetGridData}; // SheetGridData not directly used but good for context
+use super::definitions::{ColumnDefinition, ColumnValidator, SheetGridData}; 
 
-// --- Existing Events ---
 #[derive(Event, Debug, Clone)]
 pub struct AddSheetRowRequest {
     pub category: Option<String>,
     pub sheet_name: String,
+}
+
+#[derive(Event, Debug, Clone)]
+pub struct RequestAddColumn {
+    pub category: Option<String>,
+    pub sheet_name: String,
+}
+
+// NEW: Event for reordering a column
+#[derive(Event, Debug, Clone)]
+pub struct RequestReorderColumn {
+    pub category: Option<String>,
+    pub sheet_name: String,
+    pub old_index: usize,
+    pub new_index: usize,
 }
 
 #[derive(Event, Debug, Clone)]
@@ -91,6 +105,13 @@ pub struct RequestDeleteRows {
 }
 
 #[derive(Event, Debug, Clone)]
+pub struct RequestDeleteColumns {
+    pub category: Option<String>,
+    pub sheet_name: String,
+    pub column_indices: HashSet<usize>,
+}
+
+#[derive(Event, Debug, Clone)]
 pub struct RequestUpdateColumnWidth {
     pub category: Option<String>,
     pub sheet_name: String,
@@ -101,21 +122,16 @@ pub struct RequestUpdateColumnWidth {
 #[derive(Event, Debug, Clone)]
 pub struct AiTaskResult {
     pub original_row_index: usize,
-    pub result: Result<Vec<String>, String>, // Parsed suggestions
-    pub raw_response: Option<String>,      // Raw JSON response or additional AI text
+    pub result: Result<Vec<String>, String>, 
+    pub raw_response: Option<String>,      
 }
 
-/// Event fired when sheet data (grid or metadata affecting structure/validation)
-/// is directly modified in the SheetRegistry.
-/// The new `handle_sheet_render_cache_update` system listens to this.
 #[derive(Event, Debug, Clone)]
 pub struct SheetDataModifiedInRegistryEvent {
     pub category: Option<String>,
     pub sheet_name: String,
 }
 
-/// Event to explicitly request a revalidation and render cache rebuild for a sheet.
-/// The new `handle_sheet_render_cache_update` system listens to this.
 #[derive(Event, Debug, Clone)]
 pub struct RequestSheetRevalidation {
     pub category: Option<String>,

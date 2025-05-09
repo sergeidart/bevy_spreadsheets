@@ -10,10 +10,19 @@ use std::hash::{Hash, Hasher};
 pub enum AiModeState {
     #[default]
     Idle,
-    Preparing, // Rows can be selected for AI or deletion
+    Preparing, 
     Submitting,
     ResultsReady,
     Reviewing,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SheetInteractionState {
+    #[default]
+    Idle, 
+    AiModeActive,
+    DeleteModeActive,
+    ColumnModeActive,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -34,6 +43,12 @@ fn calculate_filters_hash(filters: &Vec<Option<String>>) -> u64 {
     filters.hash(&mut s);
     s.finish()
 }
+
+#[derive(Debug, Clone, Default)]
+pub struct ColumnDragState {
+    pub source_index: Option<usize>, 
+}
+
 
 #[derive(Default, Resource)]
 pub struct EditorWindowState {
@@ -61,7 +76,7 @@ pub struct EditorWindowState {
     pub linked_column_cache: HashMap<(String, usize), HashSet<String>>,
 
     pub ai_mode: AiModeState,
-    pub ai_selected_rows: HashSet<usize>, // Reused for Delete Row mode
+    pub ai_selected_rows: HashSet<usize>, 
     pub ai_suggestions: HashMap<usize, Vec<String>>,
     pub ai_review_queue: Vec<usize>,
     pub ai_current_review_index: Option<usize>,
@@ -78,18 +93,22 @@ pub struct EditorWindowState {
     pub ai_prompt_display: String,
     pub ai_raw_output_display: String,
 
-    pub show_settings_popup: bool, // This is the old "settings" / AI Settings
+    pub show_settings_popup: bool, 
     pub settings_new_api_key_input: String,
 
     pub filtered_row_indices_cache: HashMap<(Option<String>, String, u64), Vec<usize>>,
     pub force_filter_recalculation: bool,
 
-    pub request_scroll_to_bottom_on_add: bool,
+    // MODIFIED: Renamed for clarity
+    pub request_scroll_to_new_row: bool,
     pub scroll_to_row_index: Option<usize>,
-
-    // New states for top panel UX pass
+    
     pub show_quick_copy_bar: bool,
-    pub delete_row_mode_active: bool,
+
+    pub current_interaction_mode: SheetInteractionState,
+    pub selected_columns_for_deletion: HashSet<usize>,
+
+    pub column_drag_state: ColumnDragState,
 }
 
 impl EditorWindowState {
@@ -109,10 +128,18 @@ impl EditorWindowState {
         }
     }
 
-    /// Call this when switching between AI mode and Delete Row mode to ensure clean state.
-    pub fn reset_selection_modes(&mut self) {
-        self.ai_mode = AiModeState::Idle;
-        self.delete_row_mode_active = false;
+    pub fn reset_interaction_modes_and_selections(&mut self) {
+        self.current_interaction_mode = SheetInteractionState::Idle;
+        self.ai_mode = AiModeState::Idle; 
         self.ai_selected_rows.clear();
+        self.selected_columns_for_deletion.clear();
+        
+        self.ai_suggestions.clear();
+        self.ai_review_queue.clear();
+        self.current_ai_suggestion_edit_buffer = None;
+        self.ai_review_column_choices.clear();
+        self.ai_current_review_index = None;
+
+        self.column_drag_state = ColumnDragState::default();
     }
 }

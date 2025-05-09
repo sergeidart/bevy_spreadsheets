@@ -1,15 +1,17 @@
 // src/ui/elements/editor/main_editor.rs
-// --- MODIFIED: Change AppExit import ---
-// use bevy::{app::AppExit, ecs::system::SystemParam, prelude::*};
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
-// --- END MODIFIED ---
-use bevy_egui::{egui, EguiContexts};
+use bevy_egui::{egui, EguiContexts}; 
 use bevy_tokio_tasks::TokioTasksRuntime;
 use egui_extras::{Column, TableBody, TableBuilder};
 use crate::sheets::{
     definitions::SheetMetadata,
-    events::{AddSheetRowRequest, RequestDeleteSheet, RequestInitiateFileUpload, RequestRenameSheet, RequestUpdateColumnName, RequestUpdateColumnValidator, UpdateCellEvent, RequestDeleteRows, RequestSheetRevalidation, SheetDataModifiedInRegistryEvent},
+    events::{
+        AddSheetRowRequest, RequestDeleteSheet, RequestInitiateFileUpload, RequestRenameSheet, 
+        RequestUpdateColumnName, RequestUpdateColumnValidator, UpdateCellEvent, RequestDeleteRows, 
+        RequestSheetRevalidation, SheetDataModifiedInRegistryEvent, RequestDeleteColumns,
+        RequestAddColumn, RequestReorderColumn,
+    },
     resources::{SheetRegistry, SheetRenderCache},
 };
 use crate::ui::{
@@ -18,11 +20,11 @@ use crate::ui::{
             show_ai_rule_popup, show_column_options_popup,
             show_delete_confirm_popup, show_rename_popup, show_settings_popup,
         },
-        top_panel::{show_top_panel, show_delete_row_control_panel},
+        top_panel::{show_top_panel, show_delete_mode_control_panel},
     },
     UiFeedbackState,
 };
-use super::state::{AiModeState, EditorWindowState};
+use super::state::{AiModeState, EditorWindowState, SheetInteractionState};
 use super::table_body::sheet_table_body;
 use super::table_header::sheet_table_header;
 use super::ai_control_panel::show_ai_control_panel;
@@ -36,17 +38,15 @@ use crate::visual_copier::{
     events::{
         PickFolderRequest, QueueTopPanelCopyEvent, ReverseTopPanelFoldersEvent,
         VisualCopierStateChanged,
-        // --- ADDED: Import RequestAppExit ---
         RequestAppExit,
-        // --- END ADDED ---
     },
 };
 
 
-// SystemParam for sheet-related event writers
 #[derive(SystemParam)]
 pub struct SheetEventWriters<'w, 's> {
     add_row: EventWriter<'w, AddSheetRowRequest>,
+    add_column: EventWriter<'w, RequestAddColumn>,
     rename_sheet: EventWriter<'w, RequestRenameSheet>,
     delete_sheet: EventWriter<'w, RequestDeleteSheet>,
     upload_req: EventWriter<'w, RequestInitiateFileUpload>,
@@ -54,11 +54,12 @@ pub struct SheetEventWriters<'w, 's> {
     column_validator: EventWriter<'w, RequestUpdateColumnValidator>,
     cell_update: EventWriter<'w, UpdateCellEvent>,
     delete_rows: EventWriter<'w, RequestDeleteRows>,
+    delete_columns: EventWriter<'w, RequestDeleteColumns>,
+    reorder_column: EventWriter<'w, RequestReorderColumn>,
     revalidate: EventWriter<'w, RequestSheetRevalidation>,
     _marker: std::marker::PhantomData<&'s ()>,
 }
 
-// SystemParam for visual copier event writers
 #[derive(SystemParam)]
 pub struct CopierEventWriters<'w, 's> {
     pick_folder: EventWriter<'w, PickFolderRequest>,
@@ -84,28 +85,30 @@ pub fn generic_sheet_editor_ui(
     mut session_api_key_res: ResMut<SessionApiKey>,
     mut copier_manager: ResMut<VisualCopierManager>,
     mut copier_writers: CopierEventWriters,
-    // --- MODIFIED: Changed parameter type ---
-    // mut app_exit_writer: EventWriter<AppExit>,
-    mut request_app_exit_writer: EventWriter<RequestAppExit>, // Changed writer type
-    // --- END MODIFIED ---
+    mut request_app_exit_writer: EventWriter<RequestAppExit>,
 ) {
 
-    let ctx = contexts.ctx_mut();
+    let ctx = contexts.ctx_mut(); 
     let initial_selected_category = state.selected_category.clone();
     let initial_selected_sheet_name = state.selected_sheet_name.clone();
 
-    // (Event handling, Popups remain the same)
     for event in sheet_data_modified_events.read() {
         if state.selected_category == event.category && state.selected_sheet_name.as_ref() == Some(&event.sheet_name) {
             debug!("main_editor: Received SheetDataModifiedInRegistryEvent for current sheet '{:?}/{}'. Forcing filter recalc.", event.category, event.sheet_name);
             state.force_filter_recalculation = true;
-            if state.request_scroll_to_bottom_on_add {
+            
+            // MODIFIED: Scroll to top (index 0) when request_scroll_to_new_row is set
+            if state.request_scroll_to_new_row {
+                // Check if sheet has rows before trying to scroll
                 if let Some(sheet_data) = registry.get_sheet(&event.category, &event.sheet_name) {
-                    let new_row_count = sheet_data.grid.len();
-                    if new_row_count > 0 { state.scroll_to_row_index = Some(new_row_count - 1); }
+                    if !sheet_data.grid.is_empty() {
+                        state.scroll_to_row_index = Some(0); // Scroll to the top
+                         debug!("Scrolling to new row at top (index 0) for sheet '{:?}/{}'.", event.category, event.sheet_name);
+                    }
                 }
-                state.request_scroll_to_bottom_on_add = false;
+                state.request_scroll_to_new_row = false; // Consume the request
             }
+
             if render_cache_res.get_cell_data(&event.category, &event.sheet_name, 0, 0).is_none()
                 && registry.get_sheet(&event.category, &event.sheet_name).map_or(false, |d| !d.grid.is_empty()) {
                  sheet_writers.revalidate.send(RequestSheetRevalidation { category: event.category.clone(), sheet_name: event.sheet_name.clone() });
@@ -124,33 +127,34 @@ pub fn generic_sheet_editor_ui(
         let text_style = egui::TextStyle::Body;
         let row_height = ui.text_style_height(&text_style) + ui.style().spacing.item_spacing.y;
 
-        // --- Top Panel ---
         show_top_panel(
             ui,
             &mut state,
             &registry,
             sheet_writers.add_row,
+            sheet_writers.add_column, 
             sheet_writers.upload_req,
             copier_manager,
             copier_writers.pick_folder,
             copier_writers.queue_top_panel_copy,
             copier_writers.reverse_folders,
-            // --- MODIFIED: Pass the RequestAppExit writer ---
-            request_app_exit_writer, // Pass the correct writer
-            // --- END MODIFIED ---
+            request_app_exit_writer,
             copier_writers.state_changed,
         );
+        
+        ui.add_space(10.0);
 
-        // (Rest of the CentralPanel UI remains the same)
         if initial_selected_category != state.selected_category || initial_selected_sheet_name != state.selected_sheet_name {
             debug!("Selected sheet or category changed by UI interaction.");
+            state.reset_interaction_modes_and_selections();
             if let Some(sheet_name) = &state.selected_sheet_name {
                 if render_cache_res.get_cell_data(&state.selected_category, sheet_name, 0, 0).is_none()
                     && registry.get_sheet(&state.selected_category, sheet_name).map_or(false, |d| !d.grid.is_empty()) {
                     sheet_writers.revalidate.send(RequestSheetRevalidation { category: state.selected_category.clone(), sheet_name: sheet_name.clone() });
                 }
             }
-            state.force_filter_recalculation = true;
+            state.force_filter_recalculation = true; 
+            state.ai_rule_popup_needs_init = true; 
         }
 
         if !ui_feedback.last_message.is_empty() {
@@ -160,12 +164,12 @@ pub fn generic_sheet_editor_ui(
 
         let current_category_clone = state.selected_category.clone();
         let current_sheet_name_clone = state.selected_sheet_name.clone();
-        let current_ai_mode = state.ai_mode;
-        let delete_row_mode_active = state.delete_row_mode_active;
+        let current_interaction_mode = state.current_interaction_mode;
 
         let mut control_panel_shown = false;
 
-        if matches!(current_ai_mode, AiModeState::Preparing | AiModeState::Submitting | AiModeState::ResultsReady) {
+        if current_interaction_mode == SheetInteractionState::AiModeActive &&
+           matches!(state.ai_mode, AiModeState::Preparing | AiModeState::Submitting | AiModeState::ResultsReady) {
             ui.separator();
             show_ai_control_panel(
                 ui,
@@ -180,31 +184,32 @@ pub fn generic_sheet_editor_ui(
             control_panel_shown = true;
          }
 
-        if delete_row_mode_active {
-             if !control_panel_shown { ui.separator(); }
-             show_delete_row_control_panel(
+        if current_interaction_mode == SheetInteractionState::DeleteModeActive {
+             if !control_panel_shown { ui.separator(); } 
+             show_delete_mode_control_panel(
                  ui,
                  &mut state,
                  sheet_writers.delete_rows,
+                 sheet_writers.delete_columns, 
              );
              control_panel_shown = true;
         }
-
+        
         if control_panel_shown {
             ui.separator();
         }
 
-        if current_ai_mode == AiModeState::Reviewing {
+        if current_interaction_mode == SheetInteractionState::AiModeActive && state.ai_mode == AiModeState::Reviewing {
             if current_sheet_name_clone.is_some() {
                  draw_inline_ai_review_panel(ui, &mut state, &current_category_clone, &current_sheet_name_clone, &registry, &mut sheet_writers.cell_update);
                  ui.add_space(5.0);
              } else {
                  warn!("In Review Mode but no sheet selected. Exiting review mode.");
-                 ai_helpers::exit_review_mode(&mut state);
+                 ai_helpers::exit_review_mode(&mut state); 
              }
          }
 
-        if current_ai_mode != AiModeState::Reviewing {
+        if !(current_interaction_mode == SheetInteractionState::AiModeActive && state.ai_mode == AiModeState::Reviewing) {
             if let Some(selected_name) = &current_sheet_name_clone {
                 let sheet_data_ref_opt = registry.get_sheet(&current_category_clone, selected_name);
                 if sheet_data_ref_opt.is_none() {
@@ -212,7 +217,7 @@ pub fn generic_sheet_editor_ui(
                     ui.vertical_centered(|ui| { ui.label(format!("Sheet '{:?}/{}' no longer exists...", current_category_clone, selected_name)); });
                     if state.selected_sheet_name.as_deref() == Some(selected_name.as_str()) {
                         state.selected_sheet_name = None;
-                        state.reset_selection_modes();
+                        state.reset_interaction_modes_and_selections();
                         state.force_filter_recalculation = true;
                     }
                 } else if let Some(sheet_data_ref) = sheet_data_ref_opt {
@@ -226,8 +231,8 @@ pub fn generic_sheet_editor_ui(
                         egui::ScrollArea::both()
                             .id_salt("main_sheet_table_scroll_area")
                             .auto_shrink([false; 2])
-                            .show(ui, |ui| {
-                               let mut table_builder = TableBuilder::new(ui)
+                            .show(ui, |ui| { 
+                               let mut table_builder = TableBuilder::new(ui) 
                                    .striped(true)
                                    .resizable(true)
                                    .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
@@ -243,13 +248,18 @@ pub fn generic_sheet_editor_ui(
                                     }
                                }
                                if let Some(row_idx) = state.scroll_to_row_index {
-                                    if num_cols > 0 {
-                                        table_builder = table_builder.scroll_to_row(row_idx, Some(egui::Align::BOTTOM));
+                                    if num_cols > 0 { 
+                                        // MODIFIED: Ensure scroll_to_row is appropriate for TableBuilder
+                                        // The scroll_to_row method is on Table directly if using egui_extras 0.18+
+                                        // For older versions, or if TableBuilder doesn't have it directly,
+                                        // one might need to manage scroll through ScrollArea state.
+                                        // Assuming TableBuilder has scroll_to_row:
+                                        table_builder = table_builder.scroll_to_row(row_idx, Some(egui::Align::TOP)); // Scroll to TOP for new row at index 0
                                     }
-                                    state.scroll_to_row_index = None;
+                                    state.scroll_to_row_index = None; 
                                }
                                table_builder
-                                   .header(20.0, |header_row| { sheet_table_header(header_row, metadata, selected_name, &mut state); })
+                                   .header(20.0, |mut header_row| { sheet_table_header(&mut header_row, ctx, metadata, selected_name, &mut state, sheet_writers.reorder_column); })
                                    .body(|body: TableBody| { sheet_table_body(body, row_height, &current_category_clone, selected_name, &registry, &render_cache_res, sheet_writers.cell_update, &mut state); });
                             });
                     } else {
@@ -257,27 +267,31 @@ pub fn generic_sheet_editor_ui(
                          ui.colored_label(egui::Color32::YELLOW, format!("Metadata missing for sheet '{:?}/{}'.", current_category_clone, selected_name));
                     }
                 }
-            } else {
-                 if current_category_clone.is_some() { ui.vertical_centered(|ui| { ui.label("Select a sheet from the category."); }); }
-                 else { ui.vertical_centered(|ui| { ui.label("Select a category and sheet, or upload JSON."); }); }
+            } else { 
+                 if current_category_clone.is_some() { 
+                    ui.vertical_centered(|ui| { ui.label("Select a sheet from the category, or upload a new one."); });
+                 }
+                 else { 
+                    ui.vertical_centered(|ui| { ui.label("Select a category and sheet, or upload JSON."); });
+                 }
             }
-        }
+        } 
 
         ui.separator();
         ui.strong("AI Output / Log:");
         egui::ScrollArea::vertical()
             .id_salt("ai_raw_output_log_scroll_area")
-            .max_height(100.0)
-            .auto_shrink([false; 2])
+            .max_height(100.0) 
+            .auto_shrink([false; 2]) 
             .show(ui, |ui| {
                 let mut display_text_clone = state.ai_raw_output_display.clone();
                 ui.add_sized(
-                    ui.available_size(),
+                    ui.available_size(), 
                     egui::TextEdit::multiline(&mut display_text_clone)
                         .font(egui::TextStyle::Monospace)
-                        .interactive(false)
-                        .desired_width(f32::INFINITY)
+                        .interactive(false) 
+                        .desired_width(f32::INFINITY) 
                 );
             });
-    }); // End CentralPanel
+    }); 
 }

@@ -1,8 +1,7 @@
 // src/sheets/plugin.rs
 use bevy::prelude::*;
 
-// ADDED SheetRenderCache, REMOVED SheetValidationState
-use super::resources::{SheetRegistry, SheetRenderCache}; //SheetValidationState
+use super::resources::{SheetRegistry, SheetRenderCache}; 
 use super::events::{
     AddSheetRowRequest, AiTaskResult, JsonSheetUploaded, RequestDeleteRows,
     RequestDeleteSheet, RequestDeleteSheetFile, RequestInitiateFileUpload,
@@ -10,20 +9,21 @@ use super::events::{
     RequestUpdateColumnName, RequestUpdateColumnValidator,
     SheetOperationFeedback, UpdateCellEvent, RequestUpdateColumnWidth,
     SheetDataModifiedInRegistryEvent, RequestSheetRevalidation,
+    RequestDeleteColumns, RequestAddColumn,
+    // NEW: Import RequestReorderColumn
+    RequestReorderColumn,
 };
-use super::systems; // Keep access to sheets::systems
-use crate::ui::systems::handle_ai_task_results; // Assuming this is where it's defined
-use crate::ui::systems::forward_events; // Assuming this is where it's defined
-// ADDED render cache update system, REMOVED validation system
-// use super::systems::logic::handle_sheet_revalidation_request;
+use super::systems; 
+use crate::ui::systems::handle_ai_task_results; 
+use crate::ui::systems::forward_events; 
 use super::systems::logic::handle_sheet_render_cache_update;
 
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 enum SheetSystemSet {
     UserInput,
-    ApplyChanges, // For systems that directly modify registry or send primary action events
-    ProcessAsyncResults, // New set for forwarding and handling async results
+    ApplyChanges, 
+    ProcessAsyncResults, 
     UpdateCaches, 
     FileOperations,
 }
@@ -32,25 +32,24 @@ pub struct SheetsPlugin;
 
 impl Plugin for SheetsPlugin {
     fn build(&self, app: &mut App) {
-        // Configure system sets for ordering
         app.configure_sets(
             Update,
             (
                 SheetSystemSet::UserInput,
                 SheetSystemSet::ApplyChanges.after(SheetSystemSet::UserInput),
-                // New set for async results processing
                 SheetSystemSet::ProcessAsyncResults.after(SheetSystemSet::ApplyChanges),
-                SheetSystemSet::UpdateCaches.after(SheetSystemSet::ProcessAsyncResults), // Update caches after results are processed
+                SheetSystemSet::UpdateCaches.after(SheetSystemSet::ProcessAsyncResults), 
                 SheetSystemSet::FileOperations.after(SheetSystemSet::UpdateCaches),
             ),
         );
 
-        // --- Resource Initialization ---
         app.init_resource::<SheetRegistry>();
         app.init_resource::<SheetRenderCache>();
 
-        // --- Event Registration ---
         app.add_event::<AddSheetRowRequest>()
+            .add_event::<RequestAddColumn>()
+            // NEW: Register RequestReorderColumn event
+            .add_event::<RequestReorderColumn>()
             .add_event::<JsonSheetUploaded>()
             .add_event::<RequestRenameSheet>()
             .add_event::<RequestDeleteSheet>()
@@ -63,12 +62,12 @@ impl Plugin for SheetsPlugin {
             .add_event::<RequestUpdateColumnValidator>()
             .add_event::<UpdateCellEvent>()
             .add_event::<RequestDeleteRows>()
-            .add_event::<AiTaskResult>() // Make sure it's registered
+            .add_event::<RequestDeleteColumns>()
+            .add_event::<AiTaskResult>() 
             .add_event::<RequestUpdateColumnWidth>()
             .add_event::<SheetDataModifiedInRegistryEvent>()
             .add_event::<RequestSheetRevalidation>();
 
-        // --- Startup Systems ---
         app.add_systems(
             Startup,
             (
@@ -78,13 +77,12 @@ impl Plugin for SheetsPlugin {
                 apply_deferred, 
                 systems::io::startup::scan_filesystem_for_unregistered_sheets,
                 apply_deferred, 
-                handle_sheet_render_cache_update, // Initial cache build
+                handle_sheet_render_cache_update, 
                 apply_deferred, 
             )
                 .chain(),
         );
 
-        // --- Update Systems (Organized into Sets) ---
         app.add_systems(
             Update,
             (systems::io::handle_initiate_file_upload,)
@@ -95,50 +93,44 @@ impl Plugin for SheetsPlugin {
             Update,
             (
                 systems::io::handle_process_upload_request,
-                apply_deferred, // Apply results of upload processing
-                systems::io::handle_json_sheet_upload, // This will modify registry
-                // apply_deferred, // Already handled by virtue of ProcessAsyncResults running after
+                apply_deferred, 
+                systems::io::handle_json_sheet_upload, 
 
                 systems::logic::handle_rename_request,
                 systems::logic::handle_delete_request,
                 systems::logic::handle_add_row_request,
+                systems::logic::handle_add_column_request,
+                // NEW: Add system for reordering columns
+                systems::logic::handle_reorder_column_request,
                 systems::logic::handle_delete_rows_request,
+                systems::logic::handle_delete_columns_request,
                 systems::logic::handle_update_column_name,
                 systems::logic::handle_update_column_validator,
                 systems::logic::handle_update_column_width,
-                systems::logic::handle_cell_update, // This sends SheetDataModifiedInRegistryEvent
-                // apply_deferred should ensure these changes are seen by ProcessAsyncResults if needed,
-                // but direct AI task results are handled separately.
+                systems::logic::handle_cell_update, 
             )
-                .chain() // apply_deferred within this chain might be excessive if each system sends events handled later
+                .chain() 
                 .in_set(SheetSystemSet::ApplyChanges),
         );
         
-        // Systems for processing results from async tasks (like AI)
         app.add_systems(
             Update,
             (
-                // Forward events first
-                forward_events::<AiTaskResult>, // Reads SendEvent<AiTaskResult> and sends AiTaskResult
-                apply_deferred, // Ensure AiTaskResult events are flushed
-                // Then handle the actual AiTaskResult events
-                handle_ai_task_results, // Reads AiTaskResult events
-                // apply_deferred, // Results of this (e.g., UI state changes) will be applied before UpdateCaches
+                forward_events::<AiTaskResult>, 
+                apply_deferred, 
+                handle_ai_task_results, 
             )
-            .chain() // Ensure sequential execution within this set
+            .chain() 
             .in_set(SheetSystemSet::ProcessAsyncResults)
         );
 
-
         app.add_systems(
             Update,
             (
-                handle_sheet_render_cache_update, // Reads events like SheetDataModifiedInRegistryEvent
-                // apply_deferred, // Apply render cache updates before file ops/UI
+                handle_sheet_render_cache_update, 
             )
             .in_set(SheetSystemSet::UpdateCaches) 
         );
-
 
         app.add_systems(
             Update,

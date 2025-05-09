@@ -4,8 +4,9 @@ use crate::sheets::{
     events::UpdateCellEvent,
     resources::{SheetRegistry, SheetRenderCache},
 };
+// MODIFIED: Import SheetInteractionState
+use crate::ui::elements::editor::state::{AiModeState, EditorWindowState, SheetInteractionState};
 use crate::ui::common::edit_cell_widget;
-use crate::ui::elements::editor::state::{AiModeState, EditorWindowState}; // AiModeState used for condition
 use bevy::log::{debug, trace, error, warn};
 use bevy::prelude::*;
 use bevy_egui::egui;
@@ -150,8 +151,11 @@ pub fn sheet_table_body(
 
                 for c_idx in 0..num_cols {
                     ui_row.col(|ui| {
-                        // Enable checkboxes if AI mode is preparing OR delete row mode is active
-                        let show_checkbox = (state.ai_mode == AiModeState::Preparing && !state.delete_row_mode_active) || state.delete_row_mode_active;
+                        // MODIFIED: Use current_interaction_mode to determine if checkboxes are shown
+                        let show_checkbox =
+                            (state.current_interaction_mode == SheetInteractionState::AiModeActive && state.ai_mode == AiModeState::Preparing) ||
+                            (state.current_interaction_mode == SheetInteractionState::DeleteModeActive);
+
                         if c_idx == 0 && show_checkbox {
                             let mut is_selected = state.ai_selected_rows.contains(&original_row_index);
                             let response = ui.add(egui::Checkbox::without_text(&mut is_selected));
