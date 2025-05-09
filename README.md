@@ -1,0 +1,3 @@
+Little Spreadsheet project. 
+It's partially written with AI, so not ideal.
+But it has AI autofill for rows, so...
