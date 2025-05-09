@@ -5,17 +5,16 @@ use bevy_egui::egui;
 use crate::sheets::events::{AddSheetRowRequest, RequestAddColumn};
 use crate::ui::elements::editor::state::{AiModeState, EditorWindowState, SheetInteractionState};
 
-// MODIFIED: Helper struct generic over borrow lifetime 'a, and EventWriter world lifetime 'w
+// Assuming this struct definition is intended to hold mutable references
 pub(super) struct InteractionModeEventWriters<'a, 'w> {
     pub add_row_event_writer: &'a mut EventWriter<'w, AddSheetRowRequest>,
     pub add_column_event_writer: &'a mut EventWriter<'w, RequestAddColumn>,
 }
 
-// MODIFIED: Function generic over 'a and 'w
 pub(super) fn show_sheet_interaction_mode_buttons<'a, 'w>(
     ui: &mut egui::Ui,
     state: &mut EditorWindowState,
-    mut event_writers: InteractionModeEventWriters<'a, 'w>,
+    mut event_writers: InteractionModeEventWriters<'a, 'w>, // Takes struct of mutable refs
 ) {
     let is_sheet_selected = state.selected_sheet_name.is_some();
 
@@ -26,7 +25,7 @@ pub(super) fn show_sheet_interaction_mode_buttons<'a, 'w>(
         .clicked()
     {
         if let Some(sheet_name) = &state.selected_sheet_name {
-            event_writers
+            event_writers // Use directly
                 .add_row_event_writer
                 .send(AddSheetRowRequest {
                     category: state.selected_category.clone(),
@@ -83,7 +82,7 @@ pub(super) fn show_sheet_interaction_mode_buttons<'a, 'w>(
             .clicked()
         {
             if let Some(sheet_name) = &state.selected_sheet_name {
-                event_writers
+                event_writers // Use directly
                     .add_column_event_writer
                     .send(RequestAddColumn {
                         category: state.selected_category.clone(),

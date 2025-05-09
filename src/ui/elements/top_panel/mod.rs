@@ -2,14 +2,15 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 
-use crate::sheets::{
-    events::{
-        AddSheetRowRequest, RequestAddColumn, RequestDeleteColumns, RequestDeleteRows,
-        RequestInitiateFileUpload,
-    },
-    resources::SheetRegistry,
+// Event imports for clarity, matching submodule needs
+use crate::sheets::events::{
+    AddSheetRowRequest, RequestAddColumn,
+    RequestInitiateFileUpload,
 };
+use crate::sheets::resources::SheetRegistry;
 use crate::ui::elements::editor::state::EditorWindowState;
+// Import the SheetEventWriters SystemParam struct
+use crate::ui::elements::editor::main_editor::SheetEventWriters;
 use crate::visual_copier::{
     events::{
         PickFolderRequest, QueueTopPanelCopyEvent, RequestAppExit, ReverseTopPanelFoldersEvent,
@@ -22,16 +23,13 @@ use crate::visual_copier::{
 mod sheet_management_bar;
 mod quick_copy_bar;
 mod sheet_interaction_modes;
-// MODIFIED: Make controls module public
-pub mod controls { 
-    // MODIFIED: Make delete_mode_panel public within controls
-    pub mod delete_mode_panel; 
+pub mod controls {
+    pub mod delete_mode_panel;
 }
 
 // Re-export the main function that will be called by main_editor.rs
 pub use self::orchestrator::show_top_panel_orchestrator;
 
-// Keep truncate_path_string here
 pub(super) fn truncate_path_string(path_str: &str, max_width_pixels: f32, ui: &egui::Ui) -> String {
     if path_str.is_empty() {
         return "".to_string();
@@ -111,20 +109,16 @@ pub(super) fn truncate_path_string(path_str: &str, max_width_pixels: f32, ui: &e
 }
 
 mod orchestrator {
-    use super::*; 
-    use crate::ui::elements::editor::state::SheetInteractionState; 
+    use super::*;
 
     #[allow(clippy::too_many_arguments)]
-    // MODIFIED: Generic over 'w (world lifetime for EventWriters).
-    pub fn show_top_panel_orchestrator<'w>( 
+    pub fn show_top_panel_orchestrator<'w>(
         ui: &mut egui::Ui,
         state: &mut EditorWindowState,
         registry: &SheetRegistry,
-        // MODIFIED: EventWriters now only use 'w
-        mut add_row_event_writer: EventWriter<'w, AddSheetRowRequest>,
-        mut add_column_event_writer: EventWriter<'w, RequestAddColumn>,
-        mut upload_req_writer: EventWriter<'w, RequestInitiateFileUpload>,
-        mut copier_manager: ResMut<VisualCopierManager>, 
+        sheet_writers: &mut SheetEventWriters<'w>, // Received as &mut
+        mut copier_manager: ResMut<VisualCopierManager>,
+        // MODIFIED: Make these EventWriter parameters mutable
         mut pick_folder_writer: EventWriter<'w, PickFolderRequest>,
         mut queue_top_panel_copy_writer: EventWriter<'w, QueueTopPanelCopyEvent>,
         mut reverse_folders_writer: EventWriter<'w, ReverseTopPanelFoldersEvent>,
@@ -139,17 +133,19 @@ mod orchestrator {
                         state,
                         registry,
                         sheet_management_bar::SheetManagementEventWriters {
-                            upload_req_writer: &mut upload_req_writer,
-                            request_app_exit_writer: &mut request_app_exit_writer,
-                        },
+                             upload_req_writer: &mut sheet_writers.upload_req,
+                             // MODIFIED: Pass &mut to the local mutable EventWriter
+                             request_app_exit_writer: &mut request_app_exit_writer,
+                        }
                     );
                 });
 
                 quick_copy_bar::show_quick_copy_controls(
-                    ui, 
+                    ui,
                     state,
-                    &mut copier_manager, 
+                    &mut copier_manager,
                     quick_copy_bar::QuickCopyEventWriters {
+                        // MODIFIED: Pass &mut to local mutable EventWriters
                         pick_folder_writer: &mut pick_folder_writer,
                         queue_top_panel_copy_writer: &mut queue_top_panel_copy_writer,
                         reverse_folders_writer: &mut reverse_folders_writer,
@@ -163,12 +159,12 @@ mod orchestrator {
                         ui_h,
                         state,
                         sheet_interaction_modes::InteractionModeEventWriters {
-                            add_row_event_writer: &mut add_row_event_writer,
-                            add_column_event_writer: &mut add_column_event_writer,
-                        },
+                            add_row_event_writer: &mut sheet_writers.add_row,
+                            add_column_event_writer: &mut sheet_writers.add_column,
+                        }
                     );
                 });
-                ui.add_space(5.0); 
+                ui.add_space(5.0);
             });
     }
 }

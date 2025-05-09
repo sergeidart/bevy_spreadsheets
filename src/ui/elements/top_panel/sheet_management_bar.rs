@@ -7,32 +7,25 @@ use crate::sheets::resources::SheetRegistry;
 use crate::ui::elements::editor::state::{EditorWindowState, SheetInteractionState};
 use crate::visual_copier::events::RequestAppExit;
 
-// MODIFIED: Helper struct generic over borrow lifetime 'a, and EventWriter world lifetime 'w
+// Helper struct signature might need to use owned EventWriter if cloned,
+// or keep &mut if that's the pattern. Let's assume it needs to match what orchestrator passes.
+// If orchestrator passes cloned owned writers, this struct changes.
+// If orchestrator continues to pass &mut EventWriter<T> (by reborrowing from &mut SheetEventWriters),
+// this struct definition is fine.
+
+// Sticking to the previous pattern of this struct taking mutable references to EventWriters
 pub(super) struct SheetManagementEventWriters<'a, 'w> {
     pub upload_req_writer: &'a mut EventWriter<'w, RequestInitiateFileUpload>,
     pub request_app_exit_writer: &'a mut EventWriter<'w, RequestAppExit>,
 }
 
 #[allow(clippy::too_many_arguments)]
-// MODIFIED: Function generic over 'a and 'w
 pub(super) fn show_sheet_management_controls<'a, 'w>(
     ui: &mut egui::Ui,
     state: &mut EditorWindowState,
     registry: &SheetRegistry,
-    mut event_writers: SheetManagementEventWriters<'a, 'w>,
+    mut event_writers: SheetManagementEventWriters<'a, 'w>, // Takes the struct of mutable refs
 ) {
-    // MODIFIED: Moved "Add New Sheet" button
-    // if ui
-    //     .button("➕ New Sheet")
-    //     .on_hover_text("Create a new empty sheet in the current category")
-    //     .clicked()
-    // {
-    //     state.new_sheet_target_category = state.selected_category.clone();
-    //     state.new_sheet_name_input.clear();
-    //     state.show_new_sheet_popup = true;
-    // }
-    // ui.separator();
-
     ui.label("Category:");
     let categories = registry.get_categories();
     let selected_category_text = state
@@ -80,9 +73,8 @@ pub(super) fn show_sheet_management_controls<'a, 'w>(
         state.force_filter_recalculation = true;
         state.ai_rule_popup_needs_init = true;
     }
-    ui.separator();
-
-    // MODIFIED: Added "Add New Sheet" button here
+    ui.separator(); 
+    
     if ui
         .button("➕ New Sheet")
         .on_hover_text("Create a new empty sheet in the current category")
@@ -99,7 +91,7 @@ pub(super) fn show_sheet_management_controls<'a, 'w>(
         .on_hover_text("Upload a JSON file (will be placed in Root category)")
         .clicked()
     {
-        event_writers.upload_req_writer.send(RequestInitiateFileUpload);
+        event_writers.upload_req_writer.send(RequestInitiateFileUpload); // Use directly
     }
     ui.separator();
 
@@ -110,7 +102,7 @@ pub(super) fn show_sheet_management_controls<'a, 'w>(
         |ui| {
             let selected_sheet_text = state.selected_sheet_name.as_deref().unwrap_or("--Select--");
             let sheet_response =
-                egui::ComboBox::from_id_source("sheet_selector_top_panel_refactored")
+                egui::ComboBox::from_id_source("sheet_selector_top_panel_refactored") 
                     .selected_text(selected_sheet_text)
                     .show_ui(ui, |ui| {
                         let original_selection = state.selected_sheet_name.clone();
@@ -187,7 +179,7 @@ pub(super) fn show_sheet_management_controls<'a, 'w>(
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         if ui.add(egui::Button::new("❌ App Exit")).clicked() {
             info!("'App Exit' button clicked. Sending RequestAppExit event.");
-            event_writers.request_app_exit_writer.send(RequestAppExit);
+            event_writers.request_app_exit_writer.send(RequestAppExit); // Use directly
         }
     });
 }
