@@ -1,6 +1,6 @@
 // src/ui/elements/popups/settings_popup.rs
 use crate::ui::elements::editor::EditorWindowState;
-use bevy::log::{error, info};
+use bevy::log::info;
 use bevy_egui::egui;
 use crate::ApiKeyDisplayStatus;
 use crate::SessionApiKey;

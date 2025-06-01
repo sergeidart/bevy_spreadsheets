@@ -1,6 +1,6 @@
 // src/sheets/systems/logic/update_column_validator.rs
 use crate::sheets::{
-    definitions::{ColumnDataType, ColumnDefinition, ColumnValidator, SheetMetadata}, // Added ColumnDefinition
+    definitions::{ColumnDataType, ColumnValidator, SheetMetadata}, // Added ColumnDefinition
     events::{RequestUpdateColumnValidator, SheetOperationFeedback},
     resources::SheetRegistry,
     systems::io::save::save_single_sheet,
@@ -176,7 +176,7 @@ pub fn handle_update_column_validator(
                                 old_type, new_basic_type
                             );
                         }
-                        feedback_writer.send(SheetOperationFeedback {
+                        feedback_writer.write(SheetOperationFeedback {
                             message: full_msg,
                             is_error: false,
                         });
@@ -203,7 +203,7 @@ pub fn handle_update_column_validator(
                     err_msg
                 );
                 error!("{}", msg);
-                feedback_writer.send(SheetOperationFeedback {
+                feedback_writer.write(SheetOperationFeedback {
                     message: msg,
                     is_error: true,
                 });

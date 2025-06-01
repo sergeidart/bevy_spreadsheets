@@ -47,27 +47,11 @@ pub fn get_full_metadata_path(base_data_path: &Path, metadata: &SheetMetadata) -
     path
 }
 
-
-// --- Public Re-exports for Plugin ---
-// Re-export necessary items from submodules
-
-// Runtime Load/Upload systems (from load.rs)
 pub use load::{
     handle_json_sheet_upload, handle_initiate_file_upload,
     handle_process_upload_request,
 };
 // Save systems (from save.rs)
 pub use save::{
-    handle_delete_sheet_file_request, handle_rename_sheet_file_request,
-    save_single_sheet,
+    handle_delete_sheet_file_request, handle_rename_sheet_file_request
 };
-
-// Startup systems (re-exported from startup/mod.rs)
-// These keep the same access path for the plugin: systems::io::startup::*
-// pub use startup::{
-//     register_default_sheets_if_needed,
-//     load_data_for_registered_sheets,
-//     scan_filesystem_for_unregistered_sheets,
-// };
-// NOTE: Re-exports are now handled within startup/mod.rs to keep io/mod.rs cleaner.
-// The plugin will access them via `systems::io::startup::function_name`.

@@ -6,7 +6,7 @@ use crate::sheets::{
     systems::io::save::save_single_sheet,
 };
 use bevy::prelude::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 pub fn handle_delete_columns_request(
     mut events: EventReader<RequestDeleteColumns>,
@@ -79,7 +79,7 @@ pub fn handle_delete_columns_request(
                     metadata.ensure_column_consistency(); // Recalculate consistency if needed
                     operation_successful = true;
                     metadata_cache = Some(metadata.clone());
-                    data_modified_writer.send(SheetDataModifiedInRegistryEvent {
+                    data_modified_writer.write(SheetDataModifiedInRegistryEvent {
                         category: category.clone(),
                         sheet_name: sheet_name.clone(),
                     });
@@ -108,7 +108,7 @@ pub fn handle_delete_columns_request(
                 base_msg
             };
             info!("{}", final_msg);
-            feedback_writer.send(SheetOperationFeedback {
+            feedback_writer.write(SheetOperationFeedback {
                 message: final_msg,
                 is_error: error_message.is_some(),
             });
@@ -126,7 +126,7 @@ pub fn handle_delete_columns_request(
                 "Failed to delete columns from '{:?}/{}': {}",
                 category, sheet_name, err
             );
-            feedback_writer.send(SheetOperationFeedback {
+            feedback_writer.write(SheetOperationFeedback {
                 message: format!(
                     "Column delete failed for '{:?}/{}': {}",
                     category, sheet_name, err

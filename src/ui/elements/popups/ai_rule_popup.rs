@@ -104,17 +104,17 @@ pub fn show_ai_rule_popup(
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label("Temperature:");
-                        ui.add(egui::DragValue::new(&mut state.ai_temperature_input).speed(0.01).clamp_range(0.0..=2.0))
+                        ui.add(egui::DragValue::new(&mut state.ai_temperature_input).speed(0.01).range(0.0..=2.0))
                             .on_hover_text("Controls randomness. Lower is more deterministic (e.g., 0.2), higher is more creative (e.g., 0.9). Default: 0.9");
                     });
                     ui.horizontal(|ui| {
                         ui.label("Top-K:");
-                        ui.add(egui::DragValue::new(&mut state.ai_top_k_input).speed(1.0).clamp_range(1..=100))
+                        ui.add(egui::DragValue::new(&mut state.ai_top_k_input).speed(1.0).range(1..=100))
                             .on_hover_text("Considers the top K most likely tokens at each step. Set to 1 for greedy. Default: 1");
                     });
                     ui.horizontal(|ui| {
                         ui.label("Top-P:");
-                        ui.add(egui::DragValue::new(&mut state.ai_top_p_input).speed(0.01).clamp_range(0.0..=1.0))
+                        ui.add(egui::DragValue::new(&mut state.ai_top_p_input).speed(0.01).range(0.0..=1.0))
                             .on_hover_text("Considers tokens with a cumulative probability mass of P. 1.0 means no filtering by probability. Default: 1.0");
                     });
                 });

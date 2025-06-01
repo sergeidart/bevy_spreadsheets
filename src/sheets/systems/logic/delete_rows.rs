@@ -67,7 +67,7 @@ pub fn handle_delete_rows_request(
                 // Cache metadata for saving if deletion occurred
                 metadata_cache = sheet_data.metadata.clone();
                 // Send data modified event
-                data_modified_writer.send(SheetDataModifiedInRegistryEvent {
+                data_modified_writer.write(SheetDataModifiedInRegistryEvent {
                     category: category.clone(),
                     sheet_name: sheet_name.clone(),
                 });
@@ -92,7 +92,7 @@ pub fn handle_delete_rows_request(
                 base_msg
             };
             info!("{}", final_msg); // Log full message
-            feedback_writer.send(SheetOperationFeedback {
+            feedback_writer.write(SheetOperationFeedback {
                 message: final_msg,
                 is_error: error_message.is_some(), // Mark as error only if partial failure occurred
             });
@@ -107,7 +107,7 @@ pub fn handle_delete_rows_request(
         } else if let Some(err) = error_message {
             // Only send feedback if the whole operation failed (e.g., sheet not found)
             error!("Failed to delete rows from '{:?}/{}': {}", category, sheet_name, err);
-            feedback_writer.send(SheetOperationFeedback {
+            feedback_writer.write(SheetOperationFeedback {
                 message: format!("Delete failed for '{:?}/{}': {}", category, sheet_name, err),
                 is_error: true,
             });

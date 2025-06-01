@@ -106,7 +106,7 @@ fn set_window_icon(
      primary_window_query: Query<Entity, With<PrimaryWindow>>,
      windows: NonSend<bevy::winit::WinitWindows>,
  ) {
-     let Ok(primary_entity) = primary_window_query.get_single() else {
+     let Ok(primary_entity) = primary_window_query.single() else {
          warn!("Could not find single primary window to set icon.");
          return;
      };

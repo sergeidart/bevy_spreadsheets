@@ -59,7 +59,7 @@ pub fn handle_reorder_column_request(
                     metadata.ensure_column_consistency(); // Just in case
                     operation_successful = true;
                     metadata_cache = Some(metadata.clone());
-                    data_modified_writer.send(SheetDataModifiedInRegistryEvent {
+                    data_modified_writer.write(SheetDataModifiedInRegistryEvent {
                         category: category.clone(),
                         sheet_name: sheet_name.clone(),
                     });
@@ -88,7 +88,7 @@ pub fn handle_reorder_column_request(
                 old_index, new_index, category, sheet_name
             );
             info!("{}", msg);
-            feedback_writer.send(SheetOperationFeedback {
+            feedback_writer.write(SheetOperationFeedback {
                 message: msg,
                 is_error: false,
             });
@@ -100,7 +100,7 @@ pub fn handle_reorder_column_request(
                 "Failed to reorder column in '{:?}/{}': {}",
                 category, sheet_name, err
             );
-            feedback_writer.send(SheetOperationFeedback {
+            feedback_writer.write(SheetOperationFeedback {
                 message: format!(
                     "Column reorder failed for '{:?}/{}': {}",
                     category, sheet_name, err

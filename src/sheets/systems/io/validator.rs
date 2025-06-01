@@ -1,6 +1,6 @@
 // src/sheets/systems/io/validator.rs
 use crate::sheets::{
-    definitions::{SheetGridData, SheetMetadata}, // Keep SheetMetadata import
+    definitions::SheetMetadata,
     events::SheetOperationFeedback,               // Use the specific event
     resources::SheetRegistry,
 };
@@ -47,7 +47,7 @@ pub fn validate_sheet_name_for_upload(
         let msg = format!("Sheet name '{}' already exists (possibly in another category). Upload will overwrite/update if it's in the Root category, or fail if the name exists elsewhere.", trimmed_name);
         warn!("{}", msg); // Log internally
                          // Make this a warning, not an error, as upload logic might handle replacement.
-        feedback_writer.send(SheetOperationFeedback {
+        feedback_writer.write(SheetOperationFeedback {
             message: msg,
             is_error: false, // It's a warning about potential overwrite
         });

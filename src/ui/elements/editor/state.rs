@@ -1,10 +1,7 @@
 // src/ui/elements/editor/state.rs
 use crate::sheets::definitions::ColumnDataType;
-use crate::sheets::SheetRegistry;
-use bevy::log::debug;
 use bevy::prelude::Resource;
 use std::collections::{HashMap, HashSet};
-use std::hash::{Hash, Hasher};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AiModeState {
@@ -36,12 +33,6 @@ pub enum ValidatorTypeChoice {
 pub enum ReviewChoice {
     Original,
     AI,
-}
-
-fn calculate_filters_hash(filters: &Vec<Option<String>>) -> u64 {
-    let mut s = std::collections::hash_map::DefaultHasher::new();
-    filters.hash(&mut s);
-    s.finish()
 }
 
 #[derive(Debug, Clone, Default)]
@@ -101,7 +92,6 @@ pub struct EditorWindowState {
     pub ai_top_p_input: f32,
     pub show_ai_rule_popup: bool,
     pub ai_rule_popup_needs_init: bool,
-    pub ai_prompt_display: String,
     pub ai_raw_output_display: String,
 
     // General Settings Popup
@@ -124,21 +114,6 @@ pub struct EditorWindowState {
 }
 
 impl EditorWindowState {
-    pub fn invalidate_current_sheet_filter_cache(&mut self, registry: &SheetRegistry) {
-        if let Some(sheet_name) = &self.selected_sheet_name {
-            let cat = self.selected_category.clone();
-            let name = sheet_name.clone();
-            if let Some(sheet_data) = registry.get_sheet(&cat, &name) {
-                if let Some(metadata) = &sheet_data.metadata {
-                    let filters_hash = calculate_filters_hash(&metadata.get_filters());
-                    let cache_key = (cat.clone(), name.clone(), filters_hash);
-                    self.filtered_row_indices_cache.remove(&cache_key);
-                }
-            }
-            self.force_filter_recalculation = true;
-            debug!("Invalidated filter cache for sheet: '{:?}/{}'", cat, name);
-        }
-    }
 
     pub fn reset_interaction_modes_and_selections(&mut self) {
         self.current_interaction_mode = SheetInteractionState::Idle;

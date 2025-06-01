@@ -34,7 +34,7 @@ pub(super) fn process_editor_events_and_state(
 
             if render_cache.get_cell_data(&event.category, &event.sheet_name, 0, 0).is_none()
                 && registry.get_sheet(&event.category, &event.sheet_name).map_or(false, |d| !d.grid.is_empty()) {
-                 sheet_writers.revalidate.send(RequestSheetRevalidation { category: event.category.clone(), sheet_name: event.sheet_name.clone() });
+                 sheet_writers.revalidate.write(RequestSheetRevalidation { category: event.category.clone(), sheet_name: event.sheet_name.clone() });
             }
         }
     }
@@ -45,7 +45,7 @@ pub(super) fn process_editor_events_and_state(
         if let Some(sheet_name) = &state.selected_sheet_name {
             if render_cache.get_cell_data(&state.selected_category, sheet_name, 0, 0).is_none()
                 && registry.get_sheet(&state.selected_category, sheet_name).map_or(false, |d| !d.grid.is_empty()) {
-                sheet_writers.revalidate.send(RequestSheetRevalidation { category: state.selected_category.clone(), sheet_name: sheet_name.clone() });
+                sheet_writers.revalidate.write(RequestSheetRevalidation { category: state.selected_category.clone(), sheet_name: sheet_name.clone() });
             }
         }
         state.force_filter_recalculation = true;

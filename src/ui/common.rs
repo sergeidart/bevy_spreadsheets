@@ -1,6 +1,6 @@
 // src/ui/common.rs
 use bevy::prelude::*;
-use bevy_egui::egui::{self, Color32, Id, Response, Sense};
+use bevy_egui::egui::{self, Color32, Response, Sense};
 use std::collections::HashSet;
 // use std::str::FromStr; // Not strictly needed if parsing logic moves
 
@@ -67,7 +67,7 @@ pub fn edit_cell_widget(
         ValidationState::Invalid => Color32::from_rgba_unmultiplied(80, 20, 20, 180),
     };
 
-    let frame = egui::Frame::none()
+    let frame = egui::Frame::NONE
         .inner_margin(egui::Margin::symmetric(2, 1))
         .fill(bg_color);
 

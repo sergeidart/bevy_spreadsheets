@@ -7,12 +7,11 @@ use crate::sheets::{
 // MODIFIED: Import SheetInteractionState
 use crate::ui::elements::editor::state::{AiModeState, EditorWindowState, SheetInteractionState};
 use crate::ui::common::edit_cell_widget;
-use bevy::log::{debug, trace, error, warn};
+use bevy::log::{debug, error, warn};
 use bevy::prelude::*;
 use bevy_egui::egui;
 use egui_extras::{TableBody, TableRow};
 use std::hash::{Hash, Hasher};
-use std::collections::HashSet;
 
 fn calculate_filters_hash(filters: &Vec<Option<String>>) -> u64 {
     let mut s = std::collections::hash_map::DefaultHasher::new();
@@ -185,7 +184,7 @@ pub fn sheet_table_body(
                             render_cache,
                             state,
                         ) {
-                            cell_update_writer.send(UpdateCellEvent {
+                            cell_update_writer.write(UpdateCellEvent {
                                 category: category.clone(),
                                 sheet_name: sheet_name.to_string(),
                                 row_index: original_row_index,

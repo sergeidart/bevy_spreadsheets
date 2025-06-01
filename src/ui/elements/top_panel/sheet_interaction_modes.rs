@@ -14,7 +14,7 @@ pub(super) struct InteractionModeEventWriters<'a, 'w> {
 pub(super) fn show_sheet_interaction_mode_buttons<'a, 'w>(
     ui: &mut egui::Ui,
     state: &mut EditorWindowState,
-    mut event_writers: InteractionModeEventWriters<'a, 'w>, // Takes struct of mutable refs
+    event_writers: InteractionModeEventWriters<'a, 'w>, // Takes struct of mutable refs
 ) {
     let is_sheet_selected = state.selected_sheet_name.is_some();
 
@@ -27,7 +27,7 @@ pub(super) fn show_sheet_interaction_mode_buttons<'a, 'w>(
         if let Some(sheet_name) = &state.selected_sheet_name {
             event_writers // Use directly
                 .add_row_event_writer
-                .send(AddSheetRowRequest {
+                .write(AddSheetRowRequest {
                     category: state.selected_category.clone(),
                     sheet_name: sheet_name.clone(),
                 });
@@ -84,7 +84,7 @@ pub(super) fn show_sheet_interaction_mode_buttons<'a, 'w>(
             if let Some(sheet_name) = &state.selected_sheet_name {
                 event_writers // Use directly
                     .add_column_event_writer
-                    .send(RequestAddColumn {
+                    .write(RequestAddColumn {
                         category: state.selected_category.clone(),
                         sheet_name: sheet_name.clone(),
                     });

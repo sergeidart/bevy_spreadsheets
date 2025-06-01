@@ -22,7 +22,7 @@ pub(crate) fn handle_add_new_copy_task_event_system(
         changed = true;
     }
     if changed {
-        state_changed_writer.send(VisualCopierStateChanged);
+        state_changed_writer.write(VisualCopierStateChanged);
     }
 }
 
@@ -48,7 +48,7 @@ pub(crate) fn handle_remove_copy_task_event_system(
         }
     }
     if changed {
-        state_changed_writer.send(VisualCopierStateChanged);
+        state_changed_writer.write(VisualCopierStateChanged);
     }
 }
 
@@ -61,7 +61,7 @@ pub(crate) fn handle_pick_folder_request_system(
     if let Some(event) = events.read().next() {
         info!("VisualCopier: Received PickFolderRequest: {:?}", event);
         let picked_path = FileDialog::new().pick_folder();
-        folder_picked_writer.send(FolderPickedEvent {
+        folder_picked_writer.write(FolderPickedEvent {
             for_task_id: event.for_task_id,
             is_start_folder: event.is_start_folder,
             path: picked_path,
@@ -89,12 +89,12 @@ pub(crate) fn handle_folder_picked_event_system(
 
         if let Some(task_id) = event.for_task_id {
             if event.is_start_folder {
-                update_task_start_folder_writer.send(UpdateTaskStartFolderEvent {
+                update_task_start_folder_writer.write(UpdateTaskStartFolderEvent {
                     task_id,
                     path: event.path.clone(),
                 });
             } else {
-                update_task_end_folder_writer.send(UpdateTaskEndFolderEvent {
+                update_task_end_folder_writer.write(UpdateTaskEndFolderEvent {
                     task_id,
                     path: event.path.clone(),
                 });
@@ -102,11 +102,11 @@ pub(crate) fn handle_folder_picked_event_system(
         } else {
             // This is for the top panel
             if event.is_start_folder {
-                update_top_panel_from_folder_writer.send(UpdateTopPanelFromFolderEvent {
+                update_top_panel_from_folder_writer.write(UpdateTopPanelFromFolderEvent {
                     path: event.path.clone(),
                 });
             } else {
-                update_top_panel_to_folder_writer.send(UpdateTopPanelToFolderEvent {
+                update_top_panel_to_folder_writer.write(UpdateTopPanelToFolderEvent {
                     path: event.path.clone(),
                 });
             }
@@ -140,7 +140,7 @@ pub(crate) fn apply_task_start_folder_update_system(
         }
     }
     if changed {
-        state_changed_writer.send(VisualCopierStateChanged);
+        state_changed_writer.write(VisualCopierStateChanged);
     }
 }
 
@@ -168,7 +168,7 @@ pub(crate) fn apply_task_end_folder_update_system(
         }
     }
     if changed {
-        state_changed_writer.send(VisualCopierStateChanged);
+        state_changed_writer.write(VisualCopierStateChanged);
     }
 }
 
@@ -192,7 +192,7 @@ pub(crate) fn apply_top_panel_from_folder_update_system(
         }
     }
     if changed {
-        state_changed_writer.send(VisualCopierStateChanged);
+        state_changed_writer.write(VisualCopierStateChanged);
     }
 }
 
@@ -216,7 +216,7 @@ pub(crate) fn apply_top_panel_to_folder_update_system(
         }
     }
     if changed {
-        state_changed_writer.send(VisualCopierStateChanged);
+        state_changed_writer.write(VisualCopierStateChanged);
     }
 }
 
@@ -242,7 +242,7 @@ pub(crate) fn handle_reverse_top_panel_folders_event_system(
 
         manager.top_panel_copy_status = "Folders reversed.".to_string();
         info!("VisualCopier: Top panel folders reversed.");
-        state_changed_writer.send(VisualCopierStateChanged);
+        state_changed_writer.write(VisualCopierStateChanged);
     }
 }
 

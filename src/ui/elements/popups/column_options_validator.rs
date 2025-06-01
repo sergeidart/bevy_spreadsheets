@@ -246,7 +246,7 @@ pub(super) fn apply_validator_update(
             "Validator change detected for col {} of '{:?}/{}'. Sending update event.",
             col_index + 1, category, sheet_name
         );
-        column_validator_writer.send(RequestUpdateColumnValidator {
+        column_validator_writer.write(RequestUpdateColumnValidator {
             category: category.clone(), // <<< Send category
             sheet_name: sheet_name.clone(),
             column_index: col_index,

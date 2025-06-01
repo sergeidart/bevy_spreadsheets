@@ -3,7 +3,7 @@ use bevy::prelude::Event;
 use std::path::PathBuf;
 use std::collections::HashSet;
 
-use super::definitions::{ColumnDefinition, ColumnValidator, SheetGridData}; 
+use super::definitions::ColumnValidator; 
 
 // NEW: Event for creating a new sheet
 #[derive(Event, Debug, Clone)]

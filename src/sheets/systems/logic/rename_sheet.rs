@@ -2,7 +2,6 @@
 use bevy::prelude::*;
 use std::path::PathBuf; // Added for relative path
 use crate::sheets::{
-    definitions::SheetMetadata, // Added for path generation
     events::{RequestRenameSheet, RequestRenameSheetFile, SheetOperationFeedback},
     resources::SheetRegistry,
     systems::io::save::save_single_sheet, // Keep save import
@@ -41,7 +40,7 @@ pub fn handle_rename_request(
                  "Rename failed: Mismatch between event category ({:?}) and sheet's metadata category ({:?}) for '{}'.",
                  category, old_category_opt, old_name
              );
-             feedback_writer.send(SheetOperationFeedback { message: format!("Internal error during rename for '{}'.", old_name), is_error: true });
+             feedback_writer.write(SheetOperationFeedback { message: format!("Internal error during rename for '{}'.", old_name), is_error: true });
              continue;
         }
 
@@ -54,7 +53,7 @@ pub fn handle_rename_request(
             Ok(mut moved_data) => { // rename_sheet now returns the data with *updated* metadata
                 let success_msg = format!("Successfully renamed sheet in registry: '{:?}/{}' -> '{:?}/{}'.", category, old_name, category, new_name);
                 info!("{}", success_msg);
-                feedback_writer.send(SheetOperationFeedback { message: success_msg, is_error: false });
+                feedback_writer.write(SheetOperationFeedback { message: success_msg, is_error: false });
 
                 // --- Trigger save of the newly renamed sheet ---
                 // Need immutable borrow again for save
@@ -97,7 +96,7 @@ pub fn handle_rename_request(
                         && old_grid_rel_path != new_grid_rel_path
                     {
                          info!("Requesting grid file rename: '{}' -> '{}'", old_grid_rel_path.display(), new_grid_rel_path.display());
-                         file_rename_writer.send(RequestRenameSheetFile { old_relative_path: old_grid_rel_path, new_relative_path: new_grid_rel_path });
+                         file_rename_writer.write(RequestRenameSheetFile { old_relative_path: old_grid_rel_path, new_relative_path: new_grid_rel_path });
                     }
 
 
@@ -106,19 +105,19 @@ pub fn handle_rename_request(
                          && old_meta_rel_path != new_meta_rel_path
                      {
                           info!("Requesting meta file rename: '{}' -> '{}'", old_meta_rel_path.display(), new_meta_rel_path.display());
-                          file_rename_writer.send(RequestRenameSheetFile { old_relative_path: old_meta_rel_path, new_relative_path: new_meta_rel_path });
+                          file_rename_writer.write(RequestRenameSheetFile { old_relative_path: old_meta_rel_path, new_relative_path: new_meta_rel_path });
                      }
 
                  } else {
                      // Should not happen if rename_sheet succeeded
                      error!("Critical error: Metadata missing after successful registry rename for '{:?}/{}'. Cannot save or rename files.", category, new_name);
-                     feedback_writer.send(SheetOperationFeedback { message: format!("Internal error after rename for '{}'. File operations skipped.", new_name), is_error: true });
+                     feedback_writer.write(SheetOperationFeedback { message: format!("Internal error after rename for '{}'. File operations skipped.", new_name), is_error: true });
                  }
             }
             Err(e) => {
                 let msg = format!("Failed to rename sheet '{:?}/{}': {}", category, old_name, e);
                 error!("{}", msg);
-                feedback_writer.send(SheetOperationFeedback { message: msg, is_error: true });
+                feedback_writer.write(SheetOperationFeedback { message: msg, is_error: true });
             }
         }
     }

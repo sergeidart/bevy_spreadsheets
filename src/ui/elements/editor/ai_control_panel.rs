@@ -1,14 +1,14 @@
 // src/ui/elements/editor/ai_control_panel.rs
-use bevy::log::{debug, error, info, warn};
+use bevy::log::{error, info, warn};
 use bevy::prelude::*;
 use bevy_egui::egui;
 use bevy_tokio_tasks::TokioTasksRuntime;
-use crate::sheets::definitions::{SheetMetadata, default_ai_model_id, default_grounding_with_google_search};
+use crate::sheets::definitions::{default_ai_model_id, default_grounding_with_google_search};
 use crate::sheets::events::AiTaskResult;
 use crate::sheets::resources::SheetRegistry;
 use crate::ui::systems::SendEvent;
 use crate::SessionApiKey;
-use gemini_client_rs::{types::{Content, ContentPart, GenerateContentRequest, PartResponse, Role, ToolConfig,DynamicRetrieval, DynamicRetrievalConfig},GeminiClient, GeminiError,};
+use gemini_client_rs::{types::{Content, ContentPart, GenerateContentRequest, PartResponse, Role, ToolConfig,DynamicRetrieval, DynamicRetrievalConfig},GeminiClient};
 use serde_json::Value as JsonValue;
 use super::state::{AiModeState, EditorWindowState};
 
@@ -159,7 +159,7 @@ pub(super) fn show_ai_control_panel(
                         task_result_data.result = Err(err_msg.clone());
                         task_result_data.raw_response = Some(format!("Error: {}", err_msg));
 
-                        ctx.run_on_main_thread(move |mut world_ctx| {
+                        ctx.run_on_main_thread(move |world_ctx| {
                             world_ctx.world.commands().entity(commands_entity).insert(
                                 SendEvent::<AiTaskResult> {
                                     event: AiTaskResult {
@@ -351,7 +351,7 @@ pub(super) fn show_ai_control_panel(
                     }
                 }
 
-                ctx.run_on_main_thread(move |mut world_ctx| {
+                ctx.run_on_main_thread(move |world_ctx| {
                     info!("Sending AiTaskResult event via Commands.");
                     world_ctx.world.commands().entity(commands_entity).insert(
                         SendEvent::<AiTaskResult> {

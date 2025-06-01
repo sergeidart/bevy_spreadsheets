@@ -15,7 +15,7 @@ pub(crate) struct DeleteModeEventWriters<'a, 'w> {
 pub fn show_delete_mode_active_controls<'a, 'w>(
     ui: &mut egui::Ui,
     state: &mut EditorWindowState, 
-    mut event_writers: DeleteModeEventWriters<'a, 'w>,
+    event_writers: DeleteModeEventWriters<'a, 'w>,
 ) {
     ui.horizontal(|ui| {
         ui.label(
@@ -51,7 +51,7 @@ pub fn show_delete_mode_active_controls<'a, 'w>(
                 if rows_selected_count > 0 {
                     event_writers
                         .delete_rows_event_writer
-                        .send(RequestDeleteRows {
+                        .write(RequestDeleteRows {
                             category: state.selected_category.clone(),
                             sheet_name: sheet_name.clone(),
                             row_indices: state.ai_selected_rows.clone(),
@@ -61,7 +61,7 @@ pub fn show_delete_mode_active_controls<'a, 'w>(
                 if cols_selected_count > 0 {
                     event_writers
                         .delete_columns_event_writer
-                        .send(RequestDeleteColumns {
+                        .write(RequestDeleteColumns {
                             category: state.selected_category.clone(),
                             sheet_name: sheet_name.clone(),
                             column_indices: state.selected_columns_for_deletion.clone(),

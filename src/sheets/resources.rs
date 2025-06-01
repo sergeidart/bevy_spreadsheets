@@ -124,20 +124,6 @@ pub struct SheetRegistry {
 
 // --- SheetRegistry impl (remains the same) ---
 impl SheetRegistry {
-    // ... (all existing methods of SheetRegistry) ...
-    // Gets the path relative to the data directory for a given sheet.
-    /// Returns PathBuf("CategoryName/FileName.json") or PathBuf("FileName.json").
-    fn get_relative_path(metadata: &SheetMetadata) -> std::path::PathBuf {
-        let mut path = std::path::PathBuf::new();
-        if let Some(cat) = &metadata.category {
-            path.push(cat);
-        }
-        path.push(&metadata.data_filename);
-        path
-    }
-
-    /// Registers sheet metadata under its category.
-    /// This is typically used for pre-defined sheets at startup.
     pub fn register(&mut self, mut metadata: SheetMetadata) -> bool {
         let name = metadata.sheet_name.clone();
         let category = metadata.category.clone(); // Can be None
@@ -260,27 +246,6 @@ impl SheetRegistry {
             })
     }
 
-    /// Provides a mutable iterator over all sheets: (CategoryNameOpt, SheetName, SheetDataMut).
-     pub fn iter_sheets_mut(&mut self) -> impl Iterator<Item = (&Option<String>, &String, &mut SheetGridData)> {
-         self.categorized_sheets
-             .iter_mut()
-             .flat_map(|(category, sheets_map)| {
-                 sheets_map.iter_mut().map(move |(sheet_name, sheet_data)| {
-                     // Need to re-borrow category immutably here, which is tricky.
-                     // Let's simplify the mutable iteration API for now or return owned data.
-                     // A simpler approach might be separate iterators for categories and sheets within.
-                     // For now, let's just return the sheet name and mutable data.
-                     // Caller needs to know the category separately if needed.
-                     // TODO: Revisit mutable iteration API if needed.
-                     (category, sheet_name, sheet_data) // This might have lifetime issues, requires careful use.
-                 })
-             })
-     }
-
-    /// Renames a sheet *within its current category*.
-    /// Updates the HashMap key and the `sheet_name` and `data_filename` within the `SheetMetadata`.
-    /// Does NOT handle moving between categories.
-    /// Returns the old `SheetGridData` (with updated metadata) if successful, or an error string.
     pub fn rename_sheet(
         &mut self,
         category: &Option<String>,

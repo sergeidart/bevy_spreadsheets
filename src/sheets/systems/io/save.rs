@@ -1,16 +1,15 @@
 // src/sheets/systems/io/save.rs
 
-use bevy::prelude::{error, info, trace, warn, EventReader, Res, ResMut};
+use bevy::prelude::{error, info, trace, warn, EventReader};
 use std::{
     fs::{self, File},
     io::BufWriter,
-    path::{Path, PathBuf}, // Added PathBuf
 };
 
 // Corrected imports relative to this file's module position
 use super::{get_default_data_base_path, get_full_metadata_path, get_full_sheet_path};
 use crate::sheets::{
-    definitions::{SheetGridData, SheetMetadata}, // Added SheetMetadata
+    definitions::SheetMetadata, // Added SheetMetadata
     events::{RequestDeleteSheetFile, RequestRenameSheetFile},
     resources::SheetRegistry,
 };

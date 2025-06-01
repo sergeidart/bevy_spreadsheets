@@ -7,22 +7,8 @@ use crate::sheets::{
     },
 };
 use bevy::prelude::*;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-/// Loads, validates, and potentially corrects metadata from a `.meta.json` file.
-/// Primarily used during the startup scan for unregistered sheets.
-///
-/// # Arguments
-/// * `base_path` - The root data directory path.
-/// * `relative_grid_path` - Path to the corresponding grid file, relative to `base_path`. Used to find the meta file.
-/// * `sheet_name_candidate` - The name derived from the grid filename. Used for validation.
-/// * `category` - The category derived from the directory structure. Used for validation.
-/// * `full_grid_path` - The full path to the grid file (used for filename correction reference).
-///
-/// # Returns
-/// * `Ok((Some(SheetMetadata>, bool))` - Metadata loaded/validated, bool indicates if corrections were made.
-/// * `Ok((None, bool))` - Metadata file not found or failed to parse/validate irrecoverably. Bool is false.
-/// * `Err(String)` - Should ideally not be returned directly, errors are logged and Ok(None, false) returned.
 pub(super) fn load_and_validate_metadata_file(
     base_path: &Path,
     relative_grid_path: &Path,

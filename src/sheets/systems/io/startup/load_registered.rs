@@ -1,18 +1,18 @@
 // src/sheets/systems/io/startup/load_registered.rs
 use crate::sheets::{
-    definitions::{SheetGridData, SheetMetadata},
+    definitions::SheetMetadata,
     resources::SheetRegistry,
     events::RequestSheetRevalidation,
     systems::io::{
         get_default_data_base_path, get_full_metadata_path, get_full_sheet_path,
-        parsers::{read_and_parse_json_sheet, read_and_parse_metadata_file},
+        parsers::read_and_parse_metadata_file,
         save::save_single_sheet,
         validator::{self, validate_file_exists},
-        startup::{metadata_load, grid_load},
+        startup::grid_load,
     },
 };
 use bevy::prelude::*;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 pub fn load_data_for_registered_sheets(
     mut registry: ResMut<SheetRegistry>,
@@ -75,7 +75,7 @@ pub fn load_data_for_registered_sheets(
     }
 
     for (cat, name) in sheets_loaded {
-        revalidate_writer.send(RequestSheetRevalidation {
+        revalidate_writer.write(RequestSheetRevalidation {
             category: cat,
             sheet_name: name.to_owned(),
         });
@@ -152,28 +152,23 @@ fn load_and_update_single_sheet_entry(
                                 info!("Corrected column consistency for loaded metadata of '{:?}/{}'.", category, sheet_name);
                                 needs_save_after_correction = true;
                             }
-                            // Update filename based on potentially corrected metadata
                             final_grid_filename = Some(loaded_meta.data_filename.clone());
                             loaded_metadata_opt = Some(loaded_meta);
                         }
                         Err(e) => {
                             error!("Uncorrectable errors during metadata validation for '{:?}/{}': {}. Using registry metadata.", category, sheet_name, e);
-                            // Keep existing registry metadata if validation fails hard
                         }
                     }
                 }
                 Err(e) => {
                     error!("Failed to read/parse metadata file '{}': {}. Using registry metadata.", meta_path.display(), e);
-                     // Keep existing registry metadata if file load fails
                 }
             }
         } else {
             trace!("Metadata file not found: {}", meta_path.display());
-             // Keep existing registry metadata if file doesn't exist
         }
     }
 
-    // ... (rest of grid loading logic remains the same) ...
     let mut loaded_grid_data_opt: Option<Vec<Vec<String>>> = None;
     if let Some(grid_filename) = &final_grid_filename {
         if !grid_filename.is_empty() {

@@ -73,13 +73,13 @@ impl Plugin for SheetsPlugin {
             Startup,
             (
                 systems::io::startup::register_default_sheets_if_needed,
-                apply_deferred, 
+                ApplyDeferred, 
                 systems::io::startup::load_data_for_registered_sheets,
-                apply_deferred, 
+                ApplyDeferred, 
                 systems::io::startup::scan_filesystem_for_unregistered_sheets,
-                apply_deferred, 
+                ApplyDeferred, 
                 handle_sheet_render_cache_update, 
-                apply_deferred, 
+                ApplyDeferred, 
             )
                 .chain(),
         );
@@ -94,7 +94,7 @@ impl Plugin for SheetsPlugin {
             Update,
             (
                 systems::io::handle_process_upload_request,
-                apply_deferred, 
+                ApplyDeferred, 
                 systems::io::handle_json_sheet_upload, 
 
                 systems::logic::handle_rename_request,
@@ -119,7 +119,7 @@ impl Plugin for SheetsPlugin {
             Update,
             (
                 forward_events::<AiTaskResult>, 
-                apply_deferred, 
+                ApplyDeferred, 
                 handle_ai_task_results, 
             )
             .chain() 

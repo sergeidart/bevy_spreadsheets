@@ -1,6 +1,6 @@
 // src/ui/elements/editor/editor_sheet_display.rs
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiContexts}; // EguiContexts might not be needed here if ctx is passed
+use bevy_egui::egui; // EguiContexts might not be needed here if ctx is passed
 use egui_extras::{Column, TableBody, TableBuilder};
 use crate::sheets::{
     resources::{SheetRegistry, SheetRenderCache},

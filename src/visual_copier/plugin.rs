@@ -26,7 +26,7 @@ use super::handler::{
     handle_visual_copier_state_change_and_save_system,
 };
 use super::processes::process_copy_operations_system;
-use super::io::{load_copier_manager_from_file, save_copier_manager_to_file};
+use super::io::load_copier_manager_from_file;
 
 pub struct VisualCopierPlugin;
 
@@ -84,7 +84,7 @@ impl Plugin for VisualCopierPlugin {
                 handle_queue_copy_task_event_system,
                 handle_queue_top_panel_copy_event_system,
                 handle_queue_all_copy_tasks_event_system,
-                apply_deferred,
+                ApplyDeferred,
                 process_copy_operations_system,
                 handle_copy_operation_result_event_system.after(process_copy_operations_system),
 
@@ -193,7 +193,7 @@ fn custom_exit_handler_system(
         } else {
              info!("VisualCopier: All pre-exit tasks done. Requesting actual app termination.");
         }
-        app_exit_writer.send(AppExit::Success); // Use success variant or appropriate code
+        app_exit_writer.write(AppExit::Success); // Use success variant or appropriate code
     }
 }
 // --- END NEW SYSTEM ---

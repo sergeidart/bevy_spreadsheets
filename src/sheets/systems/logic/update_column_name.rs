@@ -29,7 +29,7 @@ pub fn handle_update_column_name(
 
         // --- Validation ---
         if new_name.is_empty() {
-            feedback_writer.send(SheetOperationFeedback {
+            feedback_writer.write(SheetOperationFeedback {
                 message: format!(
                     "Failed column rename in '{:?}/{}': New name cannot be empty.",
                     category, sheet_name
@@ -40,7 +40,7 @@ pub fn handle_update_column_name(
         }
         // Basic filename character check (optional, but good practice)
         if new_name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|']) {
-             feedback_writer.send(SheetOperationFeedback{
+             feedback_writer.write(SheetOperationFeedback{
                  message: format!("Failed column rename in '{:?}/{}': New name '{}' contains invalid characters.", category, sheet_name, new_name),
                  is_error: true
              });
@@ -64,7 +64,7 @@ pub fn handle_update_column_name(
                                 && c.header.eq_ignore_ascii_case(new_name) // Access header field
                         })
                     {
-                        feedback_writer.send(SheetOperationFeedback {
+                        feedback_writer.write(SheetOperationFeedback {
                             message: format!(
                                 "Failed column rename in '{:?}/{}': Name '{}' already exists.",
                                 category, sheet_name, new_name
@@ -87,7 +87,7 @@ pub fn handle_update_column_name(
                             new_name
                         );
                         info!("{}", msg);
-                        feedback_writer.send(SheetOperationFeedback {
+                        feedback_writer.write(SheetOperationFeedback {
                             message: msg,
                             is_error: false,
                         });
@@ -96,7 +96,7 @@ pub fn handle_update_column_name(
                     }
                 } else {
                     // --- CORRECTED: Use columns.len() in error message ---
-                    feedback_writer.send(SheetOperationFeedback {
+                    feedback_writer.write(SheetOperationFeedback {
                         message: format!(
                             "Failed column rename in '{:?}/{}': Index {} out of bounds ({} columns).",
                             category,
@@ -108,7 +108,7 @@ pub fn handle_update_column_name(
                     });
                 }
             } else {
-                feedback_writer.send(SheetOperationFeedback {
+                feedback_writer.write(SheetOperationFeedback {
                     message: format!(
                         "Failed column rename in '{:?}/{}': Metadata missing.",
                         category, sheet_name
@@ -117,7 +117,7 @@ pub fn handle_update_column_name(
                 });
             }
         } else {
-            feedback_writer.send(SheetOperationFeedback {
+            feedback_writer.write(SheetOperationFeedback {
                 message: format!(
                     "Failed column rename: Sheet '{:?}/{}' not found.",
                     category, sheet_name

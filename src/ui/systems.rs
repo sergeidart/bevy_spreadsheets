@@ -80,7 +80,7 @@ pub fn handle_ai_task_results(
             }
             Err(err_msg) => {
                 error!("  AI Task Failure for row {}: {}", ev.original_row_index, err_msg);
-                feedback_writer.send(SheetOperationFeedback {
+                feedback_writer.write(SheetOperationFeedback {
                     message: format!("AI Error (Row {}): {}", ev.original_row_index, err_msg),
                     is_error: true,
                 });
@@ -124,9 +124,9 @@ pub fn forward_events<E: Event + Clone + std::fmt::Debug>(
     for (entity, send_event_component) in query.iter() {
         count += 1;
         debug!("Forwarding event type '{}' #{}: {:?}", *event_type_name, count, send_event_component.event);
-        writer.send(send_event_component.event.clone());
+        writer.write(send_event_component.event.clone());
         commands.entity(entity).remove::<SendEvent<E>>();
-        commands.entity(entity).despawn_recursive(); // Despawn entity after forwarding
+        commands.entity(entity).despawn(); // Despawn entity after forwarding
     }
 
     if count > 0 {

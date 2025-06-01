@@ -16,7 +16,7 @@ use crate::{
 use bevy::prelude::*;
 
 pub fn handle_create_new_sheet_request(
-    mut commands: Commands, // Added to potentially interact with EditorWindowState non-resource ways if needed
+    commands: Commands,
     mut events: EventReader<RequestCreateNewSheet>,
     mut registry: ResMut<SheetRegistry>,
     mut feedback_writer: EventWriter<SheetOperationFeedback>,
@@ -32,7 +32,7 @@ pub fn handle_create_new_sheet_request(
         if let Err(e) = validator::validate_derived_sheet_name(desired_name) {
             let msg = format!("Failed to create sheet: Invalid name '{}'. {}", desired_name, e);
             error!("{}", msg);
-            feedback_writer.send(SheetOperationFeedback { message: msg, is_error: true });
+            feedback_writer.write(SheetOperationFeedback { message: msg, is_error: true });
             continue;
         }
 
@@ -43,7 +43,7 @@ pub fn handle_create_new_sheet_request(
                 desired_name, category
             );
             warn!("{}", msg);
-            feedback_writer.send(SheetOperationFeedback { message: msg, is_error: true });
+            feedback_writer.write(SheetOperationFeedback { message: msg, is_error: true });
             continue;
         }
 
@@ -80,18 +80,18 @@ pub fn handle_create_new_sheet_request(
         info!("Saved new sheet '{:?}/{}' to disk.", category, desired_name);
 
 
-        feedback_writer.send(SheetOperationFeedback {
+        feedback_writer.write(SheetOperationFeedback {
             message: format!("Sheet '{:?}/{}' created.", category, desired_name),
             is_error: false,
         });
 
-        data_modified_writer.send(SheetDataModifiedInRegistryEvent {
+        data_modified_writer.write(SheetDataModifiedInRegistryEvent {
             category: category.clone(),
             sheet_name: desired_name.to_string(),
         });
 
         // Optionally, set this new sheet as selected in the UI
-        if let Some(mut editor_state) = editor_state_opt.as_mut() {
+        if let Some(editor_state) = editor_state_opt.as_mut() {
             editor_state.selected_category = category.clone();
             editor_state.selected_sheet_name = Some(desired_name.to_string());
             editor_state.reset_interaction_modes_and_selections(); // Reset modes

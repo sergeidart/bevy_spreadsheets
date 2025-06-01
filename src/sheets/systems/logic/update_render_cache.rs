@@ -4,14 +4,13 @@ use std::collections::HashSet; // For collecting unique sheet identifiers
 
 use crate::{
     sheets::{
-        definitions::{SheetGridData, SheetMetadata, ColumnValidator, ColumnDataType},
+        definitions::{ColumnValidator, ColumnDataType},
         events::{
             RequestSheetRevalidation, SheetDataModifiedInRegistryEvent,
             // Potentially listen to other events that change sheet structure or metadata
-            RequestDeleteSheet, RequestRenameSheet, AddSheetRowRequest, RequestDeleteRows,
-            RequestUpdateColumnName, RequestUpdateColumnValidator, JsonSheetUploaded,
+            RequestDeleteSheet, RequestRenameSheet,
         },
-        resources::{SheetRegistry, SheetRenderCache, RenderableCellData},
+        resources::{SheetRegistry, SheetRenderCache},
     },
     ui::{
         elements::editor::state::EditorWindowState, // Needed for linked cache access during validation

@@ -6,10 +6,7 @@ use crate::sheets::{
     systems::io::save::save_single_sheet,
 };
 use bevy::prelude::*;
-use std::collections::HashSet; // Keep if used elsewhere, not directly for add_row change
 
-/// Handles adding a new, empty row to a specified sheet in a category.
-/// MODIFIED: New rows are now inserted at the top (index 0).
 pub fn handle_add_row_request(
     mut events: EventReader<AddSheetRowRequest>,
     mut registry: ResMut<SheetRegistry>,
@@ -31,14 +28,14 @@ pub fn handle_add_row_request(
                 let msg =
                     format!("Added new row at the top of sheet '{:?}/{}'.", category, sheet_name);
                 info!("{}", msg);
-                feedback_writer.send(SheetOperationFeedback {
+                feedback_writer.write(SheetOperationFeedback {
                     message: msg,
                     is_error: false,
                 });
 
                 metadata_cache = Some(metadata.clone());
 
-                data_modified_writer.send(SheetDataModifiedInRegistryEvent {
+                data_modified_writer.write(SheetDataModifiedInRegistryEvent {
                     category: category.clone(),
                     sheet_name: sheet_name.clone(),
                 });
@@ -49,7 +46,7 @@ pub fn handle_add_row_request(
                     category, sheet_name
                 );
                 warn!("{}", msg);
-                feedback_writer.send(SheetOperationFeedback {
+                feedback_writer.write(SheetOperationFeedback {
                     message: msg,
                     is_error: true,
                 });
@@ -60,7 +57,7 @@ pub fn handle_add_row_request(
                 category, sheet_name
             );
             warn!("{}", msg);
-            feedback_writer.send(SheetOperationFeedback {
+            feedback_writer.write(SheetOperationFeedback {
                 message: msg,
                 is_error: true,
             });

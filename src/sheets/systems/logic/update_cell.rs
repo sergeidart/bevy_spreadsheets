@@ -2,7 +2,7 @@
 use bevy::prelude::*;
 use std::collections::HashMap;
 use crate::sheets::{
-    definitions::{SheetMetadata, ColumnValidator},
+    definitions::SheetMetadata,
     // ADDED RequestSheetRevalidation
     events::{UpdateCellEvent, SheetOperationFeedback, SheetDataModifiedInRegistryEvent, RequestSheetRevalidation},
     resources::SheetRegistry,
@@ -41,14 +41,12 @@ pub fn handle_cell_update(
 
         match validation_result {
             Ok(()) => {
-                let mut value_changed = false;
                 if let Some(sheet_data) = registry.get_sheet_mut(category, sheet_name) {
                     if let Some(row) = sheet_data.grid.get_mut(row_idx) {
                         if let Some(cell) = row.get_mut(col_idx) {
                             if *cell != *new_value {
                                 trace!("Updating cell [{},{}] in sheet '{:?}/{}' from '{}' to '{}'", row_idx, col_idx, category, sheet_name, cell, new_value);
                                 *cell = new_value.clone();
-                                value_changed = true;
 
                                 if let Some(metadata) = &sheet_data.metadata {
                                     let key = (category.clone(), sheet_name.clone());
@@ -56,7 +54,7 @@ pub fn handle_cell_update(
                                     // Mark for revalidation
                                     sheets_to_revalidate.insert(key, ());
 
-                                    data_modified_writer.send(SheetDataModifiedInRegistryEvent {
+                                    data_modified_writer.write(SheetDataModifiedInRegistryEvent {
                                         category: category.clone(),
                                         sheet_name: sheet_name.clone(),
                                     });
@@ -73,7 +71,7 @@ pub fn handle_cell_update(
             Err(err_msg) => {
                  let full_msg = format!("Cell update rejected for sheet '{:?}/{}' cell[{},{}]: {}", category, sheet_name, row_idx, col_idx, err_msg);
                  warn!("{}", full_msg);
-                 feedback_writer.send(SheetOperationFeedback { message: full_msg, is_error: true });
+                 feedback_writer.write(SheetOperationFeedback { message: full_msg, is_error: true });
             }
         }
     }
@@ -89,7 +87,7 @@ pub fn handle_cell_update(
 
     // Send revalidation requests
     for (cat, name) in sheets_to_revalidate.keys() {
-        revalidate_writer.send(RequestSheetRevalidation {
+        revalidate_writer.write(RequestSheetRevalidation {
             category: cat.clone(),
             sheet_name: name.clone(),
         });

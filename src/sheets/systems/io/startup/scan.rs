@@ -1,8 +1,7 @@
 // src/sheets/systems/io/startup/scan.rs
 use crate::sheets::{
-    definitions::{SheetGridData, SheetMetadata},
+    definitions::{SheetMetadata},
     resources::SheetRegistry,
-    // ADDED RequestSheetRevalidation
     events::RequestSheetRevalidation,
     systems::io::{
         get_default_data_base_path,
@@ -12,7 +11,6 @@ use crate::sheets::{
     },
 };
 use bevy::prelude::*;
-use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 pub fn scan_filesystem_for_unregistered_sheets(
@@ -115,7 +113,7 @@ pub fn scan_filesystem_for_unregistered_sheets(
         );
          // ADDED: Trigger validation for sheets registered during scan
          for (cat, name) in sheets_registered_in_scan {
-             revalidate_writer.send(RequestSheetRevalidation {
+             revalidate_writer.write(RequestSheetRevalidation {
                  category: cat,
                  sheet_name: name,
              });

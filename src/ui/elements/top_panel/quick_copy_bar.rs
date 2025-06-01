@@ -25,7 +25,7 @@ pub(super) fn show_quick_copy_controls<'a, 'w>(
     ui: &mut egui::Ui,
     state: &EditorWindowState, 
     copier_manager: &mut VisualCopierManager, 
-    mut event_writers: QuickCopyEventWriters<'a, 'w>,
+    event_writers: QuickCopyEventWriters<'a, 'w>,
 ) {
     if state.show_quick_copy_bar {
         ui.group(|ui| {
@@ -34,7 +34,7 @@ pub(super) fn show_quick_copy_controls<'a, 'w>(
                 ui.label("Quick Copy:");
 
                 if ui.button("FROM").on_hover_text("Select source folder").clicked() {
-                    event_writers.pick_folder_writer.send(PickFolderRequest {
+                    event_writers.pick_folder_writer.write(PickFolderRequest {
                         for_task_id: None,
                         is_start_folder: true,
                     });
@@ -47,7 +47,7 @@ pub(super) fn show_quick_copy_controls<'a, 'w>(
                     .on_hover_text(&from_path_str);
 
                 if ui.button("TO").on_hover_text("Select destination folder").clicked() {
-                    event_writers.pick_folder_writer.send(PickFolderRequest {
+                    event_writers.pick_folder_writer.write(PickFolderRequest {
                         for_task_id: None,
                         is_start_folder: false,
                     });
@@ -60,13 +60,13 @@ pub(super) fn show_quick_copy_controls<'a, 'w>(
                     .on_hover_text(&to_path_str);
 
                 if ui.button("Swap ↔").clicked() {
-                    event_writers.reverse_folders_writer.send(ReverseTopPanelFoldersEvent);
+                    event_writers.reverse_folders_writer.write(ReverseTopPanelFoldersEvent);
                 }
 
                 let can_quick_copy = copier_manager.top_panel_from_folder.is_some()
                     && copier_manager.top_panel_to_folder.is_some();
                 if ui.add_enabled(can_quick_copy, egui::Button::new("COPY")).clicked() {
-                    event_writers.queue_top_panel_copy_writer.send(QueueTopPanelCopyEvent);
+                    event_writers.queue_top_panel_copy_writer.write(QueueTopPanelCopyEvent);
                 }
                 ui.label(&copier_manager.top_panel_copy_status);
                 ui.separator();
@@ -76,7 +76,7 @@ pub(super) fn show_quick_copy_controls<'a, 'w>(
                         "If checked, performs this Quick Copy operation synchronously just before the application closes via 'App Exit'.",
                     );
                 if checkbox_response.changed() {
-                    event_writers.state_changed_writer.send(VisualCopierStateChanged);
+                    event_writers.state_changed_writer.write(VisualCopierStateChanged);
                     info!(
                         "'Copy on Exit' checkbox changed to: {}",
                         copier_manager.copy_top_panel_on_exit

@@ -24,7 +24,7 @@ pub(super) fn show_sheet_management_controls<'a, 'w>(
     ui: &mut egui::Ui,
     state: &mut EditorWindowState,
     registry: &SheetRegistry,
-    mut event_writers: SheetManagementEventWriters<'a, 'w>, // Takes the struct of mutable refs
+    event_writers: SheetManagementEventWriters<'a, 'w>, // Takes the struct of mutable refs
 ) {
     ui.label("Category:");
     let categories = registry.get_categories();
@@ -91,7 +91,7 @@ pub(super) fn show_sheet_management_controls<'a, 'w>(
         .on_hover_text("Upload a JSON file (will be placed in Root category)")
         .clicked()
     {
-        event_writers.upload_req_writer.send(RequestInitiateFileUpload); // Use directly
+        event_writers.upload_req_writer.write(RequestInitiateFileUpload); // Use directly
     }
     ui.separator();
 
@@ -101,7 +101,7 @@ pub(super) fn show_sheet_management_controls<'a, 'w>(
         !sheets_in_category.is_empty() || state.selected_sheet_name.is_some(),
         |ui| {
             let selected_sheet_text = state.selected_sheet_name.as_deref().unwrap_or("--Select--");
-            let sheet_response =
+            let sheet_response: egui::InnerResponse<Option<()>> =
                 egui::ComboBox::from_id_source("sheet_selector_top_panel_refactored") 
                     .selected_text(selected_sheet_text)
                     .show_ui(ui, |ui| {
@@ -179,7 +179,7 @@ pub(super) fn show_sheet_management_controls<'a, 'w>(
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         if ui.add(egui::Button::new("❌ App Exit")).clicked() {
             info!("'App Exit' button clicked. Sending RequestAppExit event.");
-            event_writers.request_app_exit_writer.send(RequestAppExit); // Use directly
+            event_writers.request_app_exit_writer.write(RequestAppExit); // Use directly
         }
     });
 }

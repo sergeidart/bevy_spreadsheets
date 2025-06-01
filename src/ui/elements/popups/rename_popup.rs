@@ -68,7 +68,7 @@ pub fn show_rename_popup(
 
     if trigger_rename {
         if !state.new_name_input.trim().is_empty() {
-            rename_event_writer.send(RequestRenameSheet {
+            rename_event_writer.write(RequestRenameSheet {
                 category: state.rename_target_category.clone(), // <<< Send category
                 old_name: state.rename_target_sheet.clone(),
                 new_name: state.new_name_input.clone(),

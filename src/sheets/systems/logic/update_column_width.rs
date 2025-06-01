@@ -29,7 +29,7 @@ pub fn handle_update_column_width(
         // --- Validation ---
         // Add basic width validation if needed (e.g., ensure positive)
         if new_width <= 0.0 {
-            feedback_writer.send(SheetOperationFeedback {
+            feedback_writer.write(SheetOperationFeedback {
                 message: format!(
                     "Failed column width update in '{:?}/{}': Width must be positive.",
                     category, sheet_name
@@ -65,7 +65,7 @@ pub fn handle_update_column_width(
                          );
                     }
                 } else {
-                    feedback_writer.send(SheetOperationFeedback {
+                    feedback_writer.write(SheetOperationFeedback {
                         message: format!(
                             "Failed column width update in '{:?}/{}': Index {} out of bounds ({} columns).",
                             category,
@@ -77,7 +77,7 @@ pub fn handle_update_column_width(
                     });
                 }
             } else {
-                feedback_writer.send(SheetOperationFeedback {
+                feedback_writer.write(SheetOperationFeedback {
                     message: format!(
                         "Failed column width update in '{:?}/{}': Metadata missing.",
                         category, sheet_name
@@ -86,7 +86,7 @@ pub fn handle_update_column_width(
                 });
             }
         } else {
-            feedback_writer.send(SheetOperationFeedback {
+            feedback_writer.write(SheetOperationFeedback {
                 message: format!(
                     "Failed column width update: Sheet '{:?}/{}' not found.",
                     category, sheet_name

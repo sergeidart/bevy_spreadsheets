@@ -1,6 +1,6 @@
 // src/ui/widgets/linked_column_visualization.rs
 use bevy::prelude::*;
-use bevy_egui::egui::{self, Id, Response};
+use bevy_egui::egui::{self, Response};
 
 /// Adds the TextEdit widget for a linked column and returns its response.
 /// Makes the TextEdit frameless so the background from the containing frame shows through.

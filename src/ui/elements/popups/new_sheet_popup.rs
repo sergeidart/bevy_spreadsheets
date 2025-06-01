@@ -4,7 +4,6 @@ use bevy_egui::egui;
 
 use crate::sheets::events::RequestCreateNewSheet;
 use crate::ui::elements::editor::state::EditorWindowState;
-use crate::ui::UiFeedbackState; // For displaying potential errors from previous operations
 
 pub fn show_new_sheet_popup(
     ctx: &egui::Context,
@@ -74,7 +73,7 @@ pub fn show_new_sheet_popup(
         if !trimmed_name.is_empty() {
             // Basic client-side validation (more thorough validation in the handler system)
             if validator_basic_sheet_name(trimmed_name) {
-                create_sheet_writer.send(RequestCreateNewSheet {
+                create_sheet_writer.write(RequestCreateNewSheet {
                     desired_name: trimmed_name.to_string(),
                     category: state.new_sheet_target_category.clone(),
                 });

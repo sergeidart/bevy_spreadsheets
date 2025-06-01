@@ -1,11 +1,10 @@
 // src/ui/validation.rs
 // (Ensure ValidationState enum exists and is adjusted as discussed)
 use bevy::prelude::*;
-use bevy_egui::egui;
 use std::collections::HashSet;
 
 use crate::sheets::{
-    definitions::{ColumnDataType, ColumnValidator},
+    definitions::ColumnDataType,
     resources::SheetRegistry,
 };
 // IMPORTANT: EditorWindowState is needed here ONLY for the linked cache access

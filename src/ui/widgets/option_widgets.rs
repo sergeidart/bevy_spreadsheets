@@ -1,8 +1,6 @@
 // src/ui/widgets/option_widgets.rs
-// NEW FILE
-use bevy::prelude::*;
-use bevy_egui::egui::{self, Id, Response};
-use crate::sheets::definitions::ColumnDataType; // Keep import for potential future use maybe? Not directly needed now.
+use bevy_egui::egui::{self};
+ // Keep import for potential future use maybe? Not directly needed now.
 
 /// Helper UI for Option<bool> types. Returns (changed, response).
 pub(crate) fn ui_option_bool(

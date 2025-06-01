@@ -1,5 +1,4 @@
 // src/ui/elements/editor/editor_ai_log.rs
-use bevy::prelude::*;
 use bevy_egui::egui;
 use super::state::EditorWindowState;
 

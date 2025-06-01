@@ -30,7 +30,7 @@ pub fn handle_delete_request(
         if metadata_opt.is_none() {
             let msg = format!("Delete failed: Sheet '{:?}/{}' not found or missing metadata.", category, sheet_name);
             error!("{}", msg);
-            feedback_writer.send(SheetOperationFeedback { message: msg, is_error: true });
+            feedback_writer.write(SheetOperationFeedback { message: msg, is_error: true });
             continue; // Skip to next event
         }
 
@@ -40,7 +40,7 @@ pub fn handle_delete_request(
             Ok(removed_data) => { // Registry deletion returns the removed data
                 let msg = format!("Successfully deleted sheet '{:?}/{}' from registry.", category, sheet_name);
                 info!("{}", msg);
-                feedback_writer.send(SheetOperationFeedback { message: msg, is_error: false });
+                feedback_writer.write(SheetOperationFeedback { message: msg, is_error: false });
 
                 // --- Request File Deletions (using metadata from removed data) ---
                 if let Some(metadata) = removed_data.metadata { // Use metadata from the returned data
@@ -56,12 +56,12 @@ pub fn handle_delete_request(
 
                      if !metadata.data_filename.is_empty() {
                          info!("Requesting grid file deletion: '{}'", grid_relative_path.display());
-                         file_delete_writer.send(RequestDeleteSheetFile { relative_path: grid_relative_path });
+                         file_delete_writer.write(RequestDeleteSheetFile { relative_path: grid_relative_path });
                      } else {
                          warn!("No grid filename found in metadata for deleted sheet '{:?}/{}'.", category, metadata.sheet_name);
                      }
                      info!("Requesting meta file deletion: '{}'", meta_relative_path.display());
-                     file_delete_writer.send(RequestDeleteSheetFile { relative_path: meta_relative_path });
+                     file_delete_writer.write(RequestDeleteSheetFile { relative_path: meta_relative_path });
                 } else {
                     // This case should ideally not happen if metadata_opt check passed
                     warn!("Cannot request file deletion for '{:?}/{}': Metadata was missing in removed data.", category, sheet_name);
@@ -71,7 +71,7 @@ pub fn handle_delete_request(
                 // Error from registry.delete_sheet
                 let msg = format!("Failed to delete sheet '{:?}/{}' from registry: {}", category, sheet_name, e);
                 error!("{}", msg);
-                feedback_writer.send(SheetOperationFeedback { message: msg, is_error: true });
+                feedback_writer.write(SheetOperationFeedback { message: msg, is_error: true });
             }
         }
     }

@@ -1,7 +1,7 @@
 // src/ui/elements/popups/column_options_popup.rs
 use crate::{
     sheets::{
-        definitions::{ColumnDataType, ColumnDefinition, ColumnValidator}, 
+        definitions::ColumnValidator, 
         events::{RequestUpdateColumnName, RequestUpdateColumnValidator},
         resources::SheetRegistry,
     },
@@ -13,7 +13,7 @@ use bevy_egui::egui;
 
 use super::column_options_on_close::handle_on_close;
 use super::column_options_ui::{
-    show_column_options_window_ui, ColumnOptionsUiResult,
+    show_column_options_window_ui,
 };
 use super::column_options_validator::apply_validator_update;
 
@@ -92,7 +92,7 @@ pub fn show_column_options_popup(
                             })
                         });
                     if !is_duplicate {
-                        column_rename_writer.send(RequestUpdateColumnName {
+                        column_rename_writer.write(RequestUpdateColumnName {
                             category: category.clone(),
                             sheet_name: sheet_name.clone(),
                             column_index: col_index,

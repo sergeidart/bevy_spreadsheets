@@ -66,7 +66,7 @@ pub fn generic_sheet_editor_ui(
     mut contexts: EguiContexts,
     mut state: ResMut<EditorWindowState>,
     mut sheet_writers: SheetEventWriters,
-    mut copier_writers: CopierEventWriters,
+    copier_writers: CopierEventWriters,
     mut registry: ResMut<SheetRegistry>,
     render_cache_res: Res<SheetRenderCache>,
     ui_feedback: Res<UiFeedbackState>,
@@ -75,8 +75,8 @@ pub fn generic_sheet_editor_ui(
     mut sheet_data_modified_events: EventReader<SheetDataModifiedInRegistryEvent>,
     mut api_key_status_res: ResMut<ApiKeyDisplayStatus>,
     mut session_api_key_res: ResMut<SessionApiKey>,
-    mut copier_manager: ResMut<VisualCopierManager>,
-    mut request_app_exit_writer: EventWriter<RequestAppExit>,
+    copier_manager: ResMut<VisualCopierManager>,
+    request_app_exit_writer: EventWriter<RequestAppExit>,
 ) {
     let ctx = contexts.ctx_mut();
     let initial_selected_category = state.selected_category.clone();

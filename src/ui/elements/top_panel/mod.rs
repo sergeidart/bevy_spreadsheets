@@ -2,11 +2,6 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 
-// Event imports for clarity, matching submodule needs
-use crate::sheets::events::{
-    AddSheetRowRequest, RequestAddColumn,
-    RequestInitiateFileUpload,
-};
 use crate::sheets::resources::SheetRegistry;
 use crate::ui::elements::editor::state::EditorWindowState;
 // Import the SheetEventWriters SystemParam struct

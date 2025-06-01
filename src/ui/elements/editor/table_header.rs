@@ -1,6 +1,6 @@
 // src/ui/elements/editor/table_header.rs
 use bevy::prelude::*;
-use bevy_egui::egui::{self, Id, Sense, PointerButton, Order, LayerId, Stroke, Color32, Rect};
+use bevy_egui::egui::{self, Id, Sense, PointerButton, Order, Stroke, Color32};
 use egui_extras::TableRow;
 
 use crate::sheets::definitions::SheetMetadata;
@@ -156,7 +156,7 @@ pub fn sheet_table_header(
 
                             if source_idx != final_insert_idx && final_insert_idx <= num_cols {
                                 info!("Column drop confirmed: Source idx {}, Target insert idx {}", source_idx, final_insert_idx);
-                                reorder_writer.send(RequestReorderColumn {
+                                reorder_writer.write(RequestReorderColumn {
                                     category: state.selected_category.clone(),
                                     sheet_name: sheet_name.to_string(),
                                     old_index: source_idx,

@@ -49,7 +49,7 @@ pub fn handle_add_column_request(
                 metadata.ensure_column_consistency(); 
                 operation_successful = true;
                 metadata_cache = Some(metadata.clone());
-                data_modified_writer.send(SheetDataModifiedInRegistryEvent {
+                data_modified_writer.write(SheetDataModifiedInRegistryEvent {
                     category: category.clone(),
                     sheet_name: sheet_name.clone(),
                 });
@@ -72,7 +72,7 @@ pub fn handle_add_column_request(
                 new_column_name, category, sheet_name
             );
             info!("{}", msg);
-            feedback_writer.send(SheetOperationFeedback {
+            feedback_writer.write(SheetOperationFeedback {
                 message: msg,
                 is_error: false,
             });
@@ -85,7 +85,7 @@ pub fn handle_add_column_request(
                 "Failed to add column to '{:?}/{}': {}",
                 category, sheet_name, err
             );
-            feedback_writer.send(SheetOperationFeedback {
+            feedback_writer.write(SheetOperationFeedback {
                 message: format!(
                     "Add column failed for '{:?}/{}': {}",
                     category, sheet_name, err

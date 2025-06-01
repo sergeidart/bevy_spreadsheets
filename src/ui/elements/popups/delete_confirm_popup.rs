@@ -50,7 +50,7 @@ pub fn show_delete_confirm_popup(
     let mut close_popup = false;
 
     if delete_clicked {
-        delete_event_writer.send(RequestDeleteSheet {
+        delete_event_writer.write(RequestDeleteSheet {
             category: state.delete_target_category.clone(), // <<< Send category
             sheet_name: state.delete_target_sheet.clone(),
         });

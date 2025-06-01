@@ -47,7 +47,7 @@ pub fn handle_json_sheet_upload(
 
         if let Err(e) = validator::validate_grid_structure(&event.grid_data, &generated_metadata, sheet_name) {
              error!("Internal Error: Grid validation failed for generated metadata: {}", e);
-             feedback_writer.send(SheetOperationFeedback { message: format!("Internal error during upload for '{}'", sheet_name), is_error: true });
+             feedback_writer.write(SheetOperationFeedback { message: format!("Internal error during upload for '{}'", sheet_name), is_error: true });
              continue;
         }
 
@@ -63,10 +63,10 @@ pub fn handle_json_sheet_upload(
         );
         let msg = format!("Sheet '{:?}/{}' successfully uploaded and registered.", category, sheet_name);
         info!("{}", msg);
-        feedback_writer.send(SheetOperationFeedback { message: msg, is_error: false });
+        feedback_writer.write(SheetOperationFeedback { message: msg, is_error: false });
 
         // Send data modified event
-        data_modified_writer.send(SheetDataModifiedInRegistryEvent {
+        data_modified_writer.write(SheetDataModifiedInRegistryEvent {
             category: category.clone(),
             sheet_name: sheet_name.clone(),
         });
@@ -93,16 +93,16 @@ pub fn handle_initiate_file_upload(
                 if path.file_name().map_or(false, |name| name.to_string_lossy().ends_with(".meta.json")) {
                      let msg = format!("Warning: Selected file '{}' looks like a metadata file. Please select the main data (.json) file.", path.display());
                      warn!("{}", msg);
-                     feedback_writer.send(SheetOperationFeedback { message: msg, is_error: true });
+                     feedback_writer.write(SheetOperationFeedback { message: msg, is_error: true });
                 } else {
                      info!("File picked: '{}'. Sending request to process.", path.display());
-                     process_event_writer.send(RequestProcessUpload { path }); 
+                     process_event_writer.write(RequestProcessUpload { path }); 
                 }
             }
             None => {
                  let msg = "File selection cancelled.".to_string();
                  info!("{}", msg);
-                 feedback_writer.send(SheetOperationFeedback { message: msg, is_error: false });
+                 feedback_writer.write(SheetOperationFeedback { message: msg, is_error: false });
             }
         }
     }
@@ -124,7 +124,7 @@ pub fn handle_process_upload_request(
 
          if let Err(e) = validator::validate_file_exists(path) {
               error!("Upload validation failed for '{}': {}", filename_display, e);
-              feedback_writer.send(SheetOperationFeedback { message: e, is_error: true });
+              feedback_writer.write(SheetOperationFeedback { message: e, is_error: true });
               continue;
          }
          let derived_name = path.file_stem()
@@ -134,13 +134,13 @@ pub fn handle_process_upload_request(
          if let Err(e) = validator::validate_sheet_name_for_upload(&derived_name, &registry, &mut feedback_writer) {
               let msg = format!("Upload failed for '{}': {}", filename_display, e);
               error!("{}", msg);
-              feedback_writer.send(SheetOperationFeedback { message: msg, is_error: true });
+              feedback_writer.write(SheetOperationFeedback { message: msg, is_error: true });
               continue;
          }
 
          match parsers::read_and_parse_json_sheet(path) {
              Ok((grid_data, _)) => { 
-                 uploaded_event_writer.send(JsonSheetUploaded {
+                 uploaded_event_writer.write(JsonSheetUploaded {
                      category: None, 
                      desired_sheet_name: derived_name,
                      original_filename: filename_only, 
@@ -150,7 +150,7 @@ pub fn handle_process_upload_request(
              Err(e) => {
                  let msg = format!("Error processing file '{}': {}", filename_display, e);
                  error!("{}", msg);
-                 feedback_writer.send(SheetOperationFeedback { message: msg, is_error: true });
+                 feedback_writer.write(SheetOperationFeedback { message: msg, is_error: true });
              }
          }
      }

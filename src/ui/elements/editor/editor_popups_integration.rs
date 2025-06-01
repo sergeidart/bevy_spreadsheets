@@ -1,5 +1,4 @@
 // src/ui/elements/editor/editor_popups_integration.rs
-use bevy::prelude::*;
 use bevy_egui::egui;
 use crate::ui::elements::popups::{
     show_ai_rule_popup, show_column_options_popup,
