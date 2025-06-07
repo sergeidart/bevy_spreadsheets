@@ -4,6 +4,7 @@ use bevy_egui::egui;
 
 use crate::sheets::events::{AddSheetRowRequest, RequestAddColumn};
 use crate::ui::elements::editor::state::{AiModeState, EditorWindowState, SheetInteractionState};
+use crate::sheets::resources::SheetRegistry;
 
 // Assuming this struct definition is intended to hold mutable references
 pub(super) struct InteractionModeEventWriters<'a, 'w> {
@@ -14,6 +15,7 @@ pub(super) struct InteractionModeEventWriters<'a, 'w> {
 pub(super) fn show_sheet_interaction_mode_buttons<'a, 'w>(
     ui: &mut egui::Ui,
     state: &mut EditorWindowState,
+    registry: &SheetRegistry,
     event_writers: InteractionModeEventWriters<'a, 'w>, // Takes struct of mutable refs
 ) {
     let is_sheet_selected = state.selected_sheet_name.is_some();

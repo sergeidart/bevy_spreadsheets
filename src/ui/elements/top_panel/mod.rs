@@ -153,6 +153,7 @@ mod orchestrator {
                     sheet_interaction_modes::show_sheet_interaction_mode_buttons(
                         ui_h,
                         state,
+                        registry,
                         sheet_interaction_modes::InteractionModeEventWriters {
                             add_row_event_writer: &mut sheet_writers.add_row,
                             add_column_event_writer: &mut sheet_writers.add_column,

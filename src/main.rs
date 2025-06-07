@@ -13,20 +13,20 @@ use image::ImageFormat as CrateImageFormat;
 use winit::window::Icon as WinitIcon;
 
 use bevy_egui::EguiPlugin;
-use bevy_tokio_tasks::TokioTasksPlugin; // Make sure this is present
+use bevy_tokio_tasks::TokioTasksPlugin;
 use dotenvy::dotenv;
 
-// --- MODIFICATION: Add visual_copier module ---
+// --- ADD THIS IMPORT ---
+use pyo3::prelude::*;
+
 mod sheets;
 mod ui;
 mod example_definitions;
-mod visual_copier; // Declare the new module
+mod visual_copier;
 
 use sheets::SheetsPlugin;
 use ui::EditorUiPlugin;
-use visual_copier::VisualCopierPlugin; // Import the plugin
-
-// --- END MODIFICATION ---
+use visual_copier::VisualCopierPlugin;
 
 #[derive(Resource, Debug, Default)]
 pub struct ApiKeyDisplayStatus {
@@ -37,6 +37,25 @@ pub struct ApiKeyDisplayStatus {
 pub struct SessionApiKey(pub Option<String>);
 
 fn main() {
+    // --- Always write the Python script at startup to ensure it's up to date ---
+    const AI_PROCESSOR_PY: &str = include_str!("../script/ai_processor.py");
+    let script_path = std::path::Path::new("script/ai_processor.py");
+    if let Some(parent) = script_path.parent() {
+        if let Err(e) = std::fs::create_dir_all(parent) {
+            eprintln!("Failed to create script directory: {e}");
+        }
+    }
+    if let Err(e) = std::fs::write(script_path, AI_PROCESSOR_PY) {
+        eprintln!("Failed to write ai_processor.py: {e}");
+    } else {
+        println!("ai_processor.py written to script/ directory.");
+    }
+
+    // --- ADD THIS LINE ---
+    // This initializes the Python interpreter for use in multiple threads,
+    // which is necessary for the background tasks that call the Python script.
+    pyo3::prepare_freethreaded_python();
+
     match dotenv() {
         Ok(path) => info!("Loaded .env file from: {:?}", path),
         Err(_) => info!(".env file not found or failed to load. API key must be set via UI or other means."),
@@ -60,7 +79,6 @@ fn main() {
                 })
                 .set(LogPlugin {
                     level: bevy::log::Level::INFO,
-                    // Adjusted filter to include visual_copier logs
                     filter: "wgpu=error,naga=warn,bevy_tokio_tasks=warn,hyper=warn,reqwest=warn,gemini_client_rs=info,visual_copier=info".to_string(),
                     ..default()
                 }),
@@ -68,12 +86,10 @@ fn main() {
         .add_plugins(EguiPlugin {
             enable_multipass_for_primary_context: true,
         })
-        .add_plugins(TokioTasksPlugin::default()) // Ensure this is added
+        .add_plugins(TokioTasksPlugin::default())
         .add_plugins(SheetsPlugin)
         .add_plugins(EditorUiPlugin)
-        // --- MODIFICATION: Add the VisualCopierPlugin ---
         .add_plugins(VisualCopierPlugin)
-        // --- END MODIFICATION ---
         .add_systems(Startup, (
             initialize_api_key_status_startup,
             set_window_icon,
@@ -86,12 +102,16 @@ fn initialize_api_key_status_startup(
     mut api_key_status_res: ResMut<ApiKeyDisplayStatus>,
     mut session_api_key: ResMut<SessionApiKey>,
 ) {
-    if let Ok(env_key) = std::env::var("GEMINI_API_KEY") {
-        if !env_key.is_empty() {
-            info!("GEMINI_API_KEY found in environment. Populating SessionApiKey.");
-            session_api_key.0 = Some(env_key);
-            api_key_status_res.status = "Key Set (Session from Env)".to_string();
-            return;
+    // Only try to load from Windows Credential Manager
+    if let Ok(keyring) = keyring::Entry::new("GoogleGeminiAPI", whoami::username().as_str()) {
+        match keyring.get_password() {
+            Ok(cred) if !cred.is_empty() => {
+                info!("API Key loaded from Windows Credential Manager. Populating SessionApiKey.");
+                session_api_key.0 = Some(cred);
+                api_key_status_res.status = "Key Set (Session from Windows Credential Manager)".to_string();
+                return;
+            }
+            _ => {}
         }
     }
     if session_api_key.0.is_some() {
