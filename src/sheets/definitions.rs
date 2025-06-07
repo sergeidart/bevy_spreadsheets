@@ -101,7 +101,7 @@ impl ColumnDefinition {
 
 // Default function for ai_model_id
 pub fn default_ai_model_id() -> String {
-    "gemini-1.5-flash".to_string() // Default model
+    "gemini-2.5-pro-preview-06-05".to_string() // Default model
 }
 
 // Default functions for existing AI parameters

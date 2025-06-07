@@ -37,7 +37,7 @@ def execute_ai_query(api_key: str, payload_json: str) -> str:  # noqa: D401
     payload_json
         JSON string produced by the Rust side.
         Expected schema (keys not listed are ignored):
-            ai_model_id:   str  – default: ``"gemini-2.5-flash"``
+            ai_model_id:   str  – default: ``"gemini-2.5-pro-preview-06-05"``
             general_sheet_rule: str | None – optional system instruction
             row_data:      List[Any]
             column_contexts: List[Any]
@@ -72,7 +72,7 @@ def execute_ai_query(api_key: str, payload_json: str) -> str:  # noqa: D401
         payload: Dict[str, Any] = json.loads(payload_json)
 
         # -------- Prompt Construction --------------------------------------------------
-        model_id: str = payload.get("ai_model_id", "gemini-2.5-flash")
+        model_id: str = payload.get("ai_model_id", "gemini-2.5-pro-preview-06-05")
         system_instruction: str | None = payload.get("general_sheet_rule")
         row_data: List[Any] = payload.get("row_data", [])
         column_contexts: List[Any] = payload.get("column_contexts", [])
