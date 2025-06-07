@@ -60,7 +60,7 @@ pub fn create_example_items_metadata() -> SheetMetadata {
         ai_temperature: default_temperature(),
         ai_top_k: default_top_k(),
         ai_top_p: default_top_p(),
-        requested_grounding_with_google_search: todo!(),
+        requested_grounding_with_google_search: Default::default(),
         // --- END MODIFIED ---
     }
 }
@@ -102,7 +102,7 @@ pub fn create_simple_config_metadata() -> SheetMetadata {
         ai_temperature: default_temperature(),
         ai_top_k: default_top_k(),
         ai_top_p: default_top_p(),
-        requested_grounding_with_google_search: todo!(),
+        requested_grounding_with_google_search: Default::default(),
         // --- END MODIFIED ---
     }
 }

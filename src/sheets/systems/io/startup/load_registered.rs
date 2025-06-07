@@ -93,9 +93,9 @@ fn load_and_update_single_sheet_entry(
 ) -> (bool, bool) { // Returns (needs_save, load_successful)
     trace!("Startup Load: Processing registered sheet entry '{:?}/{}'", category, sheet_name);
     let mut loaded_metadata_opt: Option<SheetMetadata> = None;
-    let mut final_grid_filename: Option<String> = None;
+    let mut final_grid_filename: Option<String>;
     let mut needs_save_after_correction = false;
-    let mut load_successful = false;
+    let load_successful;
 
     // ... (path finding logic remains the same) ...
     let (expected_meta_path_opt, _expected_grid_path_opt, initial_grid_filename_opt) = {
@@ -121,6 +121,7 @@ fn load_and_update_single_sheet_entry(
                  (Some(meta_p), Some(grid_p), Some(filename))
             })
     };
+    // Assign here after tuple destructure
     final_grid_filename = initial_grid_filename_opt;
 
 
@@ -169,7 +170,7 @@ fn load_and_update_single_sheet_entry(
         }
     }
 
-    let mut loaded_grid_data_opt: Option<Vec<Vec<String>>> = None;
+    let loaded_grid_data_opt: Option<Vec<Vec<String>>>;
     if let Some(grid_filename) = &final_grid_filename {
         if !grid_filename.is_empty() {
             let mut full_grid_path = base_path.to_path_buf();
@@ -206,7 +207,7 @@ fn load_and_update_single_sheet_entry(
          }
 
         // ... (Grid validation and update logic remains the same) ...
-        let mut grid_validation_passed = false;
+        let grid_validation_passed;
         if let (Some(grid), Some(meta)) = (&loaded_grid_data_opt, sheet_entry.metadata.as_ref()) {
              if meta.columns.is_empty() && !grid.is_empty() && grid.iter().any(|r| !r.is_empty()) { warn!("Grid structure validation skipped for '{:?}/{}': Metadata has no columns, but grid data exists.", category, sheet_name); grid_validation_passed = true; }
              else if !meta.columns.is_empty() {

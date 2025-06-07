@@ -9,7 +9,7 @@ pub(crate) enum CacheResult<'a> {
     /// Successfully retrieved or populated cache, contains reference to allowed values.
     Success(&'a HashSet<String>),
     /// An error occurred during cache population (e.g., target not found).
-    Error(String),
+    Error(()),
 }
 
 /// Gets the allowed values for a linked column, populating the cache if necessary.
@@ -91,12 +91,12 @@ pub(crate) fn get_or_populate_linked_options<'a>(
         }
 
         // Insert empty set if there was an error during generation to prevent repeated attempts
-        if let Some(err) = error_msg {
+        if let Some(_err) = error_msg {
             state
                 .linked_column_cache
                 .entry(cache_key.clone()) // Use entry API
                 .or_insert_with(HashSet::new);
-            return CacheResult::Error(err); // Return the error
+            return CacheResult::Error(()); // Return the error
         }
     }
 
@@ -111,6 +111,6 @@ pub(crate) fn get_or_populate_linked_options<'a>(
             "Logic error: Cache key ({:?}) not found after population attempt.",
             cache_key
         );
-        CacheResult::Error("Internal cache error".to_string())
+        CacheResult::Error(())
     }
 }

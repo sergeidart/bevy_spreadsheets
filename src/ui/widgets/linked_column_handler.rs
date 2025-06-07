@@ -22,7 +22,7 @@ pub fn handle_linked_column_edit(
     current_value: &str, // <-- Changed: Accept &str
     target_sheet_name: &str,
     target_column_index: usize,
-    registry: &SheetRegistry, // Still needed for potential future logic? Keep for now.
+    _registry: &SheetRegistry, // Mark as unused with underscore
     // state: &mut EditorWindowState, // Removed state
     allowed_values: &HashSet<String>, // Added allowed_values reference
 ) -> Option<String> {

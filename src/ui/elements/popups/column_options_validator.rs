@@ -38,7 +38,7 @@ pub(super) fn show_validator_section(
                 /* Basic Type Selector UI */
                 ui.horizontal(|ui| {
                     ui.label("Data Type:");
-                    egui::ComboBox::from_id_source("basic_type_selector")
+                    egui::ComboBox::from_id_salt("basic_type_selector")
                         .selected_text(format!(
                             "{:?}",
                             state.options_basic_type_select
@@ -99,7 +99,7 @@ pub(super) fn show_validator_section(
                         .as_deref()
                         .unwrap_or("--Select--");
                     let sheet_combo_resp =
-                        egui::ComboBox::from_id_source("link_sheet_selector")
+                        egui::ComboBox::from_id_salt("link_sheet_selector")
                             .selected_text(selected_sheet_text)
                             .show_ui(ui, |ui| {
                                 ui.selectable_value(
@@ -156,9 +156,7 @@ pub(super) fn show_validator_section(
                                         .unwrap_or("--Invalid--"),
                                     None => "--Select--",
                                 };
-                            egui::ComboBox::from_id_source(
-                                "link_column_selector",
-                            )
+                            egui::ComboBox::from_id_salt("link_column_selector")
                             .selected_text(selected_col_text)
                             .show_ui(ui, |ui| {
                                 ui.selectable_value(

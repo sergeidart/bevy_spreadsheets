@@ -16,7 +16,7 @@ use crate::{
 use bevy::prelude::*;
 
 pub fn handle_create_new_sheet_request(
-    commands: Commands,
+    _commands: Commands,
     mut events: EventReader<RequestCreateNewSheet>,
     mut registry: ResMut<SheetRegistry>,
     mut feedback_writer: EventWriter<SheetOperationFeedback>,

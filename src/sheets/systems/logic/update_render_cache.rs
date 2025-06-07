@@ -97,12 +97,13 @@ pub fn handle_sheet_render_cache_update(
                             .unwrap_or(""); // Default to empty string if out of bounds
 
                         let col_def_opt = metadata.columns.get(c_idx);
-                        let mut validation_state_for_cell = ValidationState::default();
+                        // let mut validation_state_for_cell = ValidationState::default();
                         // let mut display_text_for_cell = cell_value_str.to_string(); // Default
 
                         if let Some(col_def) = col_def_opt {
                             // Perform validation
-                            let (val_state, _allowed_values_opt) = match &col_def.validator {
+                            // Remove unused val_state assignment
+                            let (_val_state, _allowed_values_opt) = match &col_def.validator {
                                 Some(ColumnValidator::Basic(data_type)) => {
                                     let (state, _parse_error) = validate_basic_cell(cell_value_str, *data_type);
                                     (state, None)
@@ -121,20 +122,40 @@ pub fn handle_sheet_render_cache_update(
                                     (state, None)
                                  }
                              };
-                            validation_state_for_cell = val_state;
-
-                            // TODO: Advanced display_text formatting can be added here if needed.
-                            // For example, converting bool "true"/"false" to "✅"/"❌"
-                            // or formatting numbers. For now, display_text is the raw string.
+                            // Directly use validation in the render_cell assignment below
                         } else {
                              error!("Render Cache: Metadata column index mismatch for sheet '{:?}/{}' at column {}", category, sheet_name, c_idx);
-                             validation_state_for_cell = ValidationState::Invalid;
+                             // Directly use ValidationState::Invalid below
                         }
 
                         // Update the specific cell in the render cache
                         if let Some(render_cell) = current_sheet_render_cache.get_mut(r_idx).and_then(|row| row.get_mut(c_idx)) {
                             render_cell.display_text = cell_value_str.to_string();
-                            render_cell.validation_state = validation_state_for_cell;
+                            render_cell.validation_state = if let Some(col_def) = col_def_opt {
+                                // Use val_state from above
+                                let (val_state, _) = match &col_def.validator {
+                                    Some(ColumnValidator::Basic(data_type)) => {
+                                        let (state, _) = validate_basic_cell(cell_value_str, *data_type);
+                                        (state, None)
+                                    }
+                                    Some(ColumnValidator::Linked { target_sheet_name, target_column_index }) => {
+                                        validate_linked_cell(
+                                            cell_value_str,
+                                            target_sheet_name,
+                                            *target_column_index,
+                                            &registry,
+                                            &mut editor_state,
+                                        )
+                                    }
+                                    None => {
+                                        let (state, _) = validate_basic_cell(cell_value_str, ColumnDataType::String);
+                                        (state, None)
+                                    }
+                                };
+                                val_state
+                            } else {
+                                ValidationState::Invalid
+                            };
                         } else {
                             // This should not happen if ensure_and_get_sheet_cache_mut worked correctly
                             error!("Render Cache: Index out of bounds when updating cell [{},{}] for sheet '{:?}/{}'. Dimensions: {}x{}", r_idx, c_idx, category, sheet_name, num_rows, num_cols);

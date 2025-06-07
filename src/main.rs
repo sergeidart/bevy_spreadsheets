@@ -16,8 +16,6 @@ use bevy_egui::EguiPlugin;
 use bevy_tokio_tasks::TokioTasksPlugin;
 use dotenvy::dotenv;
 
-// --- ADD THIS IMPORT ---
-use pyo3::prelude::*;
 
 mod sheets;
 mod ui;

@@ -15,7 +15,7 @@ pub(super) struct InteractionModeEventWriters<'a, 'w> {
 pub(super) fn show_sheet_interaction_mode_buttons<'a, 'w>(
     ui: &mut egui::Ui,
     state: &mut EditorWindowState,
-    registry: &SheetRegistry,
+    _registry: &SheetRegistry, // Mark as unused with underscore
     event_writers: InteractionModeEventWriters<'a, 'w>, // Takes struct of mutable refs
 ) {
     let is_sheet_selected = state.selected_sheet_name.is_some();

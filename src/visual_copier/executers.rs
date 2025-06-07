@@ -29,7 +29,7 @@ pub(crate) fn execute_single_copy_operation(
 
     // Ensure the target directory exists, creating it if necessary.
     // This also helps validate if the to_path is usable.
-    if let Err(e) = std::fs::create_dir_all(to_path) {
+    if let Err(_e) = std::fs::create_dir_all(to_path) {
         // More specific error if creating the directory fails.
         return Err(CopyError::EndPathInvalid(to_path.clone()));
     }
