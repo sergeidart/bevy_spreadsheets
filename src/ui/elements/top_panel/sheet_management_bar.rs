@@ -34,7 +34,7 @@ pub(super) fn show_sheet_management_controls<'a, 'w>(
         .unwrap_or("Root (Uncategorized)");
 
     let category_combo_id = format!("category_selector_top_panel_refactored_{}", selected_category_text);
-    let category_response = egui::ComboBox::from_id_source(category_combo_id)
+    let category_response = egui::ComboBox::from_id_salt(category_combo_id)
         .selected_text(selected_category_text)
         .show_ui(ui, |ui| {
             let is_selected_root = state.selected_category.is_none();
@@ -108,7 +108,7 @@ pub(super) fn show_sheet_management_controls<'a, 'w>(
         |ui| {
             let selected_sheet_text = state.selected_sheet_name.as_deref().unwrap_or("--Select--");
             let sheet_response: egui::InnerResponse<Option<()>> =
-                egui::ComboBox::from_id_source(sheet_combo_id)
+                egui::ComboBox::from_id_salt(sheet_combo_id)
                     .selected_text(selected_sheet_text)
                     .show_ui(ui, |ui| {
                         let original_selection = state.selected_sheet_name.clone();
