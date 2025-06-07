@@ -41,48 +41,48 @@ pub fn sheet_table_header(
 
             let (_id, mut response) = ui.allocate_at_least(ui.available_size_before_wrap(), Sense::click_and_drag());
             
-            let mut header_content_ui = ui.child_ui(response.rect, *ui.layout(), None);
-
-            header_content_ui.horizontal(|ui_h| {
-                if state.current_interaction_mode == SheetInteractionState::DeleteModeActive {
-                    let mut is_selected_for_delete = state.selected_columns_for_deletion.contains(&c_idx);
-                    if ui_h.checkbox(&mut is_selected_for_delete, "").changed() {
-                        if is_selected_for_delete {
-                            state.selected_columns_for_deletion.insert(c_idx);
-                        } else {
-                            state.selected_columns_for_deletion.remove(&c_idx);
+            ui.allocate_ui_at_rect(response.rect, |header_content_ui| {
+                header_content_ui.horizontal(|ui_h| {
+                    if state.current_interaction_mode == SheetInteractionState::DeleteModeActive {
+                        let mut is_selected_for_delete = state.selected_columns_for_deletion.contains(&c_idx);
+                        if ui_h.checkbox(&mut is_selected_for_delete, "").changed() {
+                            if is_selected_for_delete {
+                                state.selected_columns_for_deletion.insert(c_idx);
+                            } else {
+                                state.selected_columns_for_deletion.remove(&c_idx);
+                            }
                         }
+                        ui_h.add_space(2.0);
                     }
-                    ui_h.add_space(2.0);
-                }
 
-                let display_text = if filters.get(c_idx).cloned().flatten().is_some() {
-                    format!("{} (Filtered)", header_text)
-                } else {
-                    header_text.clone()
-                };
-
-                let can_open_options = state.current_interaction_mode == SheetInteractionState::Idle;
-                let header_button = egui::Button::new(&display_text).fill(egui::Color32::TRANSPARENT);
-                let header_button_response = ui_h.add_enabled(can_open_options, header_button);
-
-                if header_button_response.clicked() && can_open_options {
-                    state.show_column_options_popup = true;
-                    state.options_column_target_sheet = sheet_name.to_string();
-                    state.options_column_target_index = c_idx;
-                    state.column_options_popup_needs_init = true;
-                    state.options_column_target_category = metadata.category.clone();
-                }
-                if can_open_options {
-                     header_button_response.on_hover_text(format!("Click for options for column '{}'", header_text));
-                } else if !is_column_mode {
-                    let mode_name = match state.current_interaction_mode {
-                        SheetInteractionState::AiModeActive => "AI Mode",
-                        SheetInteractionState::DeleteModeActive => "Delete Mode",
-                        _ => "another mode",
+                    let display_text = if filters.get(c_idx).cloned().flatten().is_some() {
+                        format!("{} (Filtered)", header_text)
+                    } else {
+                        header_text.clone()
                     };
-                     header_button_response.on_hover_text(format!("Column options disabled while in {}", mode_name));
-                }
+
+                    let can_open_options = state.current_interaction_mode == SheetInteractionState::Idle;
+                    let header_button = egui::Button::new(&display_text).fill(egui::Color32::TRANSPARENT);
+                    let header_button_response = ui_h.add_enabled(can_open_options, header_button);
+
+                    if header_button_response.clicked() && can_open_options {
+                        state.show_column_options_popup = true;
+                        state.options_column_target_sheet = sheet_name.to_string();
+                        state.options_column_target_index = c_idx;
+                        state.column_options_popup_needs_init = true;
+                        state.options_column_target_category = metadata.category.clone();
+                    }
+                    if can_open_options {
+                         header_button_response.on_hover_text(format!("Click for options for column '{}'", header_text));
+                    } else if !is_column_mode {
+                        let mode_name = match state.current_interaction_mode {
+                            SheetInteractionState::AiModeActive => "AI Mode",
+                            SheetInteractionState::DeleteModeActive => "Delete Mode",
+                            _ => "another mode",
+                        };
+                         header_button_response.on_hover_text(format!("Column options disabled while in {}", mode_name));
+                    }
+                });
             });
 
             if can_drag {
@@ -90,12 +90,12 @@ pub fn sheet_table_header(
                 if interact_response.drag_started_by(PointerButton::Primary) {
                     if state.column_drag_state.source_index.is_none() { 
                         state.column_drag_state.source_index = Some(c_idx);
-                        ctx.memory_mut(|mem| mem.set_dragged_id(item_id));
+                        ctx.set_dragged_id(item_id);
                         info!("Drag started for column idx: {}, id: {:?}", c_idx, item_id);
                     }
                 }
 
-                if ctx.memory(|mem| mem.is_being_dragged(item_id)) {
+                if ctx.is_being_dragged(item_id) {
                      response = response.on_hover_text(format!("Dragging column: {}", header_text));
                      egui::Area::new(item_id.with("drag_preview"))
                         .order(Order::Tooltip)
@@ -114,7 +114,7 @@ pub fn sheet_table_header(
                 if let Some(source_column_idx) = state.column_drag_state.source_index {
                     if source_column_idx != c_idx && response.hovered() {
                         // Further check if egui is actually dragging our item
-                         if let Some(globally_dragged_egui_id) = ctx.memory(|mem| mem.dragged_id()) {
+                         if let Some(globally_dragged_egui_id) = ctx.dragged_id() {
                             if globally_dragged_egui_id == dnd_id_source.with(source_column_idx) {
                                 let painter = ui.painter(); 
                                 let rect = response.rect; 
@@ -167,7 +167,7 @@ pub fn sheet_table_header(
                             }
                             
                             state.column_drag_state.source_index = None;
-                            ctx.memory_mut(|mem| mem.set_dragged_id(Id::NULL)); // Clear egui's state too
+                            ctx.set_dragged_id(Id::NULL); // Clear egui's state too
                             drop_handled_this_frame = true; 
                         }
                     }
@@ -183,7 +183,7 @@ pub fn sheet_table_header(
             state.column_drag_state.source_index = None;
             // It's good practice to also clear egui's dragged_id if our app thought a drag was active.
             // Egui might have already cleared it, but this ensures consistency.
-            ctx.memory_mut(|mem| mem.set_dragged_id(Id::NULL));
+            ctx.set_dragged_id(Id::NULL);
         }
     }
     
