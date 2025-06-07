@@ -97,6 +97,7 @@ pub struct EditorWindowState {
     // General Settings Popup
     pub show_settings_popup: bool, 
     pub settings_new_api_key_input: String,
+    pub was_settings_popup_open: bool, // Tracks previous state of settings popup
 
     // Table rendering helpers
     pub filtered_row_indices_cache: HashMap<(Option<String>, String, u64), Vec<usize>>,
