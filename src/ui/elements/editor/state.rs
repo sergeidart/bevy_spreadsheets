@@ -112,6 +112,10 @@ pub struct EditorWindowState {
     pub current_interaction_mode: SheetInteractionState,
     pub selected_columns_for_deletion: HashSet<usize>,
     pub column_drag_state: ColumnDragState,
+
+    // NEW: Fields for AI Rule Popup context
+    pub ai_rule_popup_last_category: Option<String>,
+    pub ai_rule_popup_last_sheet: Option<String>,
 }
 
 impl EditorWindowState {

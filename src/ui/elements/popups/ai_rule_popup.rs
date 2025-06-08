@@ -60,29 +60,31 @@ pub fn show_ai_rule_popup(
     // --- END MODIFIED ---
 
     // --- ADDITION: Close popup if context changed ---
-    if let (Some(opened_cat), Some(opened_sheet)) = (state.selected_category.clone(), state.selected_sheet_name.clone()) {
-        static mut LAST_POPUP_CATEGORY: Option<String> = None;
-        static mut LAST_POPUP_SHEET: Option<String> = None;
-        let mut context_changed = false;
-        unsafe {
-            if state.show_ai_rule_popup {
-                if let (Some(last_cat), Some(last_sheet)) = (&LAST_POPUP_CATEGORY, &LAST_POPUP_SHEET) {
-                    if last_cat != &opened_cat || last_sheet != &opened_sheet {
-                        context_changed = true;
-                    }
+    // Use fields on EditorWindowState instead of static muts
+    let context_changed = if state.show_ai_rule_popup {
+        match (&state.ai_rule_popup_last_category, &state.ai_rule_popup_last_sheet, &state.selected_category, &state.selected_sheet_name) {
+            (Some(last_cat), Some(last_sheet), Some(current_cat), Some(current_sheet)) => {
+                if last_cat != current_cat || last_sheet != current_sheet {
+                    true
                 } else {
-                    LAST_POPUP_CATEGORY = Some(opened_cat.clone());
-                    LAST_POPUP_SHEET = Some(opened_sheet.clone());
+                    false
                 }
-            } else {
-                LAST_POPUP_CATEGORY = None;
-                LAST_POPUP_SHEET = None;
-            }
+            },
+            (None, None, Some(current_cat), Some(current_sheet)) => {
+                state.ai_rule_popup_last_category = Some(current_cat.clone());
+                state.ai_rule_popup_last_sheet = Some(current_sheet.clone());
+                false
+            },
+            _ => false,
         }
-        if context_changed {
-            state.show_ai_rule_popup = false;
-            return;
-        }
+    } else {
+        state.ai_rule_popup_last_category = None;
+        state.ai_rule_popup_last_sheet = None;
+        false
+    };
+    if context_changed {
+        state.show_ai_rule_popup = false;
+        return;
     }
 
     let mut is_window_open = state.show_ai_rule_popup;
