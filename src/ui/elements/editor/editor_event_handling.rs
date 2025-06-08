@@ -42,6 +42,8 @@ pub(super) fn process_editor_events_and_state(
     if initial_selected_category != &state.selected_category || initial_selected_sheet_name != &state.selected_sheet_name {
         debug!("Selected sheet or category changed by UI interaction.");
         state.reset_interaction_modes_and_selections();
+        // Close AI config popup if open
+        state.show_ai_rule_popup = false;
         if let Some(sheet_name) = &state.selected_sheet_name {
             if render_cache.get_cell_data(&state.selected_category, sheet_name, 0, 0).is_none()
                 && registry.get_sheet(&state.selected_category, sheet_name).map_or(false, |d| !d.grid.is_empty()) {

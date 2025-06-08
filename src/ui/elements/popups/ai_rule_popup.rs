@@ -59,6 +59,32 @@ pub fn show_ai_rule_popup(
     }
     // --- END MODIFIED ---
 
+    // --- ADDITION: Close popup if context changed ---
+    if let (Some(opened_cat), Some(opened_sheet)) = (state.selected_category.clone(), state.selected_sheet_name.clone()) {
+        static mut LAST_POPUP_CATEGORY: Option<String> = None;
+        static mut LAST_POPUP_SHEET: Option<String> = None;
+        let mut context_changed = false;
+        unsafe {
+            if state.show_ai_rule_popup {
+                if let (Some(last_cat), Some(last_sheet)) = (&LAST_POPUP_CATEGORY, &LAST_POPUP_SHEET) {
+                    if last_cat != &opened_cat || last_sheet != &opened_sheet {
+                        context_changed = true;
+                    }
+                } else {
+                    LAST_POPUP_CATEGORY = Some(opened_cat.clone());
+                    LAST_POPUP_SHEET = Some(opened_sheet.clone());
+                }
+            } else {
+                LAST_POPUP_CATEGORY = None;
+                LAST_POPUP_SHEET = None;
+            }
+        }
+        if context_changed {
+            state.show_ai_rule_popup = false;
+            return;
+        }
+    }
+
     let mut is_window_open = state.show_ai_rule_popup;
     let mut save_requested = false;
     let mut cancel_requested = false;
