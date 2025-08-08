@@ -124,6 +124,7 @@ pub(super) fn show_sheet_management_controls<'a, 'w>(
                             state.reset_interaction_modes_and_selections();
                             state.force_filter_recalculation = true;
                             state.ai_rule_popup_needs_init = true;
+                            state.show_column_options_popup = false; // Close column options on sheet change
                         }
                     });
             if sheet_response.response.changed() {
@@ -132,6 +133,7 @@ pub(super) fn show_sheet_management_controls<'a, 'w>(
                 }
                 state.force_filter_recalculation = true;
                 state.ai_rule_popup_needs_init = true;
+                state.show_column_options_popup = false; // Close column options on sheet change
             }
             if let Some(current_sheet_name) = state.selected_sheet_name.as_ref() {
                 if !registry
@@ -142,6 +144,7 @@ pub(super) fn show_sheet_management_controls<'a, 'w>(
                     state.reset_interaction_modes_and_selections();
                     state.force_filter_recalculation = true;
                     state.ai_rule_popup_needs_init = true;
+                    state.show_column_options_popup = false; // Close column options on sheet change
                 }
             }
         },

@@ -116,6 +116,17 @@ pub struct EditorWindowState {
     // NEW: Fields for AI Rule Popup context
     pub ai_rule_popup_last_category: Option<String>,
     pub ai_rule_popup_last_sheet: Option<String>,
+
+    // NEW: Random Picker UI state (per-session)
+    pub show_random_picker_panel: bool,
+    pub random_picker_mode_is_complex: bool,
+    pub random_simple_result_col: usize,
+    pub random_complex_result_col: usize,
+    pub random_complex_weight_col: Option<usize>,
+    pub random_complex_second_weight_col: Option<usize>,
+    pub random_picker_last_value: String,
+    // Ensure RP UI initializes once per selection (also on app startup)
+    pub random_picker_needs_init: bool,
 }
 
 impl EditorWindowState {
@@ -133,5 +144,7 @@ impl EditorWindowState {
         self.ai_current_review_index = None;
 
         self.column_drag_state = ColumnDragState::default();
+
+    // Keep random picker visible state as-is across mode changes.
     }
 }

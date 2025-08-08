@@ -5,6 +5,7 @@ use bevy_egui::egui;
 use crate::sheets::events::{AddSheetRowRequest, RequestAddColumn};
 use crate::ui::elements::editor::state::{AiModeState, EditorWindowState, SheetInteractionState};
 use crate::sheets::resources::SheetRegistry;
+use crate::sheets::definitions::RandomPickerMode; // For initializing from metadata when opening panel
 
 // Assuming this struct definition is intended to hold mutable references
 pub(super) struct InteractionModeEventWriters<'a, 'w> {
@@ -104,6 +105,44 @@ pub(super) fn show_sheet_interaction_mode_buttons<'a, 'w>(
             .clicked()
         {
             state.current_interaction_mode = SheetInteractionState::ColumnModeActive;
+        }
+    }
+
+    ui.separator();
+    // NEW: Random Picker toggle button (shown in the same row)
+    let rp_btn_text = if state.show_random_picker_panel { "🎲 Random Picker (Hide)" } else { "🎲 Random Picker" };
+    if ui
+        .add_enabled(is_sheet_selected, egui::Button::new(rp_btn_text))
+        .on_hover_text("Pick a random value from a column (simple) or by weighted columns (complex)")
+        .clicked()
+    {
+        state.show_random_picker_panel = !state.show_random_picker_panel;
+        // When opening the panel, initialize Random Picker UI from persisted metadata
+        if state.show_random_picker_panel {
+            state.random_picker_needs_init = true; // Also flag for systems that rely on it
+            if let Some(sheet_name) = &state.selected_sheet_name {
+                if let Some(sheet) = _registry.get_sheet(&state.selected_category, sheet_name) {
+                    if let Some(meta) = &sheet.metadata {
+                        let num_cols = meta.columns.len();
+                        if let Some(rp) = &meta.random_picker {
+                            state.random_picker_mode_is_complex = matches!(rp.mode, RandomPickerMode::Complex);
+                            state.random_simple_result_col = rp.simple_result_col_index.min(num_cols.saturating_sub(1));
+                            state.random_complex_result_col = rp.complex_result_col_index.min(num_cols.saturating_sub(1));
+                            state.random_complex_weight_col = rp.weight_col_index.filter(|i| *i < num_cols);
+                            state.random_complex_second_weight_col = rp.second_weight_col_index.filter(|i| *i < num_cols);
+                        } else {
+                            // Defaults if no settings persisted yet
+                            state.random_picker_mode_is_complex = false;
+                            state.random_simple_result_col = 0.min(num_cols.saturating_sub(1));
+                            state.random_complex_result_col = 0.min(num_cols.saturating_sub(1));
+                            state.random_complex_weight_col = None;
+                            state.random_complex_second_weight_col = None;
+                        }
+                        // Clear last shown value on (re)open
+                        state.random_picker_last_value.clear();
+                    }
+                }
+            }
         }
     }
 }

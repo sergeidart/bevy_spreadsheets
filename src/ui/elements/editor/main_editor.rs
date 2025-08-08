@@ -109,7 +109,7 @@ pub fn generic_sheet_editor_ui(
         show_top_panel_orchestrator(
             ui,
             &mut state,
-            &registry,
+            &mut *registry,
             // MODIFIED: Pass &mut sheet_writers
             &mut sheet_writers,
             copier_manager, // Assuming this is ResMut or similar, passed correctly

@@ -105,12 +105,13 @@ pub(super) fn truncate_path_string(path_str: &str, max_width_pixels: f32, ui: &e
 
 mod orchestrator {
     use super::*;
+    // No extra imports needed here
 
     #[allow(clippy::too_many_arguments)]
     pub fn show_top_panel_orchestrator<'w>(
         ui: &mut egui::Ui,
         state: &mut EditorWindowState,
-        registry: &SheetRegistry,
+        registry: &mut SheetRegistry,
         sheet_writers: &mut SheetEventWriters<'w>, // Received as &mut
         mut copier_manager: ResMut<VisualCopierManager>,
         // MODIFIED: Make these EventWriter parameters mutable
@@ -126,7 +127,7 @@ mod orchestrator {
                     sheet_management_bar::show_sheet_management_controls(
                         ui_h,
                         state,
-                        registry,
+                        &*registry,
                         sheet_management_bar::SheetManagementEventWriters {
                              upload_req_writer: &mut sheet_writers.upload_req,
                              // MODIFIED: Pass &mut to the local mutable EventWriter
@@ -153,13 +154,204 @@ mod orchestrator {
                     sheet_interaction_modes::show_sheet_interaction_mode_buttons(
                         ui_h,
                         state,
-                        registry,
+                        &*registry,
                         sheet_interaction_modes::InteractionModeEventWriters {
                             add_row_event_writer: &mut sheet_writers.add_row,
                             add_column_event_writer: &mut sheet_writers.add_column,
                         }
                     );
                 });
+                // NEW: Random Picker panel expanded row
+                if state.show_random_picker_panel {
+                    ui.add_space(4.0);
+                    let mut random_settings_changed = false;
+                    ui.horizontal_wrapped(|ui_h| {
+                        // Mode dropdown
+                        ui_h.label("Random:");
+                        let mut mode_is_complex = state.random_picker_mode_is_complex;
+                        egui::ComboBox::from_id_salt("random_picker_mode")
+                            .selected_text(if mode_is_complex { "Complex" } else { "Simple" })
+                            .show_ui(ui_h, |ui| {
+                                if ui.selectable_label(!mode_is_complex, "Simple").clicked() {
+                                    mode_is_complex = false;
+                                }
+                                if ui.selectable_label(mode_is_complex, "Complex").clicked() {
+                                    mode_is_complex = true;
+                                }
+                            });
+                        if mode_is_complex != state.random_picker_mode_is_complex { state.random_picker_mode_is_complex = mode_is_complex; random_settings_changed = true; }
+
+                        let is_enabled = state.selected_sheet_name.is_some();
+                        // Refresh button will perform picking below based on mode
+
+                        // Columns list
+                        let headers: Vec<String> =
+                            if let Some(sel) = &state.selected_sheet_name {
+                                registry
+                                    .get_sheet(&state.selected_category, sel)
+                                    .and_then(|d| d.metadata.as_ref())
+                                    .map(|m| m.columns.iter().map(|c| c.header.clone()).collect())
+                                    .unwrap_or_default()
+                            } else { Vec::new() };
+
+                        if !state.random_picker_mode_is_complex {
+                            // Simple
+                            // Result column dropdown
+                            let mut simple_col = state
+                                .random_simple_result_col
+                                .min(headers.len().saturating_sub(1));
+                            let before = state.random_simple_result_col;
+                            egui::ComboBox::from_id_salt("random_simple_result_col")
+                                .selected_text(headers.get(simple_col).cloned().unwrap_or_else(|| "<no columns>".to_string()))
+                                .show_ui(ui_h, |ui| {
+                                    for (i, h) in headers.iter().enumerate() {
+                                        ui.selectable_value(&mut simple_col, i, h);
+                                    }
+                                });
+                            if simple_col != before {
+                                state.random_simple_result_col = simple_col;
+                                random_settings_changed = true;
+                            }
+
+                            // Read-only display field
+                            ui_h.add_enabled(false, egui::TextEdit::singleline(&mut state.random_picker_last_value));
+
+                            // Refresh button
+                            if ui_h.add_enabled(is_enabled, egui::Button::new("🔄 Refresh")).clicked() {
+                                if let Some(sel) = &state.selected_sheet_name {
+                                    if let Some(sheet) = registry.get_sheet(&state.selected_category, sel) {
+                                        let col = state.random_simple_result_col;
+                                        let non_empty: Vec<&str> = sheet.grid.iter().filter_map(|row| row.get(col)).map(|s| s.as_str()).filter(|s| !s.is_empty()).collect();
+                                        if non_empty.is_empty() {
+                                            state.random_picker_last_value.clear();
+                                        } else {
+                                            let idx = (rand::random::<u64>() as usize) % non_empty.len();
+                                            state.random_picker_last_value = non_empty[idx].to_string();
+                                        }
+                                        random_settings_changed = true;
+                                    }
+                                }
+                            }
+                        } else {
+                            // Complex
+                            // Result col
+                            let mut result_col = state
+                                .random_complex_result_col
+                                .min(headers.len().saturating_sub(1));
+                            let before_r = state.random_complex_result_col;
+                            egui::ComboBox::from_id_salt("random_complex_result_col")
+                                .selected_text(headers.get(result_col).cloned().unwrap_or_else(|| "<no columns>".to_string()))
+                                .show_ui(ui_h, |ui| {
+                                    for (i, h) in headers.iter().enumerate() {
+                                        ui.selectable_value(&mut result_col, i, h);
+                                    }
+                                });
+                            if result_col != before_r {
+                                state.random_complex_result_col = result_col;
+                                random_settings_changed = true;
+                            }
+                            // Read-only display field for last picked value (before weights to distinguish roles)
+                            ui_h.add_enabled(false, egui::TextEdit::singleline(&mut state.random_picker_last_value));
+
+                            // Keep Refresh immediately after the result field (same relative spot as before)
+                            if ui_h.add_enabled(is_enabled, egui::Button::new("🔄 Refresh")).clicked() {
+                                if let Some(sel) = &state.selected_sheet_name {
+                                    if let Some(sheet) = registry.get_sheet(&state.selected_category, sel) {
+                                        let rcol = state.random_complex_result_col;
+                                        let w1_idx = state.random_complex_weight_col;
+                                        let w2_idx = state.random_complex_second_weight_col;
+                                        let mut values: Vec<(&str, f64)> = Vec::new();
+                                        for row in &sheet.grid {
+                                            let val = row.get(rcol).map(|s| s.as_str()).unwrap_or("");
+                                            if val.is_empty() { continue; }
+                                            let w1 = w1_idx.and_then(|i| row.get(i)).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+                                            let w2 = w2_idx.and_then(|i| row.get(i)).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
+                                            let w = if w2_idx.is_some() { w1 + w2 } else { w1 };
+                                            if w > 0.0 { values.push((val, w)); }
+                                        }
+                                        if values.is_empty() { state.random_picker_last_value.clear(); }
+                                        else {
+                                            let total: f64 = values.iter().map(|(_, w)| *w).sum();
+                                            let mut target = rand::random::<f64>() * total;
+                                            let mut picked = values[0].0;
+                                            for (v, w) in values {
+                                                if target <= w { picked = v; break; }
+                                                target -= w;
+                                            }
+                                            state.random_picker_last_value = picked.to_string();
+                                        }
+                                        random_settings_changed = true;
+                                    }
+                                }
+                            }
+
+                            // First weight
+                            let mut w1_opt = state.random_complex_weight_col;
+                            let mut w1 = w1_opt.unwrap_or(0).min(headers.len().saturating_sub(1));
+                            egui::ComboBox::from_id_salt("random_complex_weight_col")
+                                .selected_text(headers.get(w1).cloned().unwrap_or_else(|| "<no columns>".to_string()))
+                                .show_ui(ui_h, |ui| {
+                                    for (i, h) in headers.iter().enumerate() {
+                                        if ui.selectable_label(Some(i) == w1_opt, h).clicked() {
+                                            w1_opt = Some(i);
+                                            w1 = i;
+                                            random_settings_changed = true;
+                                        }
+                                    }
+                                });
+                            // Persist after first weight change
+                            // (If None was previously, selecting sets Some)
+                            // Note: Using currently set value
+                            // Second weight (optional)
+                            let mut w2_opt = state.random_complex_second_weight_col;
+                            let mut w2 = w2_opt.unwrap_or(w1).min(headers.len().saturating_sub(1));
+                            egui::ComboBox::from_id_salt("random_complex_second_weight_col")
+                                .selected_text(w2_opt.and_then(|i| headers.get(i)).cloned().unwrap_or_else(|| "(none)".to_string()))
+                                .show_ui(ui_h, |ui| {
+                    if ui.selectable_label(w2_opt.is_none(), "(none)").clicked() { w2_opt=None; random_settings_changed = true; }
+                    for (i, h) in headers.iter().enumerate() { if ui.selectable_label(Some(i)==w2_opt, h).clicked(){ w2_opt=Some(i); w2=i; random_settings_changed = true; } }
+                                });
+                            // end weights selection
+                            // write back weight selections
+                            if w1_opt != state.random_complex_weight_col { state.random_complex_weight_col = w1_opt; }
+                            if w2_opt != state.random_complex_second_weight_col { state.random_complex_second_weight_col = w2_opt; }
+
+                            // Refresh moved above
+                        }
+                    });
+                    // Persist settings once after UI if changed
+                    if random_settings_changed {
+                        if let Some(sel) = &state.selected_sheet_name.clone() {
+                            let mut meta_to_save = None;
+                            if let Some(sheet_mut) = registry.get_sheet_mut(&state.selected_category, sel) {
+                                if let Some(meta) = &mut sheet_mut.metadata {
+                                    use crate::sheets::definitions::{RandomPickerSettings, RandomPickerMode};
+                                    let settings = if state.random_picker_mode_is_complex {
+                                        RandomPickerSettings {
+                                            mode: RandomPickerMode::Complex,
+                                            simple_result_col_index: 0,
+                                            complex_result_col_index: state.random_complex_result_col,
+                                            weight_col_index: state.random_complex_weight_col,
+                                            second_weight_col_index: state.random_complex_second_weight_col,
+                                        }
+                                    } else {
+                                        RandomPickerSettings {
+                                            mode: RandomPickerMode::Simple,
+                                            simple_result_col_index: state.random_simple_result_col,
+                                            complex_result_col_index: 0,
+                                            weight_col_index: None,
+                                            second_weight_col_index: None,
+                                        }
+                                    };
+                                    meta.random_picker = Some(settings.clone());
+                                    meta_to_save = Some(meta.clone());
+                                }
+                            }
+                            if let Some(m) = meta_to_save { crate::sheets::systems::io::save::save_single_sheet(&*registry, &m); }
+                        }
+                    }
+                    ui.add_space(5.0);
+                }
                 ui.add_space(5.0);
             });
     }

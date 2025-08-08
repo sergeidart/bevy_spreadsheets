@@ -43,10 +43,24 @@ pub fn handle_linked_column_edit(
     let link_error: Option<String> = None; // Assume link itself is okay if we got valid allowed_values
 
     // --- 2. Manage Input Text (using egui temporary memory) ---
+    // To avoid "ghosting" when rows are inserted/deleted (IDs shift),
+    // if the widget is NOT focused and the cached text differs from the
+    // actual cell value for this frame, reset the cache to the true value.
+    let has_focus = ui.memory(|mem| mem.has_focus(text_edit_id));
+    let needs_reset = ui.memory(|mem| {
+        mem.data
+            .get_temp::<String>(text_edit_id)
+            .map(|s| s != current_value)
+            .unwrap_or(false)
+    });
+    if !has_focus && needs_reset {
+        ui.memory_mut(|mem| mem.data.insert_temp(text_edit_id, current_value.to_string()));
+    }
+
     let mut input_text = ui.memory_mut(|mem| {
         mem.data
-            // --- MODIFIED: Initialize with current_value (&str) ---
-            .get_temp_mut_or_insert_with::<String>(text_edit_id, || -> String { current_value.to_string() }) // Clone only once for initialization if needed
+            // Initialize with current_value (&str) if no cache exists (first render)
+            .get_temp_mut_or_insert_with::<String>(text_edit_id, || -> String { current_value.to_string() })
             .clone() // Clone the String buffer from memory for local use
     });
     trace!("Input text from memory: '{}'", input_text);

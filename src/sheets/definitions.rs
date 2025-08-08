@@ -60,6 +60,33 @@ impl fmt::Display for ColumnValidator {
     }
 }
 
+// --- NEW: Random Picker configuration types ---
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum RandomPickerMode {
+    Simple,
+    Complex,
+}
+
+impl Default for RandomPickerMode {
+    fn default() -> Self { RandomPickerMode::Simple }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RandomPickerSettings {
+    #[serde(default)]
+    pub mode: RandomPickerMode,
+    /// Used when mode == Simple
+    #[serde(default)]
+    pub simple_result_col_index: usize,
+    /// Used when mode == Complex
+    #[serde(default)]
+    pub complex_result_col_index: usize,
+    #[serde(default)]
+    pub weight_col_index: Option<usize>,
+    #[serde(default)]
+    pub second_weight_col_index: Option<usize>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ColumnDefinition {
     pub header: String,
@@ -138,6 +165,10 @@ pub struct SheetMetadata {
     // Use the defined default function for serde
     #[serde(default = "default_grounding_with_google_search")]
     pub requested_grounding_with_google_search: Option<bool>,
+
+    // NEW: Optional per-sheet Random Picker settings
+    #[serde(default)]
+    pub random_picker: Option<RandomPickerSettings>,
 }
 
 impl SheetMetadata {
@@ -168,6 +199,7 @@ impl SheetMetadata {
             ai_top_p: default_top_p(),
             // Call the defined function for initialization
             requested_grounding_with_google_search: default_grounding_with_google_search(),
+            random_picker: None,
         }
     }
 
