@@ -145,4 +145,18 @@ pub(super) fn show_sheet_interaction_mode_buttons<'a, 'w>(
             }
         }
     }
+
+    // NEW: Summarizer toggle button
+    let sum_btn_text = if state.show_summarizer_panel { "∑ Summarizer (Hide)" } else { "∑ Summarizer" };
+    if ui
+        .add_enabled(is_sheet_selected, egui::Button::new(sum_btn_text))
+        .on_hover_text("Sum numeric column or count non-empty values for text columns")
+        .clicked()
+    {
+        state.show_summarizer_panel = !state.show_summarizer_panel;
+        if state.show_summarizer_panel {
+            state.summarizer_last_result.clear();
+            state.summarizer_selected_col = 0; // Reset selection to first column
+        }
+    }
 }

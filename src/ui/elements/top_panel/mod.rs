@@ -352,6 +352,77 @@ mod orchestrator {
                     }
                     ui.add_space(5.0);
                 }
+                // NEW: Summarizer panel expanded row
+                if state.show_summarizer_panel {
+                    ui.add_space(4.0);
+                    ui.horizontal_wrapped(|ui_h| {
+                        ui_h.label("Summarize:");
+                        // Collect headers and data types
+                        let mut headers: Vec<(String, crate::sheets::definitions::ColumnDataType)> = Vec::new();
+                        if let Some(sel) = &state.selected_sheet_name {
+                            if let Some(sheet) = registry.get_sheet(&state.selected_category, sel) {
+                                if let Some(meta) = &sheet.metadata {
+                                    headers = meta.columns.iter().map(|c| (c.header.clone(), c.data_type)).collect();
+                                }
+                            }
+                        }
+                        if headers.is_empty() { ui_h.label("<no columns>"); return; }
+                        let mut sel_col = state.summarizer_selected_col.min(headers.len().saturating_sub(1));
+                        egui::ComboBox::from_id_salt("summarizer_col")
+                            .selected_text(headers.get(sel_col).map(|h| h.0.clone()).unwrap_or_else(|| "<no columns>".to_string()))
+                            .show_ui(ui_h, |ui| {
+                                for (i, (h, _)) in headers.iter().enumerate() {
+                                    if ui.selectable_label(i==sel_col, h).clicked() { sel_col = i; }
+                                }
+                            });
+                        state.summarizer_selected_col = sel_col;
+                        // Read-only result field
+                        ui_h.add_enabled(false, egui::TextEdit::singleline(&mut state.summarizer_last_result));
+                        // Compute button
+                        if ui_h.add_enabled(state.selected_sheet_name.is_some(), egui::Button::new("∑ Compute")).clicked() {
+                            state.summarizer_last_result.clear();
+                            if let Some(sel) = &state.selected_sheet_name {
+                                if let Some(sheet) = registry.get_sheet(&state.selected_category, sel) {
+                                    let dtype = headers.get(sel_col).map(|h| h.1).unwrap_or(crate::sheets::definitions::ColumnDataType::String);
+                                    let col_index = sel_col;
+                                    match dtype {
+                                        crate::sheets::definitions::ColumnDataType::String | crate::sheets::definitions::ColumnDataType::OptionString => {
+                                            let count = sheet.grid.iter().filter_map(|row| row.get(col_index)).filter(|v| !v.trim().is_empty()).count();
+                                            state.summarizer_last_result = format!("Count: {}", count);
+                                        }
+                                        crate::sheets::definitions::ColumnDataType::Bool | crate::sheets::definitions::ColumnDataType::OptionBool => {
+                                            let (t,f) = sheet.grid.iter().filter_map(|row| row.get(col_index)).filter(|v| !v.trim().is_empty()).fold((0usize,0usize), |acc, v| { let vl = v.to_ascii_lowercase(); if vl=="true" || vl=="1" { (acc.0+1, acc.1) } else { (acc.0, acc.1+1) } });
+                                            state.summarizer_last_result = format!("Bool Count -> true: {}, false: {}", t, f);
+                                        }
+                                        // Unsigned integers
+                                        crate::sheets::definitions::ColumnDataType::U8 | crate::sheets::definitions::ColumnDataType::OptionU8 |
+                                        crate::sheets::definitions::ColumnDataType::U16 | crate::sheets::definitions::ColumnDataType::OptionU16 |
+                                        crate::sheets::definitions::ColumnDataType::U32 | crate::sheets::definitions::ColumnDataType::OptionU32 |
+                                        crate::sheets::definitions::ColumnDataType::U64 | crate::sheets::definitions::ColumnDataType::OptionU64 => {
+                                            let mut sum:u128=0; let mut count=0; let mut invalid=0; for row in &sheet.grid { if let Some(val)=row.get(col_index) { if val.trim().is_empty() {continue;} match val.parse::<u128>() { Ok(v)=>{sum+=v; count+=1;}, Err(_)=>invalid+=1 } } }
+                                            state.summarizer_last_result = format!("Sum: {} (values: {}, invalid: {})", sum, count, invalid);
+                                        }
+                                        // Signed ints
+                                        crate::sheets::definitions::ColumnDataType::I8 | crate::sheets::definitions::ColumnDataType::OptionI8 |
+                                        crate::sheets::definitions::ColumnDataType::I16 | crate::sheets::definitions::ColumnDataType::OptionI16 |
+                                        crate::sheets::definitions::ColumnDataType::I32 | crate::sheets::definitions::ColumnDataType::OptionI32 |
+                                        crate::sheets::definitions::ColumnDataType::I64 | crate::sheets::definitions::ColumnDataType::OptionI64 => {
+                                            let mut sum:i128=0; let mut count=0; let mut invalid=0; for row in &sheet.grid { if let Some(val)=row.get(col_index) { if val.trim().is_empty(){continue;} match val.parse::<i128>() { Ok(v)=>{sum+=v; count+=1;}, Err(_)=>invalid+=1 } } }
+                                            state.summarizer_last_result = format!("Sum: {} (values: {}, invalid: {})", sum, count, invalid);
+                                        }
+                                        // Floats
+                                        crate::sheets::definitions::ColumnDataType::F32 | crate::sheets::definitions::ColumnDataType::OptionF32 |
+                                        crate::sheets::definitions::ColumnDataType::F64 | crate::sheets::definitions::ColumnDataType::OptionF64 => {
+                                            let mut sum:f64=0.0; let mut count=0; let mut invalid=0; for row in &sheet.grid { if let Some(val)=row.get(col_index) { if val.trim().is_empty(){continue;} match val.parse::<f64>() { Ok(v)=>{sum+=v; count+=1;}, Err(_)=>invalid+=1 } } }
+                                            state.summarizer_last_result = format!("Sum: {:.4} (values: {}, invalid: {})", sum, count, invalid);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    });
+                    ui.add_space(5.0);
+                }
                 ui.add_space(5.0);
             });
     }

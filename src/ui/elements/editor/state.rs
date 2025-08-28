@@ -127,6 +127,11 @@ pub struct EditorWindowState {
     pub random_picker_last_value: String,
     // Ensure RP UI initializes once per selection (also on app startup)
     pub random_picker_needs_init: bool,
+
+    // NEW: Summarizer UI state (per-session, not persisted yet)
+    pub show_summarizer_panel: bool,
+    pub summarizer_selected_col: usize,
+    pub summarizer_last_result: String, // Prefixed with Sum:/Count:
 }
 
 impl EditorWindowState {
