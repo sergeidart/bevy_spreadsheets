@@ -16,6 +16,7 @@ use elements::editor::state::EditorWindowState;
 // --- END MODIFIED ---
 // Import the new feedback handling system
 use systems::handle_ui_feedback;
+use systems::clear_ui_feedback_on_sheet_change;
 
 
 #[derive(Resource, Default, Debug, Clone)]
@@ -34,6 +35,8 @@ impl Plugin for EditorUiPlugin {
             // --- MODIFIED: Initialize EditorWindowState as a resource ---
             .init_resource::<EditorWindowState>()
             // --- END MODIFIED ---
+            // Ensure we clear transient feedback on sheet changes before processing new feedback events
+            .add_systems(Update, clear_ui_feedback_on_sheet_change)
             .add_systems(Update, handle_ui_feedback)
             .add_systems(EguiContextPass, generic_sheet_editor_ui);
 

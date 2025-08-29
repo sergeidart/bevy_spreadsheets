@@ -9,6 +9,7 @@ use crate::{
 use bevy::prelude::*;
 use std::any;
 
+
 pub fn handle_ui_feedback(
     mut feedback_events: EventReader<SheetOperationFeedback>,
     mut ui_feedback_state: ResMut<UiFeedbackState>,
@@ -132,4 +133,29 @@ pub fn forward_events<E: Event + Clone + std::fmt::Debug>(
     if count > 0 {
         info!("Forwarded {} instance(s) of event type '{}'.", count, *event_type_name);
     }
+}
+
+/// Clears transient UI feedback when a sheet's data is modified in the registry.
+/// This ensures the "service row" (status/error message) is hidden after switching or
+/// changing sheets and will reappear if a new feedback event is emitted afterwards.
+pub fn clear_ui_feedback_on_sheet_change(
+    state: Res<EditorWindowState>,
+    mut ui_feedback_state: ResMut<UiFeedbackState>,
+    mut last_selection: Local<Option<(Option<String>, Option<String>)>>,
+) {
+    // Determine current selection tuple
+    let current_sel = (state.selected_category.clone(), state.selected_sheet_name.clone());
+
+    // If we have a last selection and it's different -> user switched sheets (open another one)
+    if let Some(prev) = last_selection.as_ref() {
+        if prev != &current_sel {
+            // Only clear when the selection actually changed (not on initial startup)
+            ui_feedback_state.last_message.clear();
+            ui_feedback_state.is_error = false;
+            trace!("Cleared UI feedback due to sheet selection change.");
+        }
+    }
+
+    // Update last selection stored locally
+    *last_selection = Some(current_sel);
 }

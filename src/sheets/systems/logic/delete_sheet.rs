@@ -13,6 +13,7 @@ pub fn handle_delete_request(
     mut registry: ResMut<SheetRegistry>,
     mut file_delete_writer: EventWriter<RequestDeleteSheetFile>,
     mut feedback_writer: EventWriter<SheetOperationFeedback>,
+    mut data_modified_writer: EventWriter<crate::sheets::events::SheetDataModifiedInRegistryEvent>,
 ) {
     for event in events.read() {
         let category = &event.category; // <<< Get category
@@ -41,6 +42,12 @@ pub fn handle_delete_request(
                 let msg = format!("Successfully deleted sheet '{:?}/{}' from registry.", category, sheet_name);
                 info!("{}", msg);
                 feedback_writer.write(SheetOperationFeedback { message: msg, is_error: false });
+
+                // Notify that sheet data changed so UI and caches can respond (clears transient UI feedback)
+                data_modified_writer.write(crate::sheets::events::SheetDataModifiedInRegistryEvent {
+                    category: category.clone(),
+                    sheet_name: sheet_name.clone(),
+                });
 
                 // --- Request File Deletions (using metadata from removed data) ---
                 if let Some(metadata) = removed_data.metadata { // Use metadata from the returned data
