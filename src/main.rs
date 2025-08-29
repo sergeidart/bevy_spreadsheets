@@ -14,6 +14,7 @@ use winit::window::Icon as WinitIcon;
 
 use bevy_egui::EguiPlugin;
 use bevy_tokio_tasks::TokioTasksPlugin;
+use bevy_framepace::{FramepacePlugin, FramepaceSettings, Limiter};
 use dotenvy::dotenv;
 
 
@@ -60,6 +61,8 @@ fn main() {
     }
 
     App::new()
+    // cap render/update rate to ~60 FPS using bevy_framepace
+    .insert_resource(FramepaceSettings { limiter: Limiter::from_framerate(60.0) })
         .insert_resource(WinitSettings {
             focused_mode: UpdateMode::Continuous,
             unfocused_mode: UpdateMode::reactive_low_power(Duration::from_secs_f32(1.0 / 1.0)),
@@ -84,6 +87,7 @@ fn main() {
         .add_plugins(EguiPlugin {
             enable_multipass_for_primary_context: true,
         })
+    .add_plugins(FramepacePlugin)
         .add_plugins(TokioTasksPlugin::default())
         .add_plugins(SheetsPlugin)
         .add_plugins(EditorUiPlugin)
