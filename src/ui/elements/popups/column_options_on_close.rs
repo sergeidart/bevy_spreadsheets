@@ -42,6 +42,8 @@ pub(super) fn handle_on_close(
                     popup_category, popup_sheet_name
                 );
                 save_single_sheet(registry, meta_to_save); // Pass metadata
+                // Also emit data modified event so any dependent caches / structure sync run.
+                // (We can't write the event here directly without an EventWriter param; instead rely on render cache update system triggered by save load cycle.)
             } else {
                  warn!("Cannot save after filter/context change for '{:?}/{}': Metadata missing.", popup_category, popup_sheet_name);
             }

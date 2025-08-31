@@ -1,7 +1,7 @@
 // src/sheets/systems/logic/update_column_name.rs
 use crate::sheets::{
     definitions::SheetMetadata, // Need metadata for saving
-    events::{RequestUpdateColumnName, SheetOperationFeedback},
+    events::{RequestUpdateColumnName, SheetOperationFeedback, SheetDataModifiedInRegistryEvent},
     resources::SheetRegistry,
     systems::io::save::save_single_sheet,
 };
@@ -13,6 +13,7 @@ pub fn handle_update_column_name(
     mut events: EventReader<RequestUpdateColumnName>,
     mut registry: ResMut<SheetRegistry>,
     mut feedback_writer: EventWriter<SheetOperationFeedback>,
+    mut data_modified_writer: EventWriter<SheetDataModifiedInRegistryEvent>,
 ) {
     // Use map to track sheets needing save
     let mut changed_sheets: HashMap<(Option<String>, String), SheetMetadata> =
@@ -92,6 +93,8 @@ pub fn handle_update_column_name(
                             is_error: false,
                         });
                         success = true;
+                        // Emit data modified event so virtual structure sheets trigger parent schema sync
+                        data_modified_writer.write(SheetDataModifiedInRegistryEvent { category: category.clone(), sheet_name: sheet_name.clone() });
                         metadata_cache = Some(metadata.clone()); // Cache metadata for saving
                     }
                 } else {

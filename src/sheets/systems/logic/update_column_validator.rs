@@ -1,7 +1,7 @@
 // src/sheets/systems/logic/update_column_validator.rs (recreated cleanly)
 use crate::sheets::{
     definitions::{ColumnDataType, ColumnValidator, SheetMetadata, StructureFieldDefinition},
-    events::{RequestSheetRevalidation, RequestUpdateColumnValidator, SheetOperationFeedback},
+    events::{RequestSheetRevalidation, RequestUpdateColumnValidator, SheetOperationFeedback, SheetDataModifiedInRegistryEvent},
     resources::SheetRegistry,
     systems::io::save::save_single_sheet,
 };
@@ -17,6 +17,7 @@ pub fn handle_update_column_validator(
     mut registry: ResMut<SheetRegistry>,
     mut feedback_writer: EventWriter<SheetOperationFeedback>,
     mut revalidation_writer: EventWriter<RequestSheetRevalidation>,
+    mut data_modified_writer: EventWriter<SheetDataModifiedInRegistryEvent>,
 ) {
     // Track sheets whose metadata changed so we can save after loop with immutable borrow
     let mut sheets_to_save: HashMap<(Option<String>, String), SheetMetadata> = HashMap::new();
@@ -202,6 +203,8 @@ pub fn handle_update_column_validator(
                     }
                 }
                 // After any potential row mutations, record metadata clone for save
+                // Emit data modified event so downstream systems (structure sync) run.
+                data_modified_writer.write(SheetDataModifiedInRegistryEvent { category: category.clone(), sheet_name: sheet_name.clone() });
                 sheets_to_save.insert((category.clone(), sheet_name.clone()), meta_mut.clone());
             } else {
                 error!("Metadata missing during apply phase for sheet '{:?}/{}'.", category, sheet_name);
