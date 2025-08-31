@@ -27,6 +27,7 @@ pub enum ValidatorTypeChoice {
     #[default]
     Basic,
     Linked,
+    Structure,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -41,10 +42,15 @@ pub struct ColumnDragState {
 }
 
 
-#[derive(Default, Resource)]
+#[derive(Resource)]
 pub struct EditorWindowState {
     pub selected_category: Option<String>,
     pub selected_sheet_name: Option<String>,
+    // Stack for nested structure navigation (root at index 0)
+    pub sheet_nav_stack: Vec<(Option<String>, String)>,
+    // Stack of active virtual structure sheets (each represents a nested structure view)
+    // Top of stack is current virtual sheet. Empty means not in structure view.
+    pub virtual_structure_stack: Vec<VirtualStructureContext>,
     
     // Popups related to selected sheet
     pub show_rename_popup: bool,
@@ -68,6 +74,8 @@ pub struct EditorWindowState {
     pub options_basic_type_select: ColumnDataType,
     pub options_link_target_sheet: Option<String>,
     pub options_link_target_column_index: Option<usize>,
+    // NEW: Structure selection chain (always at least length 1 with possibly None meaning no selection yet)
+    pub options_structure_source_columns: Vec<Option<usize>>,
     pub linked_column_cache: HashMap<(String, usize), HashSet<String>>,
 
     // NEW: State for New Sheet Popup
@@ -84,6 +92,8 @@ pub struct EditorWindowState {
     pub ai_current_review_index: Option<usize>,
     pub current_ai_suggestion_edit_buffer: Option<(usize, Vec<String>)>,
     pub ai_review_column_choices: Vec<ReviewChoice>,
+    // Mapping of AI suggestion vector indices -> actual sheet column indices (non-structure columns included in last send)
+    pub ai_included_non_structure_columns: Vec<usize>,
 
     pub ai_model_id_input: String,
     pub ai_general_rule_input: String,
@@ -132,9 +142,131 @@ pub struct EditorWindowState {
     pub show_summarizer_panel: bool,
     pub summarizer_selected_col: usize,
     pub summarizer_last_result: String, // Prefixed with Sum:/Count:
+
+    // Confirmation dialogs
+    pub pending_validator_change_requires_confirmation: bool,
+    pub pending_validator_new_validator_summary: Option<String>,
+    // NEW: store the validator choice awaiting confirmation (serialized summary & type flag)
+    pub pending_validator_target_is_structure: bool,
+    // Key Column (context-only) selection ephemeral states
+    pub options_structure_key_parent_column_temp: Option<usize>, // during initial creation
+    pub options_existing_structure_key_parent_column: Option<usize>, // editing existing structure
+    // Number of context-only key columns prepended to last AI send
+    pub ai_context_only_prefix_count: usize,
+    // Pending apply structure key selection (category, sheet, structure_col_index, new key parent col)
+    pub pending_structure_key_apply: Option<(Option<String>, String, usize, Option<usize>)>,
+    // Stored context-only prefix values per row (for review UI display): Vec of (header, value)
+    pub ai_context_prefix_by_row: HashMap<usize, Vec<(String, String)>>,
+}
+
+impl Default for EditorWindowState {
+    fn default() -> Self {
+        Self {
+            selected_category: None,
+            selected_sheet_name: None,
+            sheet_nav_stack: Vec::new(),
+            virtual_structure_stack: Vec::new(),
+            show_rename_popup: false,
+            rename_target_category: None,
+            rename_target_sheet: String::new(),
+            new_name_input: String::new(),
+            show_delete_confirm_popup: false,
+            delete_target_category: None,
+            delete_target_sheet: String::new(),
+            show_column_options_popup: false,
+            options_column_target_category: None,
+            options_column_target_sheet: String::new(),
+            options_column_target_index: 0,
+            column_options_popup_needs_init: false,
+            options_column_rename_input: String::new(),
+            options_column_filter_input: String::new(),
+            options_column_ai_context_input: String::new(),
+            options_validator_type: None,
+            options_basic_type_select: ColumnDataType::String,
+            options_link_target_sheet: None,
+            options_link_target_column_index: None,
+            options_structure_source_columns: vec![None],
+            linked_column_cache: HashMap::new(),
+            show_new_sheet_popup: false,
+            new_sheet_name_input: String::new(),
+            new_sheet_target_category: None,
+            ai_mode: AiModeState::Idle,
+            ai_selected_rows: HashSet::new(),
+            ai_suggestions: HashMap::new(),
+            ai_review_queue: Vec::new(),
+            ai_current_review_index: None,
+            current_ai_suggestion_edit_buffer: None,
+            ai_review_column_choices: Vec::new(),
+            ai_included_non_structure_columns: Vec::new(),
+            ai_model_id_input: String::new(),
+            ai_general_rule_input: String::new(),
+            ai_temperature_input: 0.7,
+            ai_top_k_input: 40,
+            ai_top_p_input: 0.9,
+            show_ai_rule_popup: false,
+            ai_rule_popup_needs_init: false,
+            ai_raw_output_display: String::new(),
+            show_settings_popup: false,
+            settings_new_api_key_input: String::new(),
+            was_settings_popup_open: false,
+            filtered_row_indices_cache: HashMap::new(),
+            force_filter_recalculation: false,
+            request_scroll_to_new_row: false,
+            scroll_to_row_index: None,
+            show_quick_copy_bar: false,
+            current_interaction_mode: SheetInteractionState::Idle,
+            selected_columns_for_deletion: HashSet::new(),
+            column_drag_state: ColumnDragState::default(),
+            ai_rule_popup_last_category: None,
+            ai_rule_popup_last_sheet: None,
+            show_random_picker_panel: false,
+            random_picker_mode_is_complex: false,
+            random_simple_result_col: 0,
+            random_complex_result_col: 0,
+            random_complex_weight_col: None,
+            random_complex_second_weight_col: None,
+            random_picker_last_value: String::new(),
+            random_picker_needs_init: true,
+            show_summarizer_panel: false,
+            summarizer_selected_col: 0,
+            summarizer_last_result: String::new(),
+            pending_validator_change_requires_confirmation: false,
+            pending_validator_new_validator_summary: None,
+            pending_validator_target_is_structure: false,
+            options_structure_key_parent_column_temp: None,
+            options_existing_structure_key_parent_column: None,
+            ai_context_only_prefix_count: 0,
+            pending_structure_key_apply: None,
+            ai_context_prefix_by_row: HashMap::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct StructureParentContext {
+    pub parent_category: Option<String>,
+    pub parent_sheet: String,
+    pub parent_row: usize,
+    pub parent_col: usize,
+    pub parent_column_header: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct VirtualStructureContext {
+    pub virtual_sheet_name: String,
+    pub parent: StructureParentContext,
 }
 
 impl EditorWindowState {
+    // Returns the currently active sheet context considering virtual structure navigation.
+    // If inside a virtual structure view, returns that virtual sheet name and its parent category.
+    // Otherwise returns the user's selected (category, sheet) pair.
+    pub fn current_sheet_context(&self) -> (Option<String>, Option<String>) {
+        if let Some(vctx) = self.virtual_structure_stack.last() {
+            return (vctx.parent.parent_category.clone(), Some(vctx.virtual_sheet_name.clone()));
+        }
+        (self.selected_category.clone(), self.selected_sheet_name.clone())
+    }
 
     pub fn reset_interaction_modes_and_selections(&mut self) {
         self.current_interaction_mode = SheetInteractionState::Idle;
@@ -150,6 +282,19 @@ impl EditorWindowState {
 
         self.column_drag_state = ColumnDragState::default();
 
+        // Ensure structure source columns chain has at least one entry
+        if self.options_structure_source_columns.is_empty() {
+            self.options_structure_source_columns.push(None);
+        }
+
+    self.pending_validator_change_requires_confirmation = false;
+    self.pending_validator_new_validator_summary = None;
+    self.pending_validator_target_is_structure = false;
+
+    // NOTE: virtual structure stack intentionally preserved so user can back out after mode changes
+
     // Keep random picker visible state as-is across mode changes.
     }
 }
+
+// Removed StructureViewData (overlay approach) in favor of virtual sheets

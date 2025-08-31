@@ -3,6 +3,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 
 use crate::sheets::events::RequestInitiateFileUpload;
+use crate::sheets::events::CloseStructureViewEvent;
 use crate::sheets::resources::SheetRegistry;
 use crate::ui::elements::editor::state::{EditorWindowState, SheetInteractionState};
 use crate::visual_copier::events::RequestAppExit;
@@ -17,6 +18,7 @@ use crate::visual_copier::events::RequestAppExit;
 pub(super) struct SheetManagementEventWriters<'a, 'w> {
     pub upload_req_writer: &'a mut EventWriter<'w, RequestInitiateFileUpload>,
     pub request_app_exit_writer: &'a mut EventWriter<'w, RequestAppExit>,
+    pub close_structure_writer: &'a mut EventWriter<'w, CloseStructureViewEvent>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -75,6 +77,7 @@ pub(super) fn show_sheet_management_controls<'a, 'w>(
         state.ai_rule_popup_needs_init = true;
     }
     ui.separator(); 
+    // Back button handled in top panel orchestrator for virtual structure stack.
     
     if ui
         .button("➕ New Sheet")
@@ -129,6 +132,11 @@ pub(super) fn show_sheet_management_controls<'a, 'w>(
                     });
             if sheet_response.response.changed() {
                 if state.selected_sheet_name.is_none() {
+                    // User picked the '--Select--' placeholder. Request full exit from all structure views.
+                    if !state.virtual_structure_stack.is_empty() {
+                        // Fire one close event; system will cascade pop remaining since selected_sheet_name is None.
+                        event_writers.close_structure_writer.write(CloseStructureViewEvent);
+                    }
                     state.reset_interaction_modes_and_selections();
                 }
                 state.force_filter_recalculation = true;

@@ -206,7 +206,10 @@ impl SheetRegistry {
      pub fn get_sheet_names_in_category(&self, category: &Option<String>) -> Vec<String> {
          let mut names = Vec::new();
          if let Some(category_map) = self.categorized_sheets.get(category) {
-             names = category_map.keys().cloned().collect();
+             names = category_map.keys()
+                 .filter(|k| !k.starts_with("__virtual__"))
+                 .cloned()
+                 .collect();
              names.sort_unstable();
          }
          names

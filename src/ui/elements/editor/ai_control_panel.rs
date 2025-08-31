@@ -65,7 +65,9 @@ pub(super) fn show_ai_control_panel(
 
             for row_index in state.ai_selected_rows.iter().cloned() {
                 let task_category = selected_category_clone.clone();
-                let task_sheet_name = selected_sheet_name_clone.clone().unwrap_or_default();
+                // If inside a virtual structure view, use that virtual sheet for row data & metadata
+                let effective_sheet_name = if let Some(vctx) = state.virtual_structure_stack.last() { vctx.virtual_sheet_name.clone() } else { selected_sheet_name_clone.clone().unwrap_or_default() };
+                let task_sheet_name = effective_sheet_name.clone();
                 let api_key_for_task = session_api_key.0.clone();
 
                 let (
@@ -80,14 +82,73 @@ pub(super) fn show_ai_control_panel(
                 ) = {
                     let sheet_data_opt = registry.get_sheet(&task_category, &task_sheet_name);
                     let metadata_opt_ref = sheet_data_opt.and_then(|d| d.metadata.as_ref());
-
                     let model_id = metadata_opt_ref.map_or_else(default_ai_model_id, |m| m.ai_model_id.clone());
                     let rule = metadata_opt_ref.and_then(|m| m.ai_general_rule.clone());
-                    let contexts: Vec<Option<String>> = metadata_opt_ref.map(|m| m.columns.iter().map(|c| c.ai_context.clone()).collect()).unwrap_or_default();
-                    let data = sheet_data_opt.and_then(|d| d.grid.get(row_index)).cloned().unwrap_or_default();
+                    // Row index refers to the active (possibly virtual) sheet
+                    let full_row = sheet_data_opt.and_then(|d| d.grid.get(row_index)).cloned().unwrap_or_default();
                     let (temp, k, p) = metadata_opt_ref.map_or((None, None, None), |m| (m.ai_temperature, m.ai_top_k, m.ai_top_p));
                     let grounding = metadata_opt_ref.and_then(|m| m.requested_grounding_with_google_search).unwrap_or_else(|| default_grounding_with_google_search().unwrap_or(false));
-                    (model_id, rule, contexts, data, temp, k, p, grounding)
+
+                    // Determine which columns to include:
+                    // Rule: Always exclude Structure validator columns from AI payload (both top-level and inside virtual views)
+                    let mut included_contexts: Vec<Option<String>> = Vec::new();
+                    let mut included_row: Vec<String> = Vec::new();
+                    let mut included_actual_indices: Vec<usize> = Vec::new();
+            if let Some(meta) = metadata_opt_ref {
+                        if !full_row.is_empty() {
+                            // Prepend ancestor + self key columns (context only, not part of mapping for merge)
+                            // To obtain ancestor key indices, we'll need to know which structure column we are inside (if virtual). Use last virtual context if any.
+                            let mut context_prefix_count = 0usize;
+                let mut context_prefix_display: Vec<(String, String)> = Vec::new();
+                            if let Some(vctx) = state.virtual_structure_stack.last() {
+                                // Determine parent sheet metadata and structure column index from parent context
+                                let parent_cat = vctx.parent.parent_category.clone();
+                                let parent_sheet_name = vctx.parent.parent_sheet.clone();
+                                let parent_col_index = vctx.parent.parent_col; // index inside parent sheet
+                                let parent_row_index = vctx.parent.parent_row; // row in parent sheet
+                                if let Some(parent_sheet) = registry.get_sheet(&parent_cat, &parent_sheet_name) {
+                                    if let Some(parent_meta) = &parent_sheet.metadata {
+                                        if let Some(parent_col) = parent_meta.columns.get(parent_col_index) {
+                                            if let Some(ancestors) = parent_col.structure_ancestor_key_parent_column_indices.as_ref() {
+                                                for anc_idx in ancestors.iter() {
+                                                    if let Some(val) = parent_sheet.grid.get(parent_row_index).and_then(|r| r.get(*anc_idx)) {
+                                                        let header = parent_meta.columns.get(*anc_idx).map(|c| c.header.clone()).unwrap_or_else(|| format!("AncestorKey{}", anc_idx));
+                                                        included_contexts.push(parent_meta.columns.get(*anc_idx).and_then(|c| c.ai_context.clone()));
+                                                        included_row.push(val.clone());
+                                                        context_prefix_display.push((header, val.clone()));
+                                                        context_prefix_count += 1;
+                                                    }
+                                                }
+                                            }
+                                            if let Some(kidx) = parent_col.structure_key_parent_column_index {
+                                                if let Some(val) = parent_sheet.grid.get(parent_row_index).and_then(|r| r.get(kidx)) {
+                                                    let header = parent_meta.columns.get(kidx).map(|c| c.header.clone()).unwrap_or_else(|| format!("Key{}", kidx));
+                                                    included_contexts.push(parent_meta.columns.get(kidx).and_then(|c| c.ai_context.clone()));
+                                                    included_row.push(val.clone());
+                                                    context_prefix_display.push((header, val.clone()));
+                                                    context_prefix_count += 1;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            // Now add this sheet's non-structure columns (updatable part)
+                            for (c_idx, col_def) in meta.columns.iter().enumerate() {
+                                let is_structure_col = matches!(col_def.validator, Some(crate::sheets::definitions::ColumnValidator::Structure));
+                                if is_structure_col { continue; }
+                                included_contexts.push(col_def.ai_context.clone());
+                                let val = full_row.get(c_idx).cloned().unwrap_or_default();
+                                included_row.push(val);
+                                included_actual_indices.push(c_idx);
+                            }
+                            state.ai_context_only_prefix_count = context_prefix_count;
+                            state.ai_context_prefix_by_row.insert(row_index, context_prefix_display);
+                        }
+                    }
+                    // Store mapping (overwrite on each send)
+                    state.ai_included_non_structure_columns = included_actual_indices;
+                    (model_id, rule, included_contexts, included_row, temp, k, p, grounding)
                 };
 
                 #[derive(serde::Serialize)]
@@ -100,6 +161,7 @@ pub(super) fn show_ai_control_panel(
                     ai_top_k: Option<i32>,
                     ai_top_p: Option<f32>,
                     requested_grounding_with_google_search: bool,
+                    context_only_prefix_count: usize,
                 }
 
                 let payload = PythonPayload {
@@ -111,6 +173,7 @@ pub(super) fn show_ai_control_panel(
                     ai_top_k: top_k,
                     ai_top_p: top_p,
                     requested_grounding_with_google_search: enable_grounding,
+                    context_only_prefix_count: state.ai_context_only_prefix_count,
                 };
                 
                 let payload_json = match serde_json::to_string(&payload) {

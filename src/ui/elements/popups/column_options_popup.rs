@@ -168,7 +168,7 @@ pub fn show_column_options_popup(
             }
         }
 
-        if actions_ok {
+    if actions_ok {
             let registry_immut = &*registry; 
             let (new_validator_opt, validation_ok) =
                 match state.options_validator_type {
@@ -194,32 +194,43 @@ pub fn show_column_options_popup(
                             (None, false)
                         }
                     }
+                    Some(ValidatorTypeChoice::Structure) => (Some(ColumnValidator::Structure), true),
                     None => (None, false),
                 };
 
-            if !validation_ok {
-                actions_ok = false;
-                warn!("Validator update failed: Invalid selection state.");
-            } else {
-                if current_validator != new_validator_opt {
-                    if !apply_validator_update(
-                        state,
-                        registry_immut,
-                        column_validator_writer,
-                    ) {
-                        actions_ok = false; 
-                        warn!("Validator update failed: apply_validator_update returned error.");
-                    } else {
-                        validator_sent = true; 
-                    }
+            if !validation_ok { actions_ok = false; warn!("Validator update failed: Invalid selection state."); }
+            else if current_validator != new_validator_opt {
+                // Risk analysis now only triggers confirmation; actual apply waits for second Apply press.
+                let old_was_structure = matches!(current_validator, Some(ColumnValidator::Structure));
+                let new_is_structure = matches!(new_validator_opt, Some(ColumnValidator::Structure));
+                let mut target_col_has_non_empty_cells = false;
+                if !old_was_structure && new_is_structure { if let Some(sheet) = registry.get_sheet(&state.options_column_target_category, &state.options_column_target_sheet) { for row in &sheet.grid { if let Some(cell) = row.get(state.options_column_target_index) { if !cell.trim().is_empty() { target_col_has_non_empty_cells = true; break; } } } } }
+                let risky = (old_was_structure && !new_is_structure) || (!old_was_structure && new_is_structure && target_col_has_non_empty_cells);
+                if risky && !state.pending_validator_change_requires_confirmation {
+                    state.pending_validator_change_requires_confirmation = true;
+                    state.pending_validator_new_validator_summary = Some(format!("{:?} -> {:?}", current_validator, new_validator_opt));
+                    state.pending_validator_target_is_structure = new_is_structure;
+                    // Do NOT apply yet. User must press Apply again after confirmation cleared.
+                } else {
+                    if !apply_validator_update(state, registry_immut, column_validator_writer) { actions_ok = false; warn!("Validator update failed: apply_validator_update returned error."); }
+                    else { validator_sent = true; }
+                    state.pending_validator_change_requires_confirmation = false;
+                    state.pending_validator_new_validator_summary = None;
+                    state.pending_validator_target_is_structure = false;
                 }
+            } else {
+                // No change; clear any stale confirmation flag
+                state.pending_validator_change_requires_confirmation = false;
+                state.pending_validator_new_validator_summary = None;
+                state.pending_validator_target_is_structure = false;
             }
         }
-        needs_manual_save =
-            actions_ok && non_event_change_occurred && !rename_sent && !validator_sent;
-    } 
+        needs_manual_save = actions_ok && non_event_change_occurred && !rename_sent && !validator_sent;
+    }
 
-    let should_close = (ui_result.apply_clicked && actions_ok)
+    // Confirmation UI now handled inside window UI; orchestration just checks flag to gate closing.
+
+    let should_close = (ui_result.apply_clicked && actions_ok && !state.pending_validator_change_requires_confirmation)
         || ui_result.cancel_clicked
         || ui_result.close_via_x;
 
@@ -252,6 +263,10 @@ fn initialize_popup_state(state: &mut EditorWindowState, registry: &SheetRegistr
                 state.options_basic_type_select = *data_type; 
                 state.options_link_target_sheet = None;
                 state.options_link_target_column_index = None;
+                state.options_structure_source_columns = vec![None];
+                // Not a structure: ensure key-related ephemeral state cleared
+                state.options_existing_structure_key_parent_column = None;
+                state.options_structure_key_parent_column_temp = None;
             }
             Some(ColumnValidator::Linked {
                 target_sheet_name,
@@ -261,6 +276,29 @@ fn initialize_popup_state(state: &mut EditorWindowState, registry: &SheetRegistr
                 state.options_link_target_sheet = Some(target_sheet_name.clone());
                 state.options_link_target_column_index = Some(*target_column_index);
                 state.options_basic_type_select = col_def.data_type;
+                state.options_structure_source_columns = vec![None];
+                state.options_existing_structure_key_parent_column = None;
+                state.options_structure_key_parent_column_temp = None;
+            }
+            Some(ColumnValidator::Structure) => {
+                state.options_validator_type = Some(ValidatorTypeChoice::Structure);
+                state.options_structure_source_columns = vec![None];
+                state.options_link_target_sheet = None;
+                state.options_link_target_column_index = None;
+                state.options_basic_type_select = col_def.data_type;
+                // Always refresh existing structure key selection from authoritative metadata
+                if let Some(sheet_meta) = registry
+                    .get_sheet(target_category, target_sheet)
+                    .and_then(|s| s.metadata.as_ref())
+                {
+                    let refreshed = sheet_meta.columns.get(col_index).and_then(|c| c.structure_key_parent_column_index);
+                    debug!("Popup init: refreshed structure key selection for {:?}/{} col {} -> {:?}", target_category, target_sheet, col_index, refreshed);
+                    state.options_existing_structure_key_parent_column = refreshed;
+                } else {
+                    state.options_existing_structure_key_parent_column = None;
+                }
+                // Clear creation-temp field (not used in existing structure editing)
+                state.options_structure_key_parent_column_temp = None;
             }
             None => {
                 warn!("Column '{}' missing validator during popup init for sheet '{:?}/{}'. Defaulting to Basic/String.", col_def.header, target_category, target_sheet);
@@ -268,6 +306,9 @@ fn initialize_popup_state(state: &mut EditorWindowState, registry: &SheetRegistr
                 state.options_basic_type_select = col_def.data_type; 
                 state.options_link_target_sheet = None;
                 state.options_link_target_column_index = None;
+                state.options_structure_source_columns = vec![None];
+                state.options_existing_structure_key_parent_column = None;
+                state.options_structure_key_parent_column_temp = None;
             }
         }
     } else {
@@ -281,5 +322,7 @@ fn initialize_popup_state(state: &mut EditorWindowState, registry: &SheetRegistr
         state.options_validator_type = None; 
         state.options_link_target_sheet = None;
         state.options_link_target_column_index = None;
+        state.options_existing_structure_key_parent_column = None;
+        state.options_structure_key_parent_column_temp = None;
     }
 }

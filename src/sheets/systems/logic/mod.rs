@@ -12,8 +12,8 @@ pub mod update_column_name;
 pub mod update_column_validator;
 pub mod delete_rows;
 pub mod delete_columns;
-pub mod update_column_width;
 pub mod update_render_cache; 
+pub mod sync_structure;
 
 pub use add_row::handle_add_row_request;
 pub use add_column::handle_add_column_request;
@@ -27,5 +27,5 @@ pub use update_column_name::handle_update_column_name;
 pub use update_column_validator::handle_update_column_validator;
 pub use delete_rows::handle_delete_rows_request;
 pub use delete_columns::handle_delete_columns_request;
-pub use update_column_width::handle_update_column_width;
 pub use update_render_cache::handle_sheet_render_cache_update;
+pub use sync_structure::handle_sync_virtual_structure_sheet;

@@ -3,7 +3,7 @@ use bevy_egui::egui;
 use crate::ui::elements::popups::{
     show_ai_rule_popup, show_column_options_popup,
     show_delete_confirm_popup, show_rename_popup, show_settings_popup,
-    show_new_sheet_popup,
+    show_new_sheet_popup, show_validator_confirm_popup,
 };
 use crate::ui::elements::editor::state::EditorWindowState;
 use super::main_editor::SheetEventWriters; // Assuming SheetEventWriters is made public or moved
@@ -23,6 +23,8 @@ pub(super) fn display_active_popups(
     session_api_key_res: &mut SessionApiKey,
 ) {
     show_column_options_popup(ctx, state, &mut sheet_writers.column_rename, &mut sheet_writers.column_validator, registry);
+    // Separate confirmation popup (if needed) - pass validator writer and registry
+    show_validator_confirm_popup(ctx, state, registry, Some(&mut sheet_writers.column_validator), None);
     show_rename_popup(ctx, state, &mut sheet_writers.rename_sheet, ui_feedback);
     show_delete_confirm_popup(ctx, state, &mut sheet_writers.delete_sheet);
     show_ai_rule_popup(ctx, state, registry);

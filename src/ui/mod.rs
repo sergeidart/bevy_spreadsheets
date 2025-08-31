@@ -13,6 +13,8 @@ pub mod widgets;
 use elements::editor::generic_sheet_editor_ui;
 // --- MODIFIED: Import EditorWindowState to initialize it ---
 use elements::editor::state::EditorWindowState;
+use crate::sheets::events::{OpenStructureViewEvent, CloseStructureViewEvent};
+use elements::editor::structure_navigation::{handle_open_structure_view, handle_close_structure_view};
 // --- END MODIFIED ---
 // Import the new feedback handling system
 use systems::handle_ui_feedback;
@@ -34,6 +36,12 @@ impl Plugin for EditorUiPlugin {
             .init_resource::<UiFeedbackState>()
             // --- MODIFIED: Initialize EditorWindowState as a resource ---
             .init_resource::<EditorWindowState>()
+            .add_event::<OpenStructureViewEvent>()
+            .add_event::<CloseStructureViewEvent>()
+            .add_systems(Update, (
+                handle_open_structure_view,
+                handle_close_structure_view,
+            ))
             // --- END MODIFIED ---
             // Ensure we clear transient feedback on sheet changes before processing new feedback events
             .add_systems(Update, clear_ui_feedback_on_sheet_change)

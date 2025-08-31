@@ -4,8 +4,7 @@ use bevy_egui::egui; // EguiContexts might not be needed here if ctx is passed
 use egui_extras::{Column, TableBody, TableBuilder};
 use crate::sheets::{
     resources::{SheetRegistry, SheetRenderCache},
-    events::RequestReorderColumn, 
-    events::UpdateCellEvent,    
+    events::{RequestReorderColumn, UpdateCellEvent, OpenStructureViewEvent},
 };
 use crate::ui::elements::editor::state::EditorWindowState;
 use crate::ui::elements::editor::table_header::sheet_table_header;
@@ -23,7 +22,17 @@ pub(super) fn show_sheet_table(
     // MODIFIED: Accept individual EventWriters directly by value
     reorder_column_writer: EventWriter<RequestReorderColumn>,
     cell_update_writer: EventWriter<UpdateCellEvent>,
+    mut open_structure_writer: EventWriter<OpenStructureViewEvent>,
 ) {
+    // If a virtual structure sheet is active, temporarily override selected sheet for rendering
+    let backup_sheet = state.selected_sheet_name.clone();
+    if let Some(vctx) = state.virtual_structure_stack.last() {
+        if let Some(vsheet) = registry.get_sheet(&state.selected_category, &vctx.virtual_sheet_name) {
+            if vsheet.metadata.is_some() {
+                state.selected_sheet_name = Some(vctx.virtual_sheet_name.clone());
+            }
+        }
+    }
     if let Some(selected_name) = &state.selected_sheet_name.clone() { 
         let current_category_clone = state.selected_category.clone(); 
 
@@ -42,6 +51,7 @@ pub(super) fn show_sheet_table(
 
         if let Some(sheet_data_ref) = sheet_data_ref_opt {
              if let Some(metadata) = &sheet_data_ref.metadata {
+                // Notice for standard sheets only (structure view handled earlier)
                 let num_cols = metadata.columns.len();
                 if metadata.get_filters().len() != num_cols && num_cols > 0 {
                      error!("Metadata inconsistency detected (cols vs filters) for sheet '{:?}/{}'. Revalidation might be needed.", current_category_clone, selected_name);
@@ -62,9 +72,9 @@ pub(super) fn show_sheet_table(
                             if state.scroll_to_row_index.is_some() { state.scroll_to_row_index = None; }
                             table_builder = table_builder.column(Column::remainder().resizable(false));
                        } else {
-                            for i in 0..num_cols {
-                                let initial_width = metadata.columns.get(i).and_then(|c| c.width).unwrap_or(120.0);
-                                let col = Column::initial(initial_width).at_least(40.0).resizable(true).clip(true);
+                            const DEFAULT_COL_WIDTH: f32 = 120.0; // width field deprecated
+                            for _i in 0..num_cols {
+                                let col = Column::initial(DEFAULT_COL_WIDTH).at_least(40.0).resizable(true).clip(true);
                                 table_builder = table_builder.column(col);
                             }
                        }
@@ -81,7 +91,7 @@ pub(super) fn show_sheet_table(
                             })
                            .body(|body: TableBody| {
                                // Pass the received EventWriter by value
-                               sheet_table_body(body, row_height, &current_category_clone, selected_name, registry, render_cache, cell_update_writer, state);
+                               sheet_table_body(body, row_height, &current_category_clone, selected_name, registry, render_cache, cell_update_writer, state, &mut open_structure_writer);
                            });
                     });
             } else {
@@ -96,5 +106,12 @@ pub(super) fn show_sheet_table(
          else {
             ui.vertical_centered(|ui| { ui.label("Select a category and sheet, or upload JSON."); });
          }
+    }
+    // Restore selection if we temporarily switched to virtual
+    if let Some(vctx) = state.virtual_structure_stack.last() {
+        if let Some(orig_sheet) = &backup_sheet { if *orig_sheet != vctx.virtual_sheet_name { state.selected_sheet_name = backup_sheet; } }
+    } else {
+        // No virtual sheet active, ensure selection remains original
+        state.selected_sheet_name = backup_sheet;
     }
 }

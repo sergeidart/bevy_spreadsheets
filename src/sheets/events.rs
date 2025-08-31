@@ -101,6 +101,8 @@ pub struct RequestUpdateColumnValidator {
     pub sheet_name: String,
     pub column_index: usize,
     pub new_validator: Option<ColumnValidator>,
+    // NEW: Source column indices to snapshot into structure cells when converting to Structure
+    pub structure_source_columns: Option<Vec<usize>>,
 }
 
 #[derive(Event, Debug, Clone)]
@@ -115,14 +117,6 @@ pub struct RequestDeleteColumns {
     pub category: Option<String>,
     pub sheet_name: String,
     pub column_indices: HashSet<usize>,
-}
-
-#[derive(Event, Debug, Clone)]
-pub struct RequestUpdateColumnWidth {
-    pub category: Option<String>,
-    pub sheet_name: String,
-    pub column_index: usize,
-    pub new_width: f32,
 }
 
 #[derive(Event, Debug, Clone)]
@@ -143,3 +137,15 @@ pub struct RequestSheetRevalidation {
     pub category: Option<String>,
     pub sheet_name: String,
 }
+
+// --- NEW: Events for structure navigation ---
+#[derive(Event, Debug, Clone)]
+pub struct OpenStructureViewEvent {
+    pub parent_category: Option<String>,
+    pub parent_sheet: String,
+    pub row_index: usize,
+    pub col_index: usize,
+}
+
+#[derive(Event, Debug, Clone)]
+pub struct CloseStructureViewEvent;

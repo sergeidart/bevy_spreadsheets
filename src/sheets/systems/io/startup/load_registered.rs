@@ -1,6 +1,6 @@
 // src/sheets/systems/io/startup/load_registered.rs
 use crate::sheets::{
-    definitions::SheetMetadata,
+    definitions::{SheetMetadata, ColumnValidator, StructureFieldDefinition, ColumnDataType},
     resources::SheetRegistry,
     events::RequestSheetRevalidation,
     systems::io::{
@@ -13,6 +13,7 @@ use crate::sheets::{
 };
 use bevy::prelude::*;
 use std::path::Path;
+use serde_json::{Value, Map};
 
 pub fn load_data_for_registered_sheets(
     mut registry: ResMut<SheetRegistry>,
@@ -224,8 +225,31 @@ fn load_and_update_single_sheet_entry(
             else if final_grid_filename.is_some() { sheet_entry.grid = Vec::new(); trace!("Set empty grid data for '{:?}/{}' as file was empty.", category, sheet_name); }
         } else if loaded_grid_data_opt.is_some() { warn!("Skipping grid update for '{:?}/{}' due to structure validation failure.", category, sheet_name); }
 
-        // Final trace log
-         let final_metadata_status = match &sheet_entry.metadata {
+        // Reconcile inline structure schema (legacy structures_meta removed)
+        if let Some(meta) = &mut sheet_entry.metadata {
+            let mut changed_local = false;
+            for (col_index, col) in meta.columns.iter_mut().enumerate() {
+                if matches!(col.validator, Some(ColumnValidator::Structure)) && col.structure_schema.is_none() {
+                    // Derive basic schema from first non-empty cell (headers not inferable reliably otherwise)
+                    if let Some(first_row) = sheet_entry.grid.iter().find(|r| r.get(col_index).map(|c| !c.trim().is_empty()).unwrap_or(false)) {
+                        let cell = first_row.get(col_index).unwrap();
+                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(cell) {
+                            if let serde_json::Value::Array(arr) = val {
+                                if let Some(serde_json::Value::Array(inner)) = arr.first() {
+                                    col.structure_schema = Some(inner.iter().enumerate().map(|(i, _)| StructureFieldDefinition { header: format!("Field{}", i+1), validator: Some(ColumnValidator::Basic(ColumnDataType::String)), data_type: ColumnDataType::String, filter: None, ai_context: None, width: None, structure_schema: None }).collect());
+                                    col.structure_column_order = col.structure_schema.as_ref().map(|s| (0..s.len()).collect());
+                                    changed_local = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if changed_local { needs_save_after_correction = true; }
+        }
+
+        // Final trace log (after reconciliation)
+        let final_metadata_status = match &sheet_entry.metadata {
             Some(meta) => format!("Metadata Some(cols: {}, file: '{}')", meta.columns.len(), meta.data_filename),
             None => "Metadata None".to_string(),
         };
@@ -237,4 +261,40 @@ fn load_and_update_single_sheet_entry(
     }
 
     (needs_save_after_correction, load_successful)
+}
+
+/// Reconcile structure column metadata & normalize structure cell JSON representations.
+/// Returns true if any modifications were applied that should trigger a save.
+// Legacy reconciliation function removed (structures_meta obsolete)
+
+/// Derive a simple schema from existing cell values in a column.
+fn derive_schema_from_cells(grid: &Vec<Vec<String>>, col_index: usize) -> Option<Vec<StructureFieldDefinition>> {
+    for row in grid.iter() {
+        if row.len() <= col_index { continue; }
+        let cell = row[col_index].trim();
+        if cell.is_empty() { continue; }
+        if let Ok(val) = serde_json::from_str::<Value>(cell) {
+            let mut headers: Vec<String> = Vec::new();
+            match val {
+                Value::Array(arr) => {
+                    if let Some(Value::Object(first_obj)) = arr.first() { headers = first_obj.keys().cloned().collect(); }
+                }
+                Value::Object(obj) => { headers = obj.keys().cloned().collect(); }
+                _ => {}
+            }
+            if headers.is_empty() { continue; }
+            headers.sort();
+            let fields: Vec<StructureFieldDefinition> = headers.into_iter().map(|h| StructureFieldDefinition {
+                header: h,
+                validator: Some(ColumnValidator::Basic(ColumnDataType::String)),
+                data_type: ColumnDataType::String,
+                filter: None,
+                ai_context: None,
+                width: Some(140.0),
+                structure_schema: None,
+            }).collect();
+            if !fields.is_empty() { return Some(fields); }
+        }
+    }
+    None
 }

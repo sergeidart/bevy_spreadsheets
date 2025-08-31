@@ -18,6 +18,16 @@ pub(super) fn show_validator_section(
     registry_immut: &SheetRegistry,
 ) {
     ui.strong("Validation Rule");
+    // Detect if column already has Structure validator
+    let existing_is_structure = registry_immut
+        .get_sheet(&state.options_column_target_category, &state.options_column_target_sheet)
+        .and_then(|s| s.metadata.as_ref())
+        .and_then(|m| m.columns.get(state.options_column_target_index))
+        .map(|c| matches!(c.validator, Some(ColumnValidator::Structure)))
+        .unwrap_or(false);
+
+    // NOTE: Key Column UI now shown only when Structure choice is selected (inside match below)
+
     if let Some(mut choice) = state.options_validator_type {
         ui.horizontal(|ui| {
             ui.radio_value(
@@ -29,6 +39,11 @@ pub(super) fn show_validator_section(
                 &mut choice,
                 ValidatorTypeChoice::Linked,
                 "Linked Column",
+            );
+            ui.radio_value(
+                &mut choice,
+                ValidatorTypeChoice::Structure,
+                "Structure",
             );
         });
         state.options_validator_type = Some(choice); // Update state
@@ -72,11 +87,7 @@ pub(super) fn show_validator_section(
                                 OptionF64,
                             ];
                             for t in all_types.iter() {
-                                ui.selectable_value(
-                                    &mut state.options_basic_type_select,
-                                    *t,
-                                    format!("{:?}", t),
-                                );
+                                ui.selectable_value(&mut state.options_basic_type_select, *t, format!("{:?}", t));
                             }
                         });
                 });
@@ -157,24 +168,101 @@ pub(super) fn show_validator_section(
                                     None => "--Select--",
                                 };
                             egui::ComboBox::from_id_salt("link_column_selector")
-                            .selected_text(selected_col_text)
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(
-                                    &mut state.options_link_target_column_index,
-                                    None,
-                                    "--Select--",
-                                );
-                                for (idx, header_name) in headers.iter() {
+                                .selected_text(selected_col_text)
+                                .show_ui(ui, |ui| {
                                     ui.selectable_value(
                                         &mut state.options_link_target_column_index,
-                                        Some(*idx),
-                                        header_name,
+                                        None,
+                                        "--Select--",
                                     );
-                                }
-                            });
+                                    for (idx, header_name) in headers.iter() {
+                                        ui.selectable_value(
+                                            &mut state.options_link_target_column_index,
+                                            Some(*idx),
+                                            header_name,
+                                        );
+                                    }
+                                });
                         },
                     );
                 });
+            }
+            ValidatorTypeChoice::Structure => {
+                // Two modes: creating new structure vs editing existing one.
+                let meta_opt = registry_immut
+                    .get_sheet(&state.options_column_target_category, &state.options_column_target_sheet)
+                    .and_then(|s| s.metadata.as_ref());
+                if existing_is_structure {
+                    ui.colored_label(egui::Color32::LIGHT_BLUE, "Structure established");
+                    if let Some(meta) = meta_opt {
+                        if let Some(col) = meta.columns.get(state.options_column_target_index) {
+                            state.options_existing_structure_key_parent_column = col.structure_key_parent_column_index;
+                        }
+                        let mut current_key = state.options_existing_structure_key_parent_column;
+                        ui.horizontal(|ui_h| {
+                            ui_h.label("Key Column:");
+                            let (headers, is_parent_headers) = if let Some(parent_link) = &meta.structure_parent {
+                                if let Some(parent_sheet) = registry_immut.get_sheet(&parent_link.parent_category, &parent_link.parent_sheet) {
+                                    if let Some(parent_meta) = &parent_sheet.metadata { (parent_meta.columns.iter().map(|c| c.header.clone()).collect::<Vec<_>>(), true) } else { (Vec::new(), true) }
+                                } else { (Vec::new(), true) }
+                            } else { (meta.columns.iter().map(|c| c.header.clone()).collect::<Vec<_>>(), false) };
+                            if headers.is_empty() { ui_h.label("<no headers>"); return; }
+                            let sel_text = current_key.and_then(|i| headers.get(i)).cloned().unwrap_or_else(|| "(none)".to_string());
+                            egui::ComboBox::from_id_salt("key_parent_column_selector")
+                                .selected_text(sel_text)
+                                .show_ui(ui_h, |ui_c| {
+                                    ui_c.selectable_value(&mut current_key, None, "(none)");
+                                    for (i, h) in headers.iter().enumerate() { if !is_parent_headers && i == state.options_column_target_index { continue; } ui_c.selectable_value(&mut current_key, Some(i), h); }
+                                });
+                            if current_key.is_some() { if ui_h.small_button("x").on_hover_text("Clear key").clicked() { current_key = None; } }
+                            if current_key != state.options_existing_structure_key_parent_column {
+                                state.options_existing_structure_key_parent_column = current_key;
+                                state.pending_structure_key_apply = Some((state.options_column_target_category.clone(), state.options_column_target_sheet.clone(), state.options_column_target_index, current_key));
+                            }
+                        });
+                        ui.label("Key column is context-only (sent first to AI) and not overwritten.");
+                    }
+                } else {
+                    // --- Key Column selection (first) ---
+                    if let Some(meta) = meta_opt {
+                        // If we are creating the structure from the parent sheet (usual case) there is no structure_parent yet.
+                        // Use current sheet headers (excluding the target structure column itself) as potential key columns.
+                        let (headers, is_parent_headers) = if let Some(parent_link) = &meta.structure_parent {
+                            if let Some(parent_sheet) = registry_immut.get_sheet(&parent_link.parent_category, &parent_link.parent_sheet) {
+                                if let Some(parent_meta) = &parent_sheet.metadata { (parent_meta.columns.iter().map(|c| c.header.clone()).collect::<Vec<_>>(), true) } else { (Vec::new(), true) }
+                            } else { (Vec::new(), true) }
+                        } else {
+                            (meta.columns.iter().map(|c| c.header.clone()).collect::<Vec<_>>(), false)
+                        };
+                        ui.horizontal(|ui_k| {
+                            ui_k.label("Key Column:");
+                            if headers.is_empty() { ui_k.label("<none>"); return; }
+                            let mut temp_choice = state.options_structure_key_parent_column_temp;
+                            let sel_text = temp_choice.and_then(|i| headers.get(i)).cloned().unwrap_or_else(|| "(none)".to_string());
+                            egui::ComboBox::from_id_salt("new_structure_key_parent_col")
+                                .selected_text(sel_text)
+                                .show_ui(ui_k, |ui_c| {
+                                    ui_c.selectable_value(&mut temp_choice, None, "(none)");
+                                    for (i,h) in headers.iter().enumerate() {
+                                        // When using current sheet headers, exclude the structure column itself.
+                                        if !is_parent_headers && i == state.options_column_target_index { continue; }
+                                        ui_c.selectable_value(&mut temp_choice, Some(i), h);
+                                    }
+                                });
+                            if temp_choice.is_some() { if ui_k.small_button("x").on_hover_text("Clear key selection").clicked() { temp_choice = None; } }
+                            if temp_choice != state.options_structure_key_parent_column_temp { state.options_structure_key_parent_column_temp = temp_choice; }
+                            ui_k.label("(Optional context only, not overwritten)");
+                        });
+                    }
+                    ui.add(egui::Separator::default());
+                    ui.label("Schema: choose source columns to copy into object fields.");
+                    let (headers, self_index) = meta_opt.map(|m| (m.columns.iter().map(|c| c.header.clone()).collect::<Vec<_>>(), state.options_column_target_index)).unwrap_or_default();
+                    if state.options_structure_source_columns.is_empty() { state.options_structure_source_columns.push(None); }
+                    let mut to_remove: Vec<usize> = Vec::new();
+                    for i in 0..state.options_structure_source_columns.len() { ui.horizontal(|ui_h| { let mut val = state.options_structure_source_columns[i]; egui::ComboBox::from_id_salt(format!("structure_src_col_{}", i)).selected_text(match val { Some(idx) => headers.get(idx).cloned().unwrap_or_else(|| "Invalid".to_string()), None => "None".to_string() }).show_ui(ui_h, |ui_c| { ui_c.selectable_value(&mut val, None, "None"); for (idx, header) in headers.iter().enumerate() { if idx == self_index { continue; } ui_c.selectable_value(&mut val, Some(idx), header); } }); if val != state.options_structure_source_columns[i] { state.options_structure_source_columns[i] = val; } if i + 1 < state.options_structure_source_columns.len() && ui_h.button("X").clicked() { to_remove.push(i); } }); }
+                    if !to_remove.is_empty() { for idx in to_remove.into_iter().rev() { if idx < state.options_structure_source_columns.len() { state.options_structure_source_columns.remove(idx); } } }
+                    let need_new = state.options_structure_source_columns.last().map(|v| v.is_some()).unwrap_or(false); if need_new { state.options_structure_source_columns.push(None); }
+                }
             }
         }
     } else {
@@ -226,6 +314,7 @@ pub(super) fn apply_validator_update(
                 (None, false) // Action failed
             }
         }
+        Some(ValidatorTypeChoice::Structure) => (Some(ColumnValidator::Structure), true),
         None => {
             warn!("Validator update failed: Invalid internal state.");
             (None, false) // Action failed
@@ -249,6 +338,10 @@ pub(super) fn apply_validator_update(
             sheet_name: sheet_name.clone(),
             column_index: col_index,
             new_validator: new_validator.clone(),
+            structure_source_columns: if matches!(new_validator, Some(ColumnValidator::Structure)) {
+                let sources: Vec<usize> = state.options_structure_source_columns.iter().filter_map(|o| *o).collect();
+                if sources.is_empty() { None } else { Some(sources) }
+            } else { None },
         });
     } else {
         trace!(
@@ -267,7 +360,8 @@ pub(super) fn is_validator_config_valid(state: &EditorWindowState) -> bool {
             state.options_link_target_sheet.is_some()
                 && state.options_link_target_column_index.is_some()
         }
-        Some(ValidatorTypeChoice::Basic) => true, // Basic is always valid here
-        None => false, // Invalid state if options didn't load
+        Some(ValidatorTypeChoice::Structure) => true, // Always valid; confirmation handles risk
+        Some(ValidatorTypeChoice::Basic) => true, // Always valid
+        None => false,
     }
 }

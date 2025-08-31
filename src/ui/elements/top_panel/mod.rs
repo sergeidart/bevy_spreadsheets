@@ -120,9 +120,19 @@ mod orchestrator {
         mut reverse_folders_writer: EventWriter<'w, ReverseTopPanelFoldersEvent>,
         mut request_app_exit_writer: EventWriter<'w, RequestAppExit>,
         mut state_changed_writer: EventWriter<'w, VisualCopierStateChanged>,
+    mut close_structure_writer: EventWriter<'w, crate::sheets::events::CloseStructureViewEvent>,
     ) {
         egui::TopBottomPanel::top("main_top_controls_panel_refactored")
             .show_inside(ui, |ui| {
+                // First row: Back button if structure view active
+                if !state.virtual_structure_stack.is_empty() {
+                    ui.horizontal(|ui_back| {
+                        if ui_back.button("⬅ Back").clicked() {
+                            close_structure_writer.write(crate::sheets::events::CloseStructureViewEvent);
+                        }
+                    });
+                }
+                // Second row: standard sheet management controls (without Back)
                 ui.horizontal(|ui_h| {
                     sheet_management_bar::show_sheet_management_controls(
                         ui_h,
@@ -130,8 +140,8 @@ mod orchestrator {
                         &*registry,
                         sheet_management_bar::SheetManagementEventWriters {
                              upload_req_writer: &mut sheet_writers.upload_req,
-                             // MODIFIED: Pass &mut to the local mutable EventWriter
                              request_app_exit_writer: &mut request_app_exit_writer,
+                             close_structure_writer: &mut close_structure_writer,
                         }
                     );
                 });
@@ -161,7 +171,8 @@ mod orchestrator {
                         }
                     );
                 });
-                // NEW: Random Picker panel expanded row
+                // NEW: Random Picker panel expanded row (now virtual-structure aware)
+                let (active_cat, active_sheet_opt) = state.current_sheet_context();
                 if state.show_random_picker_panel {
                     ui.add_space(4.0);
                     let mut random_settings_changed = false;
@@ -181,138 +192,100 @@ mod orchestrator {
                             });
                         if mode_is_complex != state.random_picker_mode_is_complex { state.random_picker_mode_is_complex = mode_is_complex; random_settings_changed = true; }
 
-                        let is_enabled = state.selected_sheet_name.is_some();
+                        let is_enabled = active_sheet_opt.is_some();
                         // Refresh button will perform picking below based on mode
 
                         // Columns list
-                        let headers: Vec<String> =
-                            if let Some(sel) = &state.selected_sheet_name {
-                                registry
-                                    .get_sheet(&state.selected_category, sel)
-                                    .and_then(|d| d.metadata.as_ref())
-                                    .map(|m| m.columns.iter().map(|c| c.header.clone()).collect())
-                                    .unwrap_or_default()
-                            } else { Vec::new() };
+                        // Build selectable headers excluding Structure validator columns. Keep mapping to actual indices.
+                        let mut header_map: Vec<(usize, String)> = Vec::new(); // (actual_col_index, header)
+                        if let Some(sheet_name) = &active_sheet_opt {
+                            if let Some(sheet) = registry.get_sheet(&active_cat, sheet_name) {
+                                if let Some(meta) = &sheet.metadata {
+                                    for (i, c) in meta.columns.iter().enumerate() {
+                                        let is_structure = matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure));
+                                        if !is_structure { header_map.push((i, c.header.clone())); }
+                                    }
+                                }
+                            }
+                        }
+                        if header_map.is_empty() { ui_h.label("<no columns>"); return; }
 
                         if !state.random_picker_mode_is_complex {
                             // Simple
                             // Result column dropdown
-                            let mut simple_col = state
-                                .random_simple_result_col
-                                .min(headers.len().saturating_sub(1));
-                            let before = state.random_simple_result_col;
+                            // Map current actual index to selection index
+                            let mut selection_idx = header_map.iter().position(|(actual, _)| *actual == state.random_simple_result_col).unwrap_or(0);
                             egui::ComboBox::from_id_salt("random_simple_result_col")
-                                .selected_text(headers.get(simple_col).cloned().unwrap_or_else(|| "<no columns>".to_string()))
+                                .selected_text(header_map.get(selection_idx).map(|(_,h)| h.clone()).unwrap_or_else(|| "<no columns>".to_string()))
                                 .show_ui(ui_h, |ui| {
-                                    for (i, h) in headers.iter().enumerate() {
-                                        ui.selectable_value(&mut simple_col, i, h);
+                                    for (i, (_actual, h)) in header_map.iter().enumerate() {
+                                        if ui.selectable_label(i==selection_idx, h).clicked() { selection_idx = i; }
                                     }
                                 });
-                            if simple_col != before {
-                                state.random_simple_result_col = simple_col;
-                                random_settings_changed = true;
-                            }
+                            let new_actual = header_map[selection_idx].0;
+                            if new_actual != state.random_simple_result_col { state.random_simple_result_col = new_actual; random_settings_changed = true; }
 
                             // Read-only display field
                             ui_h.add_enabled(false, egui::TextEdit::singleline(&mut state.random_picker_last_value));
 
                             // Refresh button
                             if ui_h.add_enabled(is_enabled, egui::Button::new("🔄 Refresh")).clicked() {
-                                if let Some(sel) = &state.selected_sheet_name {
-                                    if let Some(sheet) = registry.get_sheet(&state.selected_category, sel) {
+                                if let Some(sheet_name) = &active_sheet_opt {
+                                    if let Some(sheet) = registry.get_sheet(&active_cat, sheet_name) {
                                         let col = state.random_simple_result_col;
                                         let non_empty: Vec<&str> = sheet.grid.iter().filter_map(|row| row.get(col)).map(|s| s.as_str()).filter(|s| !s.is_empty()).collect();
-                                        if non_empty.is_empty() {
-                                            state.random_picker_last_value.clear();
-                                        } else {
-                                            let idx = (rand::random::<u64>() as usize) % non_empty.len();
-                                            state.random_picker_last_value = non_empty[idx].to_string();
-                                        }
-                                        random_settings_changed = true;
-                                    }
+                                        if non_empty.is_empty() { state.random_picker_last_value.clear(); } else { let idx = (rand::random::<u64>() as usize) % non_empty.len(); state.random_picker_last_value = non_empty[idx].to_string(); }
+                                        random_settings_changed = true; }
                                 }
                             }
                         } else {
                             // Complex
-                            // Result col
-                            let mut result_col = state
-                                .random_complex_result_col
-                                .min(headers.len().saturating_sub(1));
-                            let before_r = state.random_complex_result_col;
+                            // Result col (mapping)
+                            let mut res_sel_idx = header_map.iter().position(|(actual,_ )| *actual == state.random_complex_result_col).unwrap_or(0);
                             egui::ComboBox::from_id_salt("random_complex_result_col")
-                                .selected_text(headers.get(result_col).cloned().unwrap_or_else(|| "<no columns>".to_string()))
+                                .selected_text(header_map.get(res_sel_idx).map(|(_,h)| h.clone()).unwrap_or_else(|| "<no columns>".to_string()))
                                 .show_ui(ui_h, |ui| {
-                                    for (i, h) in headers.iter().enumerate() {
-                                        ui.selectable_value(&mut result_col, i, h);
-                                    }
+                                    for (i, (_a, h)) in header_map.iter().enumerate() { if ui.selectable_label(i==res_sel_idx, h).clicked() { res_sel_idx = i; } }
                                 });
-                            if result_col != before_r {
-                                state.random_complex_result_col = result_col;
-                                random_settings_changed = true;
-                            }
+                            let new_res_actual = header_map[res_sel_idx].0;
+                            if new_res_actual != state.random_complex_result_col { state.random_complex_result_col = new_res_actual; random_settings_changed = true; }
                             // Read-only display field for last picked value (before weights to distinguish roles)
                             ui_h.add_enabled(false, egui::TextEdit::singleline(&mut state.random_picker_last_value));
 
                             // Keep Refresh immediately after the result field (same relative spot as before)
                             if ui_h.add_enabled(is_enabled, egui::Button::new("🔄 Refresh")).clicked() {
-                                if let Some(sel) = &state.selected_sheet_name {
-                                    if let Some(sheet) = registry.get_sheet(&state.selected_category, sel) {
-                                        let rcol = state.random_complex_result_col;
-                                        let w1_idx = state.random_complex_weight_col;
-                                        let w2_idx = state.random_complex_second_weight_col;
-                                        let mut values: Vec<(&str, f64)> = Vec::new();
-                                        for row in &sheet.grid {
-                                            let val = row.get(rcol).map(|s| s.as_str()).unwrap_or("");
-                                            if val.is_empty() { continue; }
-                                            let w1 = w1_idx.and_then(|i| row.get(i)).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
-                                            let w2 = w2_idx.and_then(|i| row.get(i)).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0);
-                                            let w = if w2_idx.is_some() { w1 + w2 } else { w1 };
-                                            if w > 0.0 { values.push((val, w)); }
-                                        }
-                                        if values.is_empty() { state.random_picker_last_value.clear(); }
-                                        else {
-                                            let total: f64 = values.iter().map(|(_, w)| *w).sum();
-                                            let mut target = rand::random::<f64>() * total;
-                                            let mut picked = values[0].0;
-                                            for (v, w) in values {
-                                                if target <= w { picked = v; break; }
-                                                target -= w;
-                                            }
-                                            state.random_picker_last_value = picked.to_string();
-                                        }
-                                        random_settings_changed = true;
-                                    }
-                                }
+                                if let Some(sheet_name) = &active_sheet_opt { if let Some(sheet) = registry.get_sheet(&active_cat, sheet_name) {
+                                    let rcol = state.random_complex_result_col;
+                                    let w1_idx = state.random_complex_weight_col;
+                                    let w2_idx = state.random_complex_second_weight_col;
+                                    let mut values: Vec<(&str, f64)> = Vec::new();
+                                    for row in &sheet.grid { let val = row.get(rcol).map(|s| s.as_str()).unwrap_or(""); if val.is_empty() { continue; } let w1 = w1_idx.and_then(|i| row.get(i)).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0); let w2 = w2_idx.and_then(|i| row.get(i)).and_then(|s| s.parse::<f64>().ok()).unwrap_or(0.0); let w = if w2_idx.is_some() { w1 + w2 } else { w1 }; if w > 0.0 { values.push((val, w)); } }
+                                    if values.is_empty() { state.random_picker_last_value.clear(); } else { let total: f64 = values.iter().map(|(_, w)| *w).sum(); let mut target = rand::random::<f64>() * total; let mut picked = values[0].0; for (v, w) in values { if target <= w { picked = v; break; } target -= w; } state.random_picker_last_value = picked.to_string(); }
+                                    random_settings_changed = true; } }
                             }
 
-                            // First weight
-                            let mut w1_opt = state.random_complex_weight_col;
-                            let mut w1 = w1_opt.unwrap_or(0).min(headers.len().saturating_sub(1));
+                            // First weight (mapping)
+                            let mut w1_opt = state.random_complex_weight_col; // actual index
+                            let mut w1_sel_idx = w1_opt.and_then(|a| header_map.iter().position(|(actual,_ )| *actual == a));
+                            if w1_opt.is_some() && w1_sel_idx.is_none() { w1_opt = None; }
                             egui::ComboBox::from_id_salt("random_complex_weight_col")
-                                .selected_text(headers.get(w1).cloned().unwrap_or_else(|| "<no columns>".to_string()))
-                                .show_ui(ui_h, |ui| {
-                                    for (i, h) in headers.iter().enumerate() {
-                                        if ui.selectable_label(Some(i) == w1_opt, h).clicked() {
-                                            w1_opt = Some(i);
-                                            w1 = i;
-                                            random_settings_changed = true;
-                                        }
-                                    }
-                                });
+                                .selected_text(w1_sel_idx.and_then(|si| header_map.get(si).map(|(_,h)| h.clone())).unwrap_or_else(|| "<no columns>".to_string()))
+                                .show_ui(ui_h, |ui| { for (i, (_a,h)) in header_map.iter().enumerate() { if ui.selectable_label(Some(i)==w1_sel_idx, h).clicked() { w1_sel_idx = Some(i); w1_opt = Some(header_map[i].0); random_settings_changed = true; } } });
                             // Persist after first weight change
                             // (If None was previously, selecting sets Some)
                             // Note: Using currently set value
                             // Second weight (optional)
-                            let mut w2_opt = state.random_complex_second_weight_col;
-                            let mut w2 = w2_opt.unwrap_or(w1).min(headers.len().saturating_sub(1));
+                            let mut w2_opt = state.random_complex_second_weight_col; // actual index
+                            let mut w2_sel_idx = w2_opt.and_then(|a| header_map.iter().position(|(actual,_ )| *actual == a));
+                            if w2_opt.is_some() && w2_sel_idx.is_none() { w2_opt = None; }
                             egui::ComboBox::from_id_salt("random_complex_second_weight_col")
-                                .selected_text(w2_opt.and_then(|i| headers.get(i)).cloned().unwrap_or_else(|| "(none)".to_string()))
+                                .selected_text(if let Some(si)=w2_sel_idx { header_map.get(si).map(|(_,h)| h.clone()).unwrap_or_else(|| "(none)".to_string()) } else { "(none)".to_string() })
                                 .show_ui(ui_h, |ui| {
-                    if ui.selectable_label(w2_opt.is_none(), "(none)").clicked() { w2_opt=None; random_settings_changed = true; }
-                    for (i, h) in headers.iter().enumerate() { if ui.selectable_label(Some(i)==w2_opt, h).clicked(){ w2_opt=Some(i); w2=i; random_settings_changed = true; } }
+                                    if ui.selectable_label(w2_sel_idx.is_none(), "(none)").clicked() { w2_opt=None; w2_sel_idx=None; random_settings_changed = true; }
+                                    for (i, (_a,h)) in header_map.iter().enumerate() { if ui.selectable_label(Some(i)==w2_sel_idx, h).clicked(){ w2_sel_idx=Some(i); w2_opt=Some(header_map[i].0); random_settings_changed = true; } }
                                 });
                             // end weights selection
-                            // write back weight selections
+                            // write back weight selections (actual indices)
                             if w1_opt != state.random_complex_weight_col { state.random_complex_weight_col = w1_opt; }
                             if w2_opt != state.random_complex_second_weight_col { state.random_complex_second_weight_col = w2_opt; }
 
@@ -321,9 +294,9 @@ mod orchestrator {
                     });
                     // Persist settings once after UI if changed
                     if random_settings_changed {
-                        if let Some(sel) = &state.selected_sheet_name.clone() {
+                        if let Some(sel) = &active_sheet_opt.clone() {
                             let mut meta_to_save = None;
-                            if let Some(sheet_mut) = registry.get_sheet_mut(&state.selected_category, sel) {
+                            if let Some(sheet_mut) = registry.get_sheet_mut(&active_cat, sel) {
                                 if let Some(meta) = &mut sheet_mut.metadata {
                                     use crate::sheets::definitions::{RandomPickerSettings, RandomPickerMode};
                                     let settings = if state.random_picker_mode_is_complex {
@@ -358,33 +331,29 @@ mod orchestrator {
                     ui.horizontal_wrapped(|ui_h| {
                         ui_h.label("Summarize:");
                         // Collect headers and data types
-                        let mut headers: Vec<(String, crate::sheets::definitions::ColumnDataType)> = Vec::new();
-                        if let Some(sel) = &state.selected_sheet_name {
-                            if let Some(sheet) = registry.get_sheet(&state.selected_category, sel) {
-                                if let Some(meta) = &sheet.metadata {
-                                    headers = meta.columns.iter().map(|c| (c.header.clone(), c.data_type)).collect();
-                                }
-                            }
-                        }
-                        if headers.is_empty() { ui_h.label("<no columns>"); return; }
-                        let mut sel_col = state.summarizer_selected_col.min(headers.len().saturating_sub(1));
+                        let (active_cat, active_sheet_opt) = state.current_sheet_context();
+                        // Build header map excluding Structure columns
+                        let mut header_map: Vec<(usize, String, crate::sheets::definitions::ColumnDataType)> = Vec::new();
+                        if let Some(sheet_name) = &active_sheet_opt { if let Some(sheet) = registry.get_sheet(&active_cat, sheet_name) { if let Some(meta) = &sheet.metadata { for (i,c) in meta.columns.iter().enumerate() { if !matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure)) { header_map.push((i, c.header.clone(), c.data_type)); } } } } }
+                        if header_map.is_empty() { ui_h.label("<no columns>"); return; }
+                        // Map current actual index to selection index
+                        let mut sel_idx = header_map.iter().position(|(actual,_,_)| *actual == state.summarizer_selected_col).unwrap_or(0);
                         egui::ComboBox::from_id_salt("summarizer_col")
-                            .selected_text(headers.get(sel_col).map(|h| h.0.clone()).unwrap_or_else(|| "<no columns>".to_string()))
-                            .show_ui(ui_h, |ui| {
-                                for (i, (h, _)) in headers.iter().enumerate() {
-                                    if ui.selectable_label(i==sel_col, h).clicked() { sel_col = i; }
-                                }
-                            });
-                        state.summarizer_selected_col = sel_col;
+                            .selected_text(header_map.get(sel_idx).map(|(_,h,_)| h.clone()).unwrap_or_else(|| "<no columns>".to_string()))
+                            .show_ui(ui_h, |ui| { for (i, (_a,h,_dt)) in header_map.iter().enumerate() { if ui.selectable_label(i==sel_idx, h).clicked() { sel_idx = i; } } });
+                        state.summarizer_selected_col = header_map[sel_idx].0; // store actual index
                         // Read-only result field
                         ui_h.add_enabled(false, egui::TextEdit::singleline(&mut state.summarizer_last_result));
                         // Compute button
-                        if ui_h.add_enabled(state.selected_sheet_name.is_some(), egui::Button::new("∑ Compute")).clicked() {
+                        if ui_h.add_enabled(active_sheet_opt.is_some(), egui::Button::new("∑ Compute")).clicked() {
                             state.summarizer_last_result.clear();
-                            if let Some(sel) = &state.selected_sheet_name {
-                                if let Some(sheet) = registry.get_sheet(&state.selected_category, sel) {
-                                    let dtype = headers.get(sel_col).map(|h| h.1).unwrap_or(crate::sheets::definitions::ColumnDataType::String);
-                                    let col_index = sel_col;
+                            if let Some(sheet_name) = &active_sheet_opt {
+                                if let Some(sheet) = registry.get_sheet(&active_cat, sheet_name) {
+                                    let dtype = header_map.iter()
+                                        .find(|(a,_,_)| *a == state.summarizer_selected_col)
+                                        .map(|(_,_,dt)| *dt)
+                                        .unwrap_or(crate::sheets::definitions::ColumnDataType::String);
+                                    let col_index = state.summarizer_selected_col;
                                     match dtype {
                                         crate::sheets::definitions::ColumnDataType::String | crate::sheets::definitions::ColumnDataType::OptionString => {
                                             let count = sheet.grid.iter().filter_map(|row| row.get(col_index)).filter(|v| !v.trim().is_empty()).count();
@@ -394,7 +363,6 @@ mod orchestrator {
                                             let (t,f) = sheet.grid.iter().filter_map(|row| row.get(col_index)).filter(|v| !v.trim().is_empty()).fold((0usize,0usize), |acc, v| { let vl = v.to_ascii_lowercase(); if vl=="true" || vl=="1" { (acc.0+1, acc.1) } else { (acc.0, acc.1+1) } });
                                             state.summarizer_last_result = format!("Bool Count -> true: {}, false: {}", t, f);
                                         }
-                                        // Unsigned integers
                                         crate::sheets::definitions::ColumnDataType::U8 | crate::sheets::definitions::ColumnDataType::OptionU8 |
                                         crate::sheets::definitions::ColumnDataType::U16 | crate::sheets::definitions::ColumnDataType::OptionU16 |
                                         crate::sheets::definitions::ColumnDataType::U32 | crate::sheets::definitions::ColumnDataType::OptionU32 |
@@ -402,7 +370,6 @@ mod orchestrator {
                                             let mut sum:u128=0; let mut count=0; let mut invalid=0; for row in &sheet.grid { if let Some(val)=row.get(col_index) { if val.trim().is_empty() {continue;} match val.parse::<u128>() { Ok(v)=>{sum+=v; count+=1;}, Err(_)=>invalid+=1 } } }
                                             state.summarizer_last_result = format!("Sum: {} (values: {}, invalid: {})", sum, count, invalid);
                                         }
-                                        // Signed ints
                                         crate::sheets::definitions::ColumnDataType::I8 | crate::sheets::definitions::ColumnDataType::OptionI8 |
                                         crate::sheets::definitions::ColumnDataType::I16 | crate::sheets::definitions::ColumnDataType::OptionI16 |
                                         crate::sheets::definitions::ColumnDataType::I32 | crate::sheets::definitions::ColumnDataType::OptionI32 |
@@ -410,7 +377,6 @@ mod orchestrator {
                                             let mut sum:i128=0; let mut count=0; let mut invalid=0; for row in &sheet.grid { if let Some(val)=row.get(col_index) { if val.trim().is_empty(){continue;} match val.parse::<i128>() { Ok(v)=>{sum+=v; count+=1;}, Err(_)=>invalid+=1 } } }
                                             state.summarizer_last_result = format!("Sum: {} (values: {}, invalid: {})", sum, count, invalid);
                                         }
-                                        // Floats
                                         crate::sheets::definitions::ColumnDataType::F32 | crate::sheets::definitions::ColumnDataType::OptionF32 |
                                         crate::sheets::definitions::ColumnDataType::F64 | crate::sheets::definitions::ColumnDataType::OptionF64 => {
                                             let mut sum:f64=0.0; let mut count=0; let mut invalid=0; for row in &sheet.grid { if let Some(val)=row.get(col_index) { if val.trim().is_empty(){continue;} match val.parse::<f64>() { Ok(v)=>{sum+=v; count+=1;}, Err(_)=>invalid+=1 } } }

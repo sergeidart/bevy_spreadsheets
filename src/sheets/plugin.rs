@@ -7,7 +7,7 @@ use super::events::{
     RequestDeleteSheet, RequestDeleteSheetFile, RequestInitiateFileUpload,
     RequestProcessUpload, RequestRenameSheet, RequestRenameSheetFile,
     RequestUpdateColumnName, RequestUpdateColumnValidator,
-    SheetOperationFeedback, UpdateCellEvent, RequestUpdateColumnWidth,
+    SheetOperationFeedback, UpdateCellEvent,
     SheetDataModifiedInRegistryEvent, RequestSheetRevalidation,
     RequestDeleteColumns, RequestAddColumn, RequestReorderColumn,
     // NEW: Import RequestCreateNewSheet
@@ -16,7 +16,9 @@ use super::events::{
 use super::systems; 
 use crate::ui::systems::handle_ai_task_results; 
 use crate::ui::systems::forward_events; 
+use crate::ui::systems::apply_pending_structure_key_selection;
 use super::systems::logic::handle_sheet_render_cache_update;
+use super::systems::logic::sync_structure::{PendingStructureCascade, handle_emit_structure_cascade_events};
 
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
@@ -43,8 +45,9 @@ impl Plugin for SheetsPlugin {
             ),
         );
 
-        app.init_resource::<SheetRegistry>();
+    app.init_resource::<SheetRegistry>();
         app.init_resource::<SheetRenderCache>();
+    app.init_resource::<PendingStructureCascade>();
 
         app.add_event::<AddSheetRowRequest>()
             .add_event::<RequestAddColumn>()
@@ -65,7 +68,6 @@ impl Plugin for SheetsPlugin {
             .add_event::<RequestDeleteRows>()
             .add_event::<RequestDeleteColumns>()
             .add_event::<AiTaskResult>() 
-            .add_event::<RequestUpdateColumnWidth>()
             .add_event::<SheetDataModifiedInRegistryEvent>()
             .add_event::<RequestSheetRevalidation>();
 
@@ -108,7 +110,6 @@ impl Plugin for SheetsPlugin {
                 systems::logic::handle_delete_columns_request,
                 systems::logic::handle_update_column_name,
                 systems::logic::handle_update_column_validator,
-                systems::logic::handle_update_column_width,
                 systems::logic::handle_cell_update, 
             )
                 .chain() 
@@ -120,6 +121,7 @@ impl Plugin for SheetsPlugin {
             (
                 forward_events::<AiTaskResult>, 
                 ApplyDeferred, 
+                apply_pending_structure_key_selection,
                 handle_ai_task_results, 
             )
             .chain() 
@@ -129,9 +131,11 @@ impl Plugin for SheetsPlugin {
         app.add_systems(
             Update,
             (
-                handle_sheet_render_cache_update, 
+                handle_sheet_render_cache_update,
+                systems::logic::handle_sync_virtual_structure_sheet,
+                handle_emit_structure_cascade_events,
             )
-            .in_set(SheetSystemSet::UpdateCaches) 
+            .in_set(SheetSystemSet::UpdateCaches)
         );
 
         app.add_systems(

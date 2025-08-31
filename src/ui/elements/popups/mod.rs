@@ -1,3 +1,5 @@
+mod validator_confirm_popup;
+pub use validator_confirm_popup::show_validator_confirm_popup;
 // src/ui/elements/popups/mod.rs
 
 // Declare the individual popup modules

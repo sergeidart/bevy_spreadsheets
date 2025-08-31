@@ -1,7 +1,7 @@
 // src/ui/elements/editor/table_body.rs
 use crate::sheets::{
     definitions::{ColumnValidator, SheetMetadata},
-    events::UpdateCellEvent,
+    events::{UpdateCellEvent, OpenStructureViewEvent},
     resources::{SheetRegistry, SheetRenderCache},
 };
 // MODIFIED: Import SheetInteractionState
@@ -62,6 +62,7 @@ pub fn sheet_table_body(
     render_cache: &SheetRenderCache,
     mut cell_update_writer: EventWriter<UpdateCellEvent>,
     state: &mut EditorWindowState,
+    open_structure_events: &mut EventWriter<OpenStructureViewEvent>,
 ) -> bool {
 
     let sheet_data_ref = match registry.get_sheet(category, sheet_name) {
@@ -183,6 +184,7 @@ pub fn sheet_table_body(
                             registry,
                             render_cache,
                             state,
+                            open_structure_events,
                         ) {
                             cell_update_writer.write(UpdateCellEvent {
                                 category: category.clone(),

@@ -117,11 +117,14 @@ pub(super) fn show_column_options_window_ui(
             show_validator_section(ui, state, registry_immut);
             ui.separator();
 
+            // Confirmation moved to dedicated popup window.
+
             // --- Action Buttons ---
             ui.horizontal(|ui| {
                 let apply_enabled =
                     !state.options_column_rename_input.trim().is_empty()
-                        && is_validator_config_valid(state);
+                        && is_validator_config_valid(state)
+                        && !state.pending_validator_change_requires_confirmation; // disable while awaiting confirm
                 if ui
                     .add_enabled(apply_enabled, egui::Button::new("Apply"))
                     .clicked()

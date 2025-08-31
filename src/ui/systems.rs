@@ -5,6 +5,8 @@ use crate::{
         elements::editor::state::{AiModeState, EditorWindowState},
         UiFeedbackState,
     },
+    sheets::resources::SheetRegistry,
+    sheets::systems::io::save::save_single_sheet,
 };
 use bevy::prelude::*;
 use std::any;
@@ -74,10 +76,18 @@ pub fn handle_ai_task_results(
         match &ev.result {
             Ok(suggestion) => {
                 info!("  AI Task Success for row {}: {:?}", ev.original_row_index, suggestion);
-                state
-                    .ai_suggestions
-                    .insert(ev.original_row_index, suggestion.clone());
-                // Don't clear ai_raw_output_display here, let it show the successful raw response
+                // Re-expand suggestion back to full column width using mapping
+                let expanded = if !state.ai_included_non_structure_columns.is_empty() {
+                    // Determine required length (max index +1)
+                    let max_col = *state.ai_included_non_structure_columns.iter().max().unwrap_or(&0);
+                    let mut row_buf = vec![String::new(); max_col + 1];
+                    for (i, actual_col) in state.ai_included_non_structure_columns.iter().enumerate() {
+                        let src_index = i + state.ai_context_only_prefix_count; // skip context-only prefix
+                        if let Some(val) = suggestion.get(src_index) { if let Some(slot) = row_buf.get_mut(*actual_col) { *slot = val.clone(); } }
+                    }
+                    row_buf
+                } else { suggestion.clone() };
+                state.ai_suggestions.insert(ev.original_row_index, expanded);
             }
             Err(err_msg) => {
                 error!("  AI Task Failure for row {}: {}", ev.original_row_index, err_msg);
@@ -158,4 +168,54 @@ pub fn clear_ui_feedback_on_sheet_change(
 
     // Update last selection stored locally
     *last_selection = Some(current_sel);
+}
+
+// Apply pending structure key column selection (if any) and compute ancestor chain
+pub fn apply_pending_structure_key_selection(
+    mut state: ResMut<EditorWindowState>,
+    mut registry: ResMut<SheetRegistry>,
+) {
+    if let Some((cat, sheet, structure_col_index, new_key_opt)) = state.pending_structure_key_apply.take() {
+        let mut root_parent_link: Option<crate::sheets::definitions::StructureParentLink> = None;
+        let mut changed = false;
+        if let Some(sheet_data) = registry.get_sheet_mut(&cat, &sheet) {
+            if let Some(meta) = &mut sheet_data.metadata {
+                if let Some(col) = meta.columns.get_mut(structure_col_index) {
+                    if col.structure_key_parent_column_index != new_key_opt { changed = true; }
+                    col.structure_key_parent_column_index = new_key_opt;
+                    col.structure_ancestor_key_parent_column_indices = Some(Vec::new());
+                }
+                root_parent_link = meta.structure_parent.clone();
+            }
+        }
+        let mut collected: Vec<usize> = Vec::new();
+        let mut current_parent = root_parent_link;
+        let mut safety = 0;
+        while let Some(parent_link) = current_parent.clone() {
+            if safety > 32 { break; }
+            safety += 1;
+            if let Some(parent_sheet) = registry.get_sheet(&parent_link.parent_category, &parent_link.parent_sheet) {
+                if let Some(parent_meta) = &parent_sheet.metadata {
+                    if let Some(parent_col) = parent_meta.columns.get(parent_link.parent_column_index) {
+                        if let Some(kidx) = parent_col.structure_key_parent_column_index { collected.push(kidx); }
+                    }
+                    current_parent = parent_meta.structure_parent.clone();
+                    continue;
+                }
+            }
+            break;
+        }
+        collected.reverse();
+        if let Some(sheet_data) = registry.get_sheet_mut(&cat, &sheet) {
+            if let Some(meta) = &mut sheet_data.metadata {
+                if let Some(col) = meta.columns.get_mut(structure_col_index) {
+                    let existing = col.structure_ancestor_key_parent_column_indices.clone().unwrap_or_default();
+                    if existing != collected { changed = true; }
+                    col.structure_ancestor_key_parent_column_indices = Some(collected);
+                }
+                let meta_clone_for_save = if changed { Some(meta.clone()) } else { None };
+                if let Some(meta_clone) = meta_clone_for_save { save_single_sheet(registry.as_ref(), &meta_clone); info!("Persisted structure key selection for column {} in '{:?}/{}'", structure_col_index + 1, cat, sheet); }
+            }
+        }
+    }
 }

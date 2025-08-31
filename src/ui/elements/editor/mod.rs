@@ -2,6 +2,7 @@
 
 // Declare the submodules for the editor components
 pub mod state;
+pub mod structure_navigation;
 pub mod table_body;
 pub mod table_header;
 pub mod main_editor; // This is now the orchestrator

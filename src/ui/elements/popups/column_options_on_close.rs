@@ -26,6 +26,9 @@ pub(super) fn handle_on_close(
     state.options_validator_type = None;
     state.options_link_target_sheet = None;
     state.options_link_target_column_index = None;
+    // Clear key-related ephemeral state so it always reloads from metadata next open
+    state.options_existing_structure_key_parent_column = None;
+    state.options_structure_key_parent_column_temp = None;
 
     // --- Trigger Manual Save ONLY if non-event changes occurred ---
     if needs_save {

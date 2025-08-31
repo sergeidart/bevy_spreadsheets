@@ -19,7 +19,7 @@ pub(super) fn show_sheet_interaction_mode_buttons<'a, 'w>(
     _registry: &SheetRegistry, // Mark as unused with underscore
     event_writers: InteractionModeEventWriters<'a, 'w>, // Takes struct of mutable refs
 ) {
-    let is_sheet_selected = state.selected_sheet_name.is_some();
+    let is_sheet_selected = state.current_sheet_context().1.is_some();
 
     let can_add_row =
         is_sheet_selected && state.current_interaction_mode == SheetInteractionState::Idle;
@@ -27,13 +27,9 @@ pub(super) fn show_sheet_interaction_mode_buttons<'a, 'w>(
         .add_enabled(can_add_row, egui::Button::new("➕ Add Row"))
         .clicked()
     {
-        if let Some(sheet_name) = &state.selected_sheet_name {
-            event_writers // Use directly
-                .add_row_event_writer
-                .write(AddSheetRowRequest {
-                    category: state.selected_category.clone(),
-                    sheet_name: sheet_name.clone(),
-                });
+        let (cat_opt, sheet_opt) = state.current_sheet_context();
+        if let Some(sheet_name) = sheet_opt {
+            event_writers.add_row_event_writer.write(AddSheetRowRequest { category: cat_opt, sheet_name });
             state.request_scroll_to_new_row = true;
             state.force_filter_recalculation = true;
         }
@@ -84,14 +80,8 @@ pub(super) fn show_sheet_interaction_mode_buttons<'a, 'w>(
             .on_hover_text("Add a new column to the current sheet")
             .clicked()
         {
-            if let Some(sheet_name) = &state.selected_sheet_name {
-                event_writers // Use directly
-                    .add_column_event_writer
-                    .write(RequestAddColumn {
-                        category: state.selected_category.clone(),
-                        sheet_name: sheet_name.clone(),
-                    });
-            }
+            let (cat_opt, sheet_opt) = state.current_sheet_context();
+            if let Some(sheet_name) = sheet_opt { event_writers.add_column_event_writer.write(RequestAddColumn { category: cat_opt, sheet_name }); }
         }
         if ui.button("❌ Finish Column Edit").clicked() {
             state.reset_interaction_modes_and_selections();

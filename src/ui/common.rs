@@ -6,8 +6,8 @@ use std::collections::HashSet;
 
 use crate::sheets::{
     definitions::{ColumnDataType, ColumnValidator},
-    // ADDED SheetRenderCache, REMOVED SheetValidationState
     resources::{SheetRegistry, SheetRenderCache},
+    events::OpenStructureViewEvent,
 };
 use crate::ui::elements::editor::state::EditorWindowState;
 use crate::ui::validation::ValidationState; // Keep for enum access
@@ -34,6 +34,8 @@ pub fn edit_cell_widget(
     render_cache: &SheetRenderCache, // Use the new render cache
     // Still need EditorWindowState mutably for linked column cache access (for dropdowns)
     state: &mut EditorWindowState,
+    // NEW: event writer for structure navigation
+    structure_open_events: &mut EventWriter<OpenStructureViewEvent>,
 ) -> Option<String> { // Return type remains Option<String> for committed changes
 
     // --- 1. Read Pre-calculated RenderableCellData ---
@@ -196,6 +198,89 @@ pub fn edit_cell_widget(
                                 ColumnDataType::F64 => { handle_numeric!(centered_widget_ui, f64, "f64", 0.0, 0.1) },
                                 ColumnDataType::OptionF64 => { handle_option_numeric!(centered_widget_ui, f64, "opt_f64") },
                             }
+                        }
+                        Some(ColumnValidator::Structure) => {
+                            // Multi-row aware preview: cells store positional arrays (single row: [..], multi: [[..],[..]]) or legacy JSON.
+                            // MUST parse raw cell value (not display_text which may already be a preview) to avoid false parse errors.
+                            let raw_cell_json = registry
+                                .get_sheet(category, sheet_name)
+                                .and_then(|sd| sd.grid.get(row_index))
+                                .and_then(|r| r.get(col_index))
+                                .map(|s| s.as_str())
+                                .unwrap_or(current_display_text); // fallback to display text
+                            let trimmed = raw_cell_json.trim();
+                            let mut summary: String;
+                            if trimmed.is_empty() || trimmed == "{}" || trimmed == "[]" { summary = "(empty)".to_string(); }
+                            else if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                                match val {
+                                    serde_json::Value::Array(rows) => {
+                                        let row_count = rows.len();
+                                        if row_count == 0 { summary = "(empty)".to_string(); }
+                                        else {
+                                            // Determine first row representation depending on format
+                                            let mut parts: Vec<String> = Vec::new();
+                                            if rows.iter().all(|e| e.is_string()) { // single-row new format
+                                                for (i,v) in rows.iter().enumerate().take(6) {
+                                                    let s = v.as_str().unwrap_or("");
+                                                    let mut val_c = s.to_string(); if val_c.len()>24 { val_c.truncate(24); val_c.push_str("…"); }
+                                                    parts.push(val_c);
+                                                }
+                                            } else if rows.iter().all(|e| e.is_array()) { // multi-row new format
+                                                if let Some(first_arr) = rows.get(0).and_then(|v| v.as_array()) {
+                                                    for (i,v) in first_arr.iter().enumerate().take(6) {
+                                                        let s = v.as_str().unwrap_or("");
+                                                        let mut val_c = s.to_string(); if val_c.len()>24 { val_c.truncate(24); val_c.push_str("…"); }
+                                                        parts.push(val_c);
+                                                    }
+                                                }
+                                            } else if let Some(first_obj) = rows.get(0).and_then(|r| r.as_object()) { // legacy multi-row objects
+                                                for (k,v) in first_obj.iter().take(6) {
+                                                    let val_str = v.as_str().map(|s| s.to_string()).unwrap_or_else(|| v.to_string());
+                                                    let mut val_c = val_str; if val_c.len()>24 { val_c.truncate(24); val_c.push_str("…"); }
+                                                    parts.push(format!("{}={}", k, val_c));
+                                                }
+                                            }
+                                            let multi = row_count > 1;
+                                            // Use " | " delimiter and skip empty items for cleaner preview
+                                            parts.retain(|p| !p.trim().is_empty());
+                                            summary = parts.join(" | ");
+                                            if multi { summary.push_str("..."); }
+                                        }
+                                    }
+                                    serde_json::Value::Object(map) => {
+                                        if map.is_empty() { summary = "(empty)".to_string(); } else {
+                                            let mut parts: Vec<String> = map.iter().take(4).map(|(k,v)| {
+                                                let val_str = v.as_str().map(|s| s.to_string()).unwrap_or_else(|| v.to_string());
+                                                let mut val_c = val_str;
+                                                if val_c.len() > 24 { val_c.truncate(24); val_c.push_str("…"); }
+                                                format!("{}={}", k, val_c)
+                                            }).collect();
+                                            parts.retain(|p| !p.ends_with('='));
+                                            let extra = if map.len() > 4 { format!(" (+{} more)", map.len()-4) } else { String::new() };
+                                            summary = parts.join(" | ") + &extra;
+                                        }
+                                    }
+                                    other => {
+                                        let mut raw = other.to_string();
+                                        if raw.len() > 64 { raw.truncate(64); raw.push_str("…"); }
+                                        summary = raw;
+                                    }
+                                }
+                            } else {
+                                summary = "(parse err)".to_string();
+                            }
+                            if summary.is_empty() { summary = "(empty)".to_string(); }
+                            if summary.len() > 64 { summary.truncate(64); summary.push_str("…"); }
+                            let btn = centered_widget_ui.button(summary);
+                            if btn.clicked() {
+                                structure_open_events.write(OpenStructureViewEvent {
+                                    parent_category: category.clone(),
+                                    parent_sheet: sheet_name.to_string(),
+                                    row_index,
+                                    col_index,
+                                });
+                            }
+                            response_opt = Some(btn);
                         }
                     }
                 });

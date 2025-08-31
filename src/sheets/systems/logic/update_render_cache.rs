@@ -117,6 +117,10 @@ pub fn handle_sheet_render_cache_update(
                                          &mut editor_state, // Pass Local state mutably for linked_column_cache access
                                      )
                                  }
+                                Some(ColumnValidator::Structure) => {
+                                    // Treat structure cells as always valid (content is JSON string) for now
+                                    (ValidationState::Valid, None)
+                                }
                                 None => { // Treat as basic string if no validator
                                     let (state, _parse_error) = validate_basic_cell(cell_value_str, ColumnDataType::String);
                                     (state, None)
@@ -130,7 +134,13 @@ pub fn handle_sheet_render_cache_update(
 
                         // Update the specific cell in the render cache
                         if let Some(render_cell) = current_sheet_render_cache.get_mut(r_idx).and_then(|row| row.get_mut(c_idx)) {
-                            render_cell.display_text = cell_value_str.to_string();
+                            // Custom preview for structure cells: show first row only, truncated
+                            let preview_text = if let Some(col_def) = col_def_opt {
+                                if matches!(col_def.validator, Some(ColumnValidator::Structure)) {
+                                    generate_structure_preview(cell_value_str)
+                                } else { cell_value_str.to_string() }
+                            } else { cell_value_str.to_string() };
+                            render_cell.display_text = preview_text;
                             render_cell.validation_state = if let Some(col_def) = col_def_opt {
                                 // Use val_state from above
                                 let (val_state, _) = match &col_def.validator {
@@ -146,6 +156,9 @@ pub fn handle_sheet_render_cache_update(
                                             &registry,
                                             &mut editor_state,
                                         )
+                                    }
+                                    Some(ColumnValidator::Structure) => {
+                                        (ValidationState::Valid, None)
                                     }
                                     None => {
                                         let (state, _) = validate_basic_cell(cell_value_str, ColumnDataType::String);
@@ -173,4 +186,43 @@ pub fn handle_sheet_render_cache_update(
             render_cache.clear_sheet_render_data(&category, &sheet_name);
         }
     }
+}
+
+// Generate a concise preview for a structure cell: first row's non-empty values joined by ' | ' and truncated.
+fn generate_structure_preview(raw: &str) -> String {
+    if raw.trim().is_empty() { return String::new(); }
+    let mut out = String::new();
+    let mut multi_rows = false;
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(raw) {
+        match val {
+            serde_json::Value::Array(arr) => {
+                if arr.iter().all(|v| v.is_string()) { // single row new format
+                    let mut vals: Vec<&str> = arr.iter().map(|v| v.as_str().unwrap_or("")).filter(|s| !s.trim().is_empty()).collect();
+                    out = vals.join(" | ");
+                } else if arr.iter().all(|v| v.is_array()) { // multi-row new format
+                    multi_rows = true;
+                    if let Some(first) = arr.first().and_then(|v| v.as_array()) {
+                        let mut vals: Vec<&str> = first.iter().map(|v| v.as_str().unwrap_or("")).filter(|s| !s.trim().is_empty()).collect();
+                        out = vals.join(" | ");
+                    }
+                } else if arr.iter().all(|v| v.is_object()) { // legacy multi-row objects
+                    multi_rows = true;
+                    if let Some(first) = arr.first().and_then(|v| v.as_object()) {
+                        let mut kv: Vec<String> = first.iter().map(|(k,v)| format!("{}={}", k, v.as_str().unwrap_or(&v.to_string()))).filter(|s| !s.ends_with('=')).collect();
+                        kv.sort();
+                        out = kv.join(" | ");
+                    }
+                }
+            }
+            serde_json::Value::Object(map) => { // legacy single object
+                let mut kv: Vec<String> = map.iter().map(|(k,v)| format!("{}={}", k, v.as_str().unwrap_or(&v.to_string()))).filter(|s| !s.ends_with('=')).collect();
+                kv.sort();
+                out = kv.join(" | ");
+            }
+            _ => {}
+        }
+    }
+    if out.len() > 64 { out.truncate(64); out.push_str("…"); }
+    if multi_rows { out.push_str("..."); }
+    out
 }

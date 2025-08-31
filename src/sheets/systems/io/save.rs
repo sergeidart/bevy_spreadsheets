@@ -19,6 +19,11 @@ use crate::sheets::{
 pub fn save_single_sheet(registry: &SheetRegistry, metadata_to_save: &SheetMetadata) {
     let sheet_name = &metadata_to_save.sheet_name;
     let category = &metadata_to_save.category;
+    // Skip saving virtual (ephemeral) sheets
+    if sheet_name.starts_with("__virtual__") {
+        trace!("Skipping save for ephemeral virtual sheet '{:?}/{}'", category, sheet_name);
+        return;
+    }
     info!("Attempting to save sheet: '{:?}/{}'", category, sheet_name);
 
     // Get the actual SheetGridData from the registry using category and name

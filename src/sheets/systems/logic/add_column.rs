@@ -5,6 +5,7 @@ use crate::sheets::{
     resources::SheetRegistry,
     systems::io::save::save_single_sheet,
 };
+use crate::ui::elements::editor::state::EditorWindowState;
 use bevy::prelude::*;
 // ADDED: Import HashSet (was missing in my previous response)
 use std::collections::{HashMap, HashSet};
@@ -14,19 +15,24 @@ pub fn handle_add_column_request(
     mut registry: ResMut<SheetRegistry>,
     mut feedback_writer: EventWriter<SheetOperationFeedback>,
     mut data_modified_writer: EventWriter<SheetDataModifiedInRegistryEvent>,
+    editor_state: Option<Res<EditorWindowState>>,
 ) {
     let mut sheets_to_save: HashMap<(Option<String>, String), SheetMetadata> = HashMap::new();
 
     for event in events.read() {
-        let category = &event.category;
-        let sheet_name = &event.sheet_name;
+        // Determine actual target (virtual sheet if inside structure view)
+        let (category, sheet_name) = if let Some(state) = editor_state.as_ref() {
+            if let Some(vctx) = state.virtual_structure_stack.last() {
+                (vctx.parent.parent_category.clone(), vctx.virtual_sheet_name.clone())
+            } else { (event.category.clone(), event.sheet_name.clone()) }
+        } else { (event.category.clone(), event.sheet_name.clone()) };
 
         let mut operation_successful = false;
         let mut error_message: Option<String> = None;
         let mut metadata_cache: Option<SheetMetadata> = None;
         let mut new_column_name = "New Column".to_string();
 
-        if let Some(sheet_data) = registry.get_sheet_mut(category, sheet_name) {
+    if let Some(sheet_data) = registry.get_sheet_mut(&category, &sheet_name) {
             if let Some(metadata) = &mut sheet_data.metadata {
                 // Determine a unique name for the new column
                 let mut counter = 1;
@@ -49,10 +55,7 @@ pub fn handle_add_column_request(
                 metadata.ensure_column_consistency(); 
                 operation_successful = true;
                 metadata_cache = Some(metadata.clone());
-                data_modified_writer.write(SheetDataModifiedInRegistryEvent {
-                    category: category.clone(),
-                    sheet_name: sheet_name.clone(),
-                });
+                data_modified_writer.write(SheetDataModifiedInRegistryEvent { category: category.clone(), sheet_name: sheet_name.clone() });
             } else {
                 error_message = Some(format!(
                     "Metadata missing for sheet '{:?}/{}'. Cannot add column.",

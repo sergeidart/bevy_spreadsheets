@@ -2,6 +2,8 @@
 use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy_egui::{egui, EguiContexts};
+use bevy::input::keyboard::KeyCode;
+use bevy::window::Window;
 use bevy_tokio_tasks::TokioTasksRuntime;
 
 use crate::sheets::{
@@ -9,7 +11,7 @@ use crate::sheets::{
         AddSheetRowRequest, RequestDeleteSheet, RequestInitiateFileUpload, RequestRenameSheet,
         RequestUpdateColumnName, RequestUpdateColumnValidator, UpdateCellEvent, RequestDeleteRows,
         RequestSheetRevalidation, SheetDataModifiedInRegistryEvent, RequestDeleteColumns,
-        RequestAddColumn, RequestReorderColumn, RequestCreateNewSheet,
+        RequestAddColumn, RequestReorderColumn, RequestCreateNewSheet, CloseStructureViewEvent,
     },
     resources::{SheetRegistry, SheetRenderCache},
 };
@@ -50,6 +52,7 @@ pub struct SheetEventWriters<'w> {
     pub delete_columns: EventWriter<'w, RequestDeleteColumns>,
     pub reorder_column: EventWriter<'w, RequestReorderColumn>,
     pub revalidate: EventWriter<'w, RequestSheetRevalidation>,
+    pub open_structure: EventWriter<'w, crate::sheets::events::OpenStructureViewEvent>,
 }
 
 #[derive(SystemParam)]
@@ -60,6 +63,19 @@ pub struct CopierEventWriters<'w> {
     pub state_changed: EventWriter<'w, VisualCopierStateChanged>,
 }
 
+#[derive(SystemParam)]
+pub struct EditorMiscParams<'w> {
+    pub registry: ResMut<'w, SheetRegistry>,
+    pub render_cache_res: Res<'w, SheetRenderCache>,
+    pub ui_feedback: Res<'w, UiFeedbackState>,
+    pub runtime: Res<'w, TokioTasksRuntime>,
+    pub api_key_status_res: ResMut<'w, ApiKeyDisplayStatus>,
+    pub session_api_key_res: ResMut<'w, SessionApiKey>,
+    pub copier_manager: ResMut<'w, VisualCopierManager>,
+    pub request_app_exit_writer: EventWriter<'w, RequestAppExit>,
+    pub close_structure_writer: EventWriter<'w, CloseStructureViewEvent>,
+}
+
 
 #[allow(clippy::too_many_arguments)]
 pub fn generic_sheet_editor_ui(
@@ -67,25 +83,22 @@ pub fn generic_sheet_editor_ui(
     mut state: ResMut<EditorWindowState>,
     mut sheet_writers: SheetEventWriters,
     copier_writers: CopierEventWriters,
-    mut registry: ResMut<SheetRegistry>,
-    render_cache_res: Res<SheetRenderCache>,
-    ui_feedback: Res<UiFeedbackState>,
-    runtime: Res<TokioTasksRuntime>,
+    mut misc: EditorMiscParams,
     mut commands: Commands,
     mut sheet_data_modified_events: EventReader<SheetDataModifiedInRegistryEvent>,
-    mut api_key_status_res: ResMut<ApiKeyDisplayStatus>,
-    mut session_api_key_res: ResMut<SessionApiKey>,
-    copier_manager: ResMut<VisualCopierManager>,
-    request_app_exit_writer: EventWriter<RequestAppExit>,
+    window_query: Query<Entity, With<Window>>,
+    keys: Res<ButtonInput<KeyCode>>,
 ) {
+    // Guard: If all windows are closed (app shutting down) skip egui usage to avoid panic
+    if window_query.is_empty() { return; }
     let ctx = contexts.ctx_mut();
     let initial_selected_category = state.selected_category.clone();
     let initial_selected_sheet_name = state.selected_sheet_name.clone();
 
     editor_event_handling::process_editor_events_and_state(
         &mut state,
-        &registry,
-        &render_cache_res,
+        &misc.registry,
+        &misc.render_cache_res,
         &mut sheet_writers,
         &mut sheet_data_modified_events,
         &initial_selected_category,
@@ -96,35 +109,38 @@ pub fn generic_sheet_editor_ui(
         ctx,
         &mut state,
         &mut sheet_writers,
-        &mut registry,
-        &ui_feedback,
-        &mut api_key_status_res,
-        &mut session_api_key_res,
+        &mut misc.registry,
+        &misc.ui_feedback,
+        &mut misc.api_key_status_res,
+        &mut misc.session_api_key_res,
     );
 
     egui::CentralPanel::default().show(ctx, |ui| {
+        if keys.just_pressed(KeyCode::Escape) && !state.virtual_structure_stack.is_empty() {
+            misc.close_structure_writer.write(CloseStructureViewEvent);
+        }
         let text_style = egui::TextStyle::Body;
         let row_height = ui.text_style_height(&text_style) + ui.style().spacing.item_spacing.y;
 
         show_top_panel_orchestrator(
             ui,
             &mut state,
-            &mut *registry,
-            // MODIFIED: Pass &mut sheet_writers
+            &mut *misc.registry,
             &mut sheet_writers,
-            copier_manager, // Assuming this is ResMut or similar, passed correctly
-            copier_writers.pick_folder, // Individual writers are Copy
+            misc.copier_manager,
+            copier_writers.pick_folder,
             copier_writers.queue_top_panel_copy,
             copier_writers.reverse_folders,
-            request_app_exit_writer, // This is an EventWriter, Copy
+            misc.request_app_exit_writer,
             copier_writers.state_changed,
+            misc.close_structure_writer,
         );
 
         ui.add_space(10.0);
 
-        if !ui_feedback.last_message.is_empty() {
-            let text_color = if ui_feedback.is_error { egui::Color32::RED } else { ui.style().visuals.text_color() };
-            ui.colored_label(text_color, &ui_feedback.last_message);
+        if !misc.ui_feedback.last_message.is_empty() {
+            let text_color = if misc.ui_feedback.is_error { egui::Color32::RED } else { ui.style().visuals.text_color() };
+            ui.colored_label(text_color, &misc.ui_feedback.last_message);
         }
 
         let current_category_clone = state.selected_category.clone();
@@ -135,10 +151,10 @@ pub fn generic_sheet_editor_ui(
             &mut state,
             &current_category_clone,
             &current_sheet_name_clone,
-            &runtime,
-            &registry,
+            &misc.runtime,
+            &misc.registry,
             &mut commands,
-            &session_api_key_res,
+            &misc.session_api_key_res,
             &mut sheet_writers,
         );
 
@@ -148,13 +164,14 @@ pub fn generic_sheet_editor_ui(
                 ctx,
                 row_height,
                 &mut state,
-                &registry,
-                &render_cache_res,
+                &misc.registry,
+                &misc.render_cache_res,
                 sheet_writers.reorder_column,
                 sheet_writers.cell_update,
+                sheet_writers.open_structure,
             );
         }
 
-        editor_ai_log::show_ai_output_log(ui, &state);
+    editor_ai_log::show_ai_output_log(ui, &state);
     });
 }

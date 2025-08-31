@@ -5,6 +5,7 @@ use crate::sheets::{
     resources::SheetRegistry,
     systems::io::save::save_single_sheet,
 };
+use crate::ui::elements::editor::state::EditorWindowState;
 use bevy::prelude::*;
 use std::collections::HashMap;
 
@@ -13,12 +14,14 @@ pub fn handle_delete_columns_request(
     mut registry: ResMut<SheetRegistry>,
     mut feedback_writer: EventWriter<SheetOperationFeedback>,
     mut data_modified_writer: EventWriter<SheetDataModifiedInRegistryEvent>,
+    editor_state: Option<Res<EditorWindowState>>,
 ) {
     let mut sheets_to_save: HashMap<(Option<String>, String), SheetMetadata> = HashMap::new();
 
     for event in events.read() {
-        let category = &event.category;
-        let sheet_name = &event.sheet_name;
+        let (category, sheet_name) = if let Some(state) = editor_state.as_ref() {
+            if let Some(vctx) = state.virtual_structure_stack.last() { (&event.category, &vctx.virtual_sheet_name) } else { (&event.category, &event.sheet_name) }
+        } else { (&event.category, &event.sheet_name) };
         let indices_to_delete = &event.column_indices;
 
         if indices_to_delete.is_empty() {
