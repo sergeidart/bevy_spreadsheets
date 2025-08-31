@@ -222,7 +222,10 @@ fn generate_structure_preview(raw: &str) -> String {
             _ => {}
         }
     }
-    if out.len() > 64 { out.truncate(64); out.push_str("…"); }
+    if out.chars().count() > 64 {
+        let truncated: String = out.chars().take(64).collect();
+        out = truncated + "…";
+    }
     if multi_rows { out.push_str("..."); }
     out
 }

@@ -222,21 +222,21 @@ pub fn edit_cell_widget(
                                             if rows.iter().all(|e| e.is_string()) { // single-row new format
                                                 for (i,v) in rows.iter().enumerate().take(6) {
                                                     let s = v.as_str().unwrap_or("");
-                                                    let mut val_c = s.to_string(); if val_c.len()>24 { val_c.truncate(24); val_c.push_str("…"); }
+                                                    let mut val_c = s.to_string(); if val_c.chars().count()>24 { val_c = val_c.chars().take(24).collect::<String>() + "…"; }
                                                     parts.push(val_c);
                                                 }
                                             } else if rows.iter().all(|e| e.is_array()) { // multi-row new format
                                                 if let Some(first_arr) = rows.get(0).and_then(|v| v.as_array()) {
                                                     for (i,v) in first_arr.iter().enumerate().take(6) {
                                                         let s = v.as_str().unwrap_or("");
-                                                        let mut val_c = s.to_string(); if val_c.len()>24 { val_c.truncate(24); val_c.push_str("…"); }
+                                                        let mut val_c = s.to_string(); if val_c.chars().count()>24 { val_c = val_c.chars().take(24).collect::<String>() + "…"; }
                                                         parts.push(val_c);
                                                     }
                                                 }
                                             } else if let Some(first_obj) = rows.get(0).and_then(|r| r.as_object()) { // legacy multi-row objects
                                                 for (k,v) in first_obj.iter().take(6) {
                                                     let val_str = v.as_str().map(|s| s.to_string()).unwrap_or_else(|| v.to_string());
-                                                    let mut val_c = val_str; if val_c.len()>24 { val_c.truncate(24); val_c.push_str("…"); }
+                                                    let mut val_c = val_str; if val_c.chars().count()>24 { val_c = val_c.chars().take(24).collect::<String>() + "…"; }
                                                     parts.push(format!("{}={}", k, val_c));
                                                 }
                                             }
@@ -252,7 +252,7 @@ pub fn edit_cell_widget(
                                             let mut parts: Vec<String> = map.iter().take(4).map(|(k,v)| {
                                                 let val_str = v.as_str().map(|s| s.to_string()).unwrap_or_else(|| v.to_string());
                                                 let mut val_c = val_str;
-                                                if val_c.len() > 24 { val_c.truncate(24); val_c.push_str("…"); }
+                                                if val_c.chars().count() > 24 { val_c = val_c.chars().take(24).collect::<String>() + "…"; }
                                                 format!("{}={}", k, val_c)
                                             }).collect();
                                             parts.retain(|p| !p.ends_with('='));
@@ -262,7 +262,7 @@ pub fn edit_cell_widget(
                                     }
                                     other => {
                                         let mut raw = other.to_string();
-                                        if raw.len() > 64 { raw.truncate(64); raw.push_str("…"); }
+                                        if raw.chars().count() > 64 { raw = raw.chars().take(64).collect::<String>() + "…"; }
                                         summary = raw;
                                     }
                                 }
@@ -270,7 +270,7 @@ pub fn edit_cell_widget(
                                 summary = "(parse err)".to_string();
                             }
                             if summary.is_empty() { summary = "(empty)".to_string(); }
-                            if summary.len() > 64 { summary.truncate(64); summary.push_str("…"); }
+                            if summary.chars().count() > 64 { summary = summary.chars().take(64).collect::<String>() + "…"; }
                             let btn = centered_widget_ui.button(summary);
                             if btn.clicked() {
                                 structure_open_events.write(OpenStructureViewEvent {
