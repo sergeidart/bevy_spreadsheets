@@ -16,6 +16,7 @@ pub mod update_render_cache;
 pub mod sync_structure;
 
 pub use add_row::handle_add_row_request;
+pub use add_row::handle_toggle_ai_row_generation;
 pub use add_column::handle_add_column_request;
 pub use reorder_column::handle_reorder_column_request;
 // NEW: Re-export create_sheet handler

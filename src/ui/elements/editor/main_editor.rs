@@ -115,6 +115,7 @@ pub fn generic_sheet_editor_ui(
         &mut misc.session_api_key_res,
     );
 
+    // Render central panel (main content) first
     egui::CentralPanel::default().show(ctx, |ui| {
         if keys.just_pressed(KeyCode::Escape) && !state.virtual_structure_stack.is_empty() {
             misc.close_structure_writer.write(CloseStructureViewEvent);
@@ -172,6 +173,26 @@ pub fn generic_sheet_editor_ui(
             );
         }
 
-    editor_ai_log::show_ai_output_log(ui, &state);
+        // AI output bottom panel rendered after main content outside this closure
     });
+
+    // Auto-hide logic: if context (category, sheet, structure presence) changed, hide panel
+    let in_structure = !state.virtual_structure_stack.is_empty();
+    let current_sheet_key = state.selected_sheet_name.clone();
+    if let Some(sheet_name) = current_sheet_key.clone() {
+        let current_ctx_tuple = (state.selected_category.clone(), sheet_name.clone(), in_structure);
+        if let Some(last_ctx) = &state.ai_output_panel_last_context {
+            if last_ctx != &current_ctx_tuple {
+                // Different sheet or structure transition: hide panel
+                state.ai_output_panel_visible = false;
+            }
+        }
+        state.ai_output_panel_last_context = Some(current_ctx_tuple);
+    } else {
+        state.ai_output_panel_visible = false;
+        state.ai_output_panel_last_context = None;
+    }
+
+    // Finally draw bottom panel if visible
+    editor_ai_log::show_ai_output_log_bottom(ctx, &mut state);
 }

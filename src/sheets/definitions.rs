@@ -259,6 +259,9 @@ pub struct SheetMetadata {
     // Use the defined default function for serde
     #[serde(default = "default_grounding_with_google_search")]
     pub requested_grounding_with_google_search: Option<bool>,
+    // NEW: Allow AI to generate additional rows (persisted per sheet)
+    #[serde(default)]
+    pub ai_enable_row_generation: bool,
 
     // NEW: Optional per-sheet Random Picker settings
     #[serde(default)]
@@ -315,6 +318,8 @@ impl<'de> Deserialize<'de> for SheetMetadata {
             #[serde(default = "default_grounding_with_google_search")] 
             requested_grounding_with_google_search: Option<bool>,
             #[serde(default)]
+            ai_enable_row_generation: bool,
+            #[serde(default)]
             random_picker: Option<RandomPickerSettings>,
             #[serde(default)]
             structure_parent: Option<StructureParentLink>,
@@ -357,6 +362,7 @@ impl<'de> Deserialize<'de> for SheetMetadata {
                 ai_top_k: cur.ai_top_k,
                 ai_top_p: cur.ai_top_p,
                 requested_grounding_with_google_search: cur.requested_grounding_with_google_search,
+                ai_enable_row_generation: cur.ai_enable_row_generation,
                 random_picker: cur.random_picker,
                 structure_parent: cur.structure_parent,
             };
@@ -424,6 +430,7 @@ impl<'de> Deserialize<'de> for SheetMetadata {
             ai_top_k: legacy.ai_top_k.or_else(default_top_k),
             ai_top_p: legacy.ai_top_p.or_else(default_top_p),
             requested_grounding_with_google_search: legacy.requested_grounding_with_google_search.or_else(default_grounding_with_google_search),
+            ai_enable_row_generation: false,
             random_picker: legacy.random_picker,
             structure_parent: None,
         };
@@ -504,6 +511,7 @@ impl SheetMetadata {
             ai_top_p: default_top_p(),
             // Call the defined function for initialization
             requested_grounding_with_google_search: default_grounding_with_google_search(),
+            ai_enable_row_generation: false,
             random_picker: None,
             structure_parent: None,
         }

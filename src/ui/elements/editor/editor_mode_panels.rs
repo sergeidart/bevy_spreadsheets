@@ -6,6 +6,7 @@ use crate::sheets::resources::SheetRegistry;
 use crate::ui::elements::editor::state::{AiModeState, EditorWindowState, SheetInteractionState};
 use crate::ui::elements::editor::ai_control_panel::show_ai_control_panel;
 use crate::ui::elements::editor::ai_review_ui::draw_inline_ai_review_panel;
+use crate::ui::elements::editor::ai_batch_review_ui::draw_ai_batch_review_panel;
 use crate::ui::elements::top_panel::controls::delete_mode_panel::show_delete_mode_active_controls;
 use super::main_editor::SheetEventWriters; // Assuming SheetEventWriters is made public or moved
 use crate::SessionApiKey;
@@ -61,12 +62,15 @@ pub(super) fn show_active_mode_panel(
     // Review panel is separate as it replaces the main table view
     if state.current_interaction_mode == SheetInteractionState::AiModeActive && state.ai_mode == AiModeState::Reviewing {
         if current_sheet_name_clone.is_some() {
-             draw_inline_ai_review_panel(ui, state, current_category_clone, current_sheet_name_clone, registry, &mut sheet_writers.cell_update);
-             ui.add_space(5.0);
-             // This panel replaces the table, so main_editor will check this mode
+            if state.ai_batch_review_active {
+                draw_ai_batch_review_panel(ui, state, current_category_clone, current_sheet_name_clone, registry, &mut sheet_writers.cell_update, &mut sheet_writers.add_row);
+            } else {
+                draw_inline_ai_review_panel(ui, state, current_category_clone, current_sheet_name_clone, registry, &mut sheet_writers.cell_update);
+            }
+            ui.add_space(5.0);
         } else {
-             warn!("In Review Mode but no sheet selected. Exiting review mode.");
-             super::ai_helpers::exit_review_mode(state); // Assuming ai_helpers is accessible
+            warn!("In Review Mode but no sheet selected. Exiting review mode.");
+            super::ai_helpers::exit_review_mode(state); // Assuming ai_helpers is accessible
         }
     }
     panel_shown

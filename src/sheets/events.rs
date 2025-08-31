@@ -123,13 +123,33 @@ pub struct RequestDeleteColumns {
 pub struct AiTaskResult {
     pub original_row_index: usize,
     pub result: Result<Vec<String>, String>, 
-    pub raw_response: Option<String>,      
+    pub raw_response: Option<String>,
+    // Mapping snapshot for this row at send time (non-structure columns actually included)
+    pub included_non_structure_columns: Vec<usize>,
+    // Number of context-only prefix columns included ahead of non-structure columns
+    pub context_only_prefix_count: usize,
+}
+
+#[derive(Event, Debug, Clone)]
+pub struct AiBatchTaskResult {
+    pub original_row_indices: Vec<usize>, // order sent
+    pub result: Result<Vec<Vec<String>>, String>, // first N correspond to originals, extra rows are additions
+    pub raw_response: Option<String>,
+    pub included_non_structure_columns: Vec<usize>,
+    pub key_prefix_count: usize, // number of leading key/context columns prefixed to each row in result
 }
 
 #[derive(Event, Debug, Clone)]
 pub struct SheetDataModifiedInRegistryEvent {
     pub category: Option<String>,
     pub sheet_name: String,
+}
+
+#[derive(Event, Debug, Clone)]
+pub struct RequestToggleAiRowGeneration {
+    pub category: Option<String>,
+    pub sheet_name: String,
+    pub enabled: bool,
 }
 
 #[derive(Event, Debug, Clone)]

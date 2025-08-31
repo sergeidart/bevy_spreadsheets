@@ -1,14 +1,14 @@
 // src/ui/elements/editor/ai_control_panel.rs
-use bevy::log::{error, info, warn};
+use bevy::log::error;
 use bevy::prelude::*;
 use bevy_egui::egui;
 use bevy_tokio_tasks::TokioTasksRuntime;
-use crate::sheets::definitions::{default_ai_model_id, default_grounding_with_google_search};
-use crate::sheets::events::AiTaskResult;
+use crate::sheets::definitions::default_ai_model_id;
+use crate::sheets::events::{AiBatchTaskResult, RequestToggleAiRowGeneration};
 use crate::sheets::resources::SheetRegistry;
 use crate::ui::systems::SendEvent;
 use crate::SessionApiKey;
-use super::state::{AiModeState, EditorWindowState};
+use super::state::{AiModeState, EditorWindowState, SheetFlagOverrides};
 
 use std::ffi::CString;
 // --- PyO3 Imports ---
@@ -43,6 +43,48 @@ pub(super) fn show_ai_control_panel(
         ui.label(format!("✨ AI Mode: {:?}", state.ai_mode));
         ui.separator();
 
+        // Per-sheet toggle: Allow AI to generate new rows
+        if let Some(root_selected_sheet) = selected_sheet_name_clone.clone() {
+            // Determine root sheet for toggle (if inside structure view, traverse to ultimate parent)
+            let mut toggle_target_category = selected_category_clone.clone();
+            let mut toggle_target_sheet = root_selected_sheet.clone();
+            if let Some(vctx) = state.virtual_structure_stack.last() {
+                // Start from current virtual sheet metadata and walk up via structure_parent links
+                let mut current_category = selected_category_clone.clone();
+                let mut current_sheet = vctx.virtual_sheet_name.clone();
+                let mut safety = 0;
+                while safety < 16 { // prevent infinite loop
+                    safety += 1;
+                    let meta_opt = registry.get_sheet(&current_category, &current_sheet).and_then(|s| s.metadata.as_ref());
+                    if let Some(meta) = meta_opt {
+                        if let Some(parent) = &meta.structure_parent { // move up
+                            current_category = parent.parent_category.clone();
+                            current_sheet = parent.parent_sheet.clone();
+                            continue;
+                        }
+                        // reached root (no parent)
+                        toggle_target_category = current_category.clone();
+                        toggle_target_sheet = current_sheet.clone();
+                        break;
+                    } else { break; }
+                }
+            }
+            if let Some(target_sheet_data) = registry.get_sheet(&toggle_target_category, &toggle_target_sheet) {
+                if let Some(meta) = &target_sheet_data.metadata {
+                    // Use optimistic override if present
+                    let key = (toggle_target_category.clone(), toggle_target_sheet.clone());
+                    let current_override = state.sheet_flag_overrides.get(&key).and_then(|o| o.ai_enable_row_generation);
+                    let mut flag = current_override.unwrap_or(meta.ai_enable_row_generation);
+                    let resp = ui.checkbox(&mut flag, "AI Can Add Rows")
+                        .on_hover_text("If enabled, AI may generate additional new rows; they'll be inserted at top (root sheet setting)");
+                    if resp.changed() {
+                        state.sheet_flag_overrides.entry(key.clone()).or_insert_with(SheetFlagOverrides::default).ai_enable_row_generation = Some(flag);
+                        commands.spawn(SendEvent::<RequestToggleAiRowGeneration> { event: RequestToggleAiRowGeneration { category: key.0.clone(), sheet_name: key.1.clone(), enabled: flag } });
+                    }
+                }
+            }
+        }
+
         let can_send = (state.ai_mode == AiModeState::Preparing || state.ai_mode == AiModeState::ResultsReady)
             && !state.ai_selected_rows.is_empty()
             && session_api_key.0.is_some();
@@ -57,232 +99,264 @@ pub(super) fn show_ai_control_panel(
         let send_button_text = format!("🚀 Send to AI ({} Rows)", state.ai_selected_rows.len());
 
         if ui.add_enabled(can_send, egui::Button::new(send_button_text)).on_hover_text(hover_text_send).clicked() {
+            // BATCH SEND IMPLEMENTATION
             state.ai_mode = AiModeState::Submitting;
+            state.ai_raw_output_display.clear();
+            state.ai_output_panel_visible = true; // show bottom panel at start
             state.ai_suggestions.clear();
-            state.ai_review_queue.clear();
-            state.current_ai_suggestion_edit_buffer = None;
+            state.ai_batch_suggestion_buffers.clear();
+            state.ai_staged_new_rows.clear();
+            state.ai_staged_new_row_accept.clear();
+            state.ai_context_prefix_by_row.clear();
             ui.ctx().request_repaint();
 
-            for row_index in state.ai_selected_rows.iter().cloned() {
-                let task_category = selected_category_clone.clone();
-                // If inside a virtual structure view, use that virtual sheet for row data & metadata
-                let effective_sheet_name = if let Some(vctx) = state.virtual_structure_stack.last() { vctx.virtual_sheet_name.clone() } else { selected_sheet_name_clone.clone().unwrap_or_default() };
-                let task_sheet_name = effective_sheet_name.clone();
-                let api_key_for_task = session_api_key.0.clone();
+            let task_category = selected_category_clone.clone();
+            let effective_sheet_name = if let Some(vctx) = state.virtual_structure_stack.last() { vctx.virtual_sheet_name.clone() } else { selected_sheet_name_clone.clone().unwrap_or_default() };
+            let task_sheet_name = effective_sheet_name.clone();
+            let api_key_for_task = session_api_key.0.clone();
 
-                let (
-                    active_model_id,
-                    general_rule_opt,
-                    column_contexts,
-                    row_data,
-                    temperature,
-                    top_k,
-                    top_p,
-                    enable_grounding,
-                ) = {
-                    let sheet_data_opt = registry.get_sheet(&task_category, &task_sheet_name);
-                    let metadata_opt_ref = sheet_data_opt.and_then(|d| d.metadata.as_ref());
-                    let model_id = metadata_opt_ref.map_or_else(default_ai_model_id, |m| m.ai_model_id.clone());
-                    let rule = metadata_opt_ref.and_then(|m| m.ai_general_rule.clone());
-                    // Row index refers to the active (possibly virtual) sheet
-                    let full_row = sheet_data_opt.and_then(|d| d.grid.get(row_index)).cloned().unwrap_or_default();
-                    let (temp, k, p) = metadata_opt_ref.map_or((None, None, None), |m| (m.ai_temperature, m.ai_top_k, m.ai_top_p));
-                    let grounding = metadata_opt_ref.and_then(|m| m.requested_grounding_with_google_search).unwrap_or_else(|| default_grounding_with_google_search().unwrap_or(false));
+            // Collect and sort selected row indices
+            let mut original_rows: Vec<usize> = state.ai_selected_rows.iter().cloned().collect();
+            original_rows.sort_unstable();
 
-                    // Determine which columns to include:
-                    // Rule: Always exclude Structure validator columns from AI payload (both top-level and inside virtual views)
-                    let mut included_contexts: Vec<Option<String>> = Vec::new();
-                    let mut included_row: Vec<String> = Vec::new();
-                    let mut included_actual_indices: Vec<usize> = Vec::new();
+            let sheet_data_opt = registry.get_sheet(&task_category, &task_sheet_name);
+            let metadata_opt_ref = sheet_data_opt.and_then(|d| d.metadata.as_ref());
+            // Resolve root sheet metadata (for model & general rule & allow additions)
+            let (root_category, root_sheet, root_meta) = {
+                let mut root_category = selected_category_clone.clone();
+                let mut root_sheet = task_sheet_name.clone();
+                let mut safety = 0;
+                loop {
+                    safety += 1; if safety > 16 { break; }
+                    let meta_opt = registry.get_sheet(&root_category, &root_sheet).and_then(|s| s.metadata.as_ref());
+                    if let Some(m) = meta_opt {
+                        if let Some(parent) = &m.structure_parent { root_category = parent.parent_category.clone(); root_sheet = parent.parent_sheet.clone(); continue; } else { break; }
+                    } else { break; }
+                }
+                let root_meta = registry.get_sheet(&root_category, &root_sheet).and_then(|s| s.metadata.as_ref()).cloned();
+                (root_category, root_sheet, root_meta)
+            };
+            let model_id = root_meta.as_ref().map_or_else(default_ai_model_id, |m| m.ai_model_id.clone());
+            let rule = root_meta.as_ref().and_then(|m| m.ai_general_rule.clone());
+            // Always enable grounding for now per user request
+            let grounding = true; // previously: metadata_opt_ref.and_then(|m| m.requested_grounding_with_google_search)...
+
+            // Determine included columns (non-structure) & contexts
+            let mut included_actual_indices: Vec<usize> = Vec::new();
+            let mut column_contexts: Vec<Option<String>> = Vec::new();
             if let Some(meta) = metadata_opt_ref {
-                        if !full_row.is_empty() {
-                            // Prepend ancestor + self key columns (context only, not part of mapping for merge)
-                            // To obtain ancestor key indices, we'll need to know which structure column we are inside (if virtual). Use last virtual context if any.
-                            let mut context_prefix_count = 0usize;
-                let mut context_prefix_display: Vec<(String, String)> = Vec::new();
-                            if let Some(vctx) = state.virtual_structure_stack.last() {
-                                // Determine parent sheet metadata and structure column index from parent context
-                                let parent_cat = vctx.parent.parent_category.clone();
-                                let parent_sheet_name = vctx.parent.parent_sheet.clone();
-                                let parent_col_index = vctx.parent.parent_col; // index inside parent sheet
-                                let parent_row_index = vctx.parent.parent_row; // row in parent sheet
-                                if let Some(parent_sheet) = registry.get_sheet(&parent_cat, &parent_sheet_name) {
-                                    if let Some(parent_meta) = &parent_sheet.metadata {
-                                        if let Some(parent_col) = parent_meta.columns.get(parent_col_index) {
-                                            if let Some(ancestors) = parent_col.structure_ancestor_key_parent_column_indices.as_ref() {
-                                                for anc_idx in ancestors.iter() {
-                                                    if let Some(val) = parent_sheet.grid.get(parent_row_index).and_then(|r| r.get(*anc_idx)) {
-                                                        let header = parent_meta.columns.get(*anc_idx).map(|c| c.header.clone()).unwrap_or_else(|| format!("AncestorKey{}", anc_idx));
-                                                        included_contexts.push(parent_meta.columns.get(*anc_idx).and_then(|c| c.ai_context.clone()));
-                                                        included_row.push(val.clone());
-                                                        context_prefix_display.push((header, val.clone()));
-                                                        context_prefix_count += 1;
-                                                    }
-                                                }
-                                            }
-                                            if let Some(kidx) = parent_col.structure_key_parent_column_index {
-                                                if let Some(val) = parent_sheet.grid.get(parent_row_index).and_then(|r| r.get(kidx)) {
-                                                    let header = parent_meta.columns.get(kidx).map(|c| c.header.clone()).unwrap_or_else(|| format!("Key{}", kidx));
-                                                    included_contexts.push(parent_meta.columns.get(kidx).and_then(|c| c.ai_context.clone()));
-                                                    included_row.push(val.clone());
-                                                    context_prefix_display.push((header, val.clone()));
-                                                    context_prefix_count += 1;
-                                                }
-                                            }
+                for (c_idx, col_def) in meta.columns.iter().enumerate() {
+                    if matches!(col_def.validator, Some(crate::sheets::definitions::ColumnValidator::Structure)) { continue; }
+                    included_actual_indices.push(c_idx);
+                    column_contexts.push(col_def.ai_context.clone());
+                }
+            }
+            state.ai_included_non_structure_columns = included_actual_indices.clone();
+
+            // Build rows_data (only non-structure columns)
+            let mut rows_data: Vec<Vec<String>> = Vec::new();
+            if let Some(sheet_data) = sheet_data_opt {
+                for &row_idx in &original_rows {
+                    let full_row = sheet_data.grid.get(row_idx).cloned().unwrap_or_default();
+                    let mut reduced: Vec<String> = Vec::with_capacity(included_actual_indices.len());
+                    for &col_index in &included_actual_indices { reduced.push(full_row.get(col_index).cloned().unwrap_or_default()); }
+                    rows_data.push(reduced);
+                }
+            }
+
+            #[derive(serde::Serialize)]
+            struct BatchPythonPayload {
+                ai_model_id: String,
+                general_sheet_rule: Option<String>,
+                // Contexts for ALL columns in rows_data after prefixing keys (keys first, then original non-structure columns)
+                column_contexts: Vec<Option<String>>,
+                // Row data with key prefix columns included
+                rows_data: Vec<Vec<String>>,
+                // Number of leading columns that are key/context only (must be preserved untouched by AI)
+                key_prefix_count: usize,
+                requested_grounding_with_google_search: bool,
+                allow_row_additions: bool,
+            }
+
+            // Resolve root sheet meta for allow_row_additions flag
+            let allow_additions_flag = {
+                if let Some(meta) = root_meta.as_ref() {
+                    let key = (root_category.clone(), root_sheet.clone());
+                    if let Some(override_flag) = state.sheet_flag_overrides.get(&key).and_then(|o| o.ai_enable_row_generation) { override_flag } else { meta.ai_enable_row_generation }
+                } else { false }
+            };
+            // ---- Build recursive key chain (ancestor keys) ----
+            let mut key_chain_headers: Vec<String> = Vec::new();
+            let mut key_chain_contexts: Vec<Option<String>> = Vec::new();
+            let mut key_chain_values_per_row: Vec<Vec<String>> = Vec::new();
+            // Reconstruct ancestry by walking up virtual_structure_stack plus root metadata relationships.
+            // The virtual_structure_stack keeps only path down to current sheet (each with parent context). We walk it to collect parent row indices.
+            // For each ancestor level we read the parent sheet's key column value for that parent row.
+            // Determine path contexts (exclude current leaf sheet; gather ancestors in order top->bottom)
+            let mut ancestry: Vec<(Option<String>, String, usize)> = Vec::new();
+            for vctx in &state.virtual_structure_stack {
+                ancestry.push((vctx.parent.parent_category.clone(), vctx.parent.parent_sheet.clone(), vctx.parent.parent_row));
+            }
+            // Remove leaf if present (last vctx corresponds to current sheet view, but its parent row belongs to ancestor sheet which we need)
+            // ancestry already only has parents; order is from first entered to last; that's already top->bottom.
+            // Now gather key column header & context per ancestor sheet
+            for (anc_cat, anc_sheet, _row_idx) in &ancestry {
+                if let Some(sheet) = registry.get_sheet(anc_cat, anc_sheet) {
+                    if let Some(meta) = &sheet.metadata {
+                        // Identify the column that is the structure key parent for any child referencing it.
+                        // We look for columns that have structure_key_parent_column_index == None but are referenced by children via structure_key_parent_column_index.
+                        // Simpler: choose first column whose validator is not Structure and maybe has ai_context.
+                        let key_col_index = meta.columns.iter().position(|c| !matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure))).unwrap_or(0);
+                        if let Some(col_def) = meta.columns.get(key_col_index) {
+                            key_chain_headers.push(col_def.header.clone());
+                            key_chain_contexts.push(col_def.ai_context.clone());
+                        }
+                    }
+                }
+            }
+            // For current sheet, also include its first non-structure column as local key if in a nested view
+            if !state.virtual_structure_stack.is_empty() {
+                if let Some(sheet) = sheet_data_opt { if let Some(meta) = &sheet.metadata { if let Some(idx) = meta.columns.iter().position(|c| !matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure))) { if let Some(col_def)= meta.columns.get(idx){ key_chain_headers.push(col_def.header.clone()); key_chain_contexts.push(col_def.ai_context.clone()); } } } }
+            }
+            // Build key_chain_rows by extracting values for each selected row from combined ancestry + current sheet
+            for &row_idx in &original_rows {
+                let mut row_vals: Vec<String> = Vec::new();
+                // Ancestor values: use stored ancestor row indices to fetch value from each ancestor sheet's chosen key column
+                for (anc_cat, anc_sheet, anc_row_idx) in &ancestry {
+                    if let Some(sheet) = registry.get_sheet(anc_cat, anc_sheet) {
+                        if let Some(meta) = &sheet.metadata {
+                            let key_col_index = meta.columns.iter().position(|c| !matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure))).unwrap_or(0);
+                            let val = sheet.grid.get(*anc_row_idx).and_then(|r| r.get(key_col_index)).cloned().unwrap_or_default();
+                            row_vals.push(val);
+                        }
+                    }
+                }
+                // Current sheet key value for this row
+                if let Some(sheet) = sheet_data_opt { if let Some(meta) = &sheet.metadata { if let Some(idx) = meta.columns.iter().position(|c| !matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure))) { let val = sheet.grid.get(row_idx).and_then(|r| r.get(idx)).cloned().unwrap_or_default(); row_vals.push(val); } } }
+                key_chain_values_per_row.push(row_vals);
+            }
+
+            let key_prefix_count = if key_chain_headers.is_empty() { 0 } else { key_chain_headers.len() };
+            // Prepend key values to each existing row in rows_data and extend contexts accordingly
+            if key_prefix_count > 0 {
+                // Extend column contexts: keys first
+                let mut new_contexts: Vec<Option<String>> = Vec::with_capacity(key_prefix_count + column_contexts.len());
+                for ctx in &key_chain_contexts { new_contexts.push(ctx.clone()); }
+                new_contexts.extend(column_contexts.into_iter());
+                column_contexts = new_contexts;
+                // Prepend per-row
+                for (i, row) in rows_data.iter_mut().enumerate() {
+                    if let Some(keys) = key_chain_values_per_row.get(i) {
+                        let mut new_row = keys.clone();
+                        new_row.extend(row.drain(..));
+                        *row = new_row;
+                    }
+                }
+            }
+
+            let payload = BatchPythonPayload {
+                ai_model_id: model_id,
+                general_sheet_rule: rule,
+                column_contexts: column_contexts.clone(),
+                rows_data: rows_data.clone(),
+                key_prefix_count,
+                requested_grounding_with_google_search: grounding,
+                allow_row_additions: allow_additions_flag,
+            };
+            let payload_json = match serde_json::to_string(&payload) { Ok(j) => j, Err(e) => { error!("Failed to serialize batch payload: {}", e); return; } };
+            // Show what is being sent in the bottom AI output panel for debugging
+            if let Ok(pretty) = serde_json::to_string_pretty(&payload) {
+                let mut dbg = String::new();
+                use std::fmt::Write as _;
+                let _ = writeln!(dbg, "--- AI Request Payload (Debug) ---");
+                let _ = writeln!(dbg, "{}", pretty);
+                let _ = writeln!(dbg, "--- Selected Original Row Indices (sheet) ---");
+                let _ = writeln!(dbg, "{:?}", original_rows);
+                let _ = writeln!(dbg, "--- Included Non-Structure Columns (payload order -> sheet col index) ---");
+                let _ = writeln!(dbg, "{:?}", included_actual_indices);
+                // Attempt to list column names for clarity
+                if let Some(sheet_meta) = metadata_opt_ref {
+                    let mut names: Vec<(usize, String)> = Vec::new();
+                    for (payload_pos, actual_idx) in included_actual_indices.iter().enumerate() {
+                        if let Some(col) = sheet_meta.columns.get(*actual_idx) { names.push((payload_pos, col.header.clone())); }
+                    }
+                    let _ = writeln!(dbg, "--- Included Column Names (payload position, name) ---");
+                    let _ = writeln!(dbg, "{:?}", names);
+                }
+                // Show allow additions flag + model id
+                let _ = writeln!(dbg, "Model: {}  AllowRowAdditions:{}  Grounding:{}", payload.ai_model_id, payload.allow_row_additions, grounding);
+                if key_prefix_count > 0 {
+                    let _ = writeln!(dbg, "--- Key Prefix Count --- {}", key_prefix_count);
+                    for (i, keys) in key_chain_values_per_row.iter().enumerate() { let _ = writeln!(dbg, "Row {} Keys: {:?}", original_rows[i], keys); }
+                }
+                if payload.allow_row_additions {
+                    let _ = writeln!(dbg, "Row Additions Enabled: The model may add new rows AFTER the first {} original rows to provide similar item if any applicable here. Each new row must match column count.", original_rows.len());
+                }
+                state.ai_raw_output_display = dbg;
+                state.ai_output_panel_visible = true;
+            }
+
+            let included_cols_clone = included_actual_indices.clone();
+            let original_rows_clone = original_rows.clone();
+            let commands_entity = commands.spawn_empty().id();
+
+            runtime.spawn_background_task(move |mut ctx| async move {
+                let api_key_value = match api_key_for_task { Some(k) if !k.is_empty() => k, _ => {
+                    let err_msg = "API Key not set".to_string();
+                    ctx.run_on_main_thread(move |world_ctx| { world_ctx.world.commands().entity(commands_entity).insert(SendEvent::<AiBatchTaskResult>{ event: AiBatchTaskResult { original_row_indices: original_rows_clone, result: Err(err_msg), raw_response: None, included_non_structure_columns: Vec::new(), key_prefix_count: 0 } }); }).await; return; } };
+
+                let (result, raw_response) = tokio::task::spawn_blocking(move || {
+                    Python::with_gil(|py| -> PyResult<(Result<Vec<Vec<String>>, String>, Option<String>)> {
+                        let python_file_path = "script/ai_processor.py";
+                        let processor_code_string = std::fs::read_to_string(python_file_path)?;
+                        let code_c_str = CString::new(processor_code_string).map_err(|e| PyValueError::new_err(format!("CString error: {}", e)))?;
+                        let file_name_c_str = CString::new(python_file_path).map_err(|e| PyValueError::new_err(format!("File name CString error: {}", e)))?;
+                        let module_name_c_str = CString::new("ai_processor").map_err(|e| PyValueError::new_err(format!("Module name CString error: {}", e)))?;
+                        let module = PyModule::from_code(py, code_c_str.as_c_str(), file_name_c_str.as_c_str(), module_name_c_str.as_c_str())?;
+                        let binding = module.call_method1("execute_ai_query", (api_key_value, payload_json))?;
+                        let result_json_str: &str = binding.downcast::<PyString>()?.to_str()?;
+                        #[derive(serde::Deserialize)] struct PyResp { success: bool, data: Option<serde_json::Value>, error: Option<String>, raw_response: Option<String> }
+                        let resp: PyResp = serde_json::from_str(result_json_str).map_err(|e| PyValueError::new_err(format!("Parse JSON error: {}", e)))?;
+                        if resp.success {
+                            if let Some(serde_json::Value::Array(arr)) = resp.data {
+                                let mut out: Vec<Vec<String>> = Vec::new();
+                                for row_v in arr {
+                                    match row_v {
+                                        serde_json::Value::Array(cells) => {
+                                            out.push(cells.into_iter().map(|v| match v { serde_json::Value::String(s)=>s, other=>other.to_string() }).collect());
                                         }
+                                        other => { return Ok((Err(format!("Row not an array: {}", other)), resp.raw_response)); }
                                     }
                                 }
-                            }
-                            // Now add this sheet's non-structure columns (updatable part)
-                            for (c_idx, col_def) in meta.columns.iter().enumerate() {
-                                let is_structure_col = matches!(col_def.validator, Some(crate::sheets::definitions::ColumnValidator::Structure));
-                                if is_structure_col { continue; }
-                                included_contexts.push(col_def.ai_context.clone());
-                                let val = full_row.get(c_idx).cloned().unwrap_or_default();
-                                included_row.push(val);
-                                included_actual_indices.push(c_idx);
-                            }
-                            state.ai_context_only_prefix_count = context_prefix_count;
-                            state.ai_context_prefix_by_row.insert(row_index, context_prefix_display);
-                        }
-                    }
-                    // Store mapping (overwrite on each send)
-                    state.ai_included_non_structure_columns = included_actual_indices;
-                    (model_id, rule, included_contexts, included_row, temp, k, p, grounding)
-                };
-
-                #[derive(serde::Serialize)]
-                struct PythonPayload {
-                    ai_model_id: String,
-                    general_sheet_rule: Option<String>,
-                    column_contexts: Vec<Option<String>>,
-                    row_data: Vec<String>,
-                    ai_temperature: Option<f32>,
-                    ai_top_k: Option<i32>,
-                    ai_top_p: Option<f32>,
-                    requested_grounding_with_google_search: bool,
-                    context_only_prefix_count: usize,
-                }
-
-                let payload = PythonPayload {
-                    ai_model_id: active_model_id,
-                    general_sheet_rule: general_rule_opt,
-                    column_contexts,
-                    row_data,
-                    ai_temperature: temperature,
-                    ai_top_k: top_k,
-                    ai_top_p: top_p,
-                    requested_grounding_with_google_search: enable_grounding,
-                    context_only_prefix_count: state.ai_context_only_prefix_count,
-                };
-                
-                let payload_json = match serde_json::to_string(&payload) {
-                    Ok(json) => json,
-                    Err(e) => {
-                        error!("Failed to serialize payload for Python script: {}", e);
-                        continue;
-                    }
-                };
-                
-                let commands_entity = commands.spawn_empty().id();
-
-                runtime.spawn_background_task(move |mut ctx| async move {
-                    let api_key_value = match api_key_for_task {
-                        Some(key) if !key.is_empty() => key,
-                        _ => {
-                            let err_msg = "API Key not found or empty in session.".to_string();
-                            ctx.run_on_main_thread(move |world_ctx| {
-                                world_ctx.world.commands().entity(commands_entity).insert(
-                                    SendEvent::<AiTaskResult> { event: AiTaskResult { original_row_index: row_index, result: Err(err_msg), raw_response: None } }
-                                );
-                            }).await;
-                            return;
-                        }
-                    };
-
-                    let (result, raw_response) = tokio::task::spawn_blocking(move || {
-                        // Log the Current Working Directory
-                        match std::env::current_dir() {
-                            Ok(cwd) => info!("Current Working Directory: {}", cwd.display()),
-                            Err(e) => warn!("Failed to get CWD: {}", e),
-                        }
-
-                        Python::with_gil(|py| -> PyResult<(Result<Vec<String>, String>, Option<String>)> {
-                            // This `?` is okay because `io::Error` can be converted to `PyErr` automatically.
-                            let python_file_path = "script/ai_processor.py"; // Corrected path
-                            info!("Attempting to load Python script from: {}", python_file_path);
-                            let processor_code_string = std::fs::read_to_string(python_file_path)?;
-
-                            let code_c_str = CString::new(processor_code_string)
-                                .map_err(|e| PyValueError::new_err(format!("Failed to create CString for Python code: {}", e)))?;
-                            // Use the same path for file_name_c_str for consistency
-                            let file_name_c_str = CString::new(python_file_path) // Corrected path
-                                .map_err(|e| PyValueError::new_err(format!("Failed to create CString for file_name ({}): {}", python_file_path, e)))?;
-                            let module_name_c_str = CString::new("ai_processor")
-                                .map_err(|e| PyValueError::new_err(format!("Failed to create CString for module_name: {}", e)))?;
-
-                            let processor_module = PyModule::from_code(
-                                py,
-                                code_c_str.as_c_str(),
-                                file_name_c_str.as_c_str(),
-                                module_name_c_str.as_c_str()
-                            )?;
-                            let binding = processor_module
-                                .call_method1("execute_ai_query", (api_key_value, payload_json))?;
-                            let result_json_str: &str = binding
-                                .downcast::<PyString>()?
-                                .to_str()?;
-                            
-                            #[derive(serde::Deserialize)]
-                            struct PythonResponse {
-                                success: bool,
-                                data: Option<Vec<String>>,
-                                error: Option<String>,
-                                raw_response: Option<String>,
-                            }
-                            
-                            // FIX #2: Manually handle the `serde_json::Error` instead of using `?`.
-                            let py_res: PythonResponse = match serde_json::from_str(result_json_str) {
-                                Ok(res) => res,
-                                Err(e) => {
-                                    // Create a Python `ValueError` and return it as a `PyErr`.
-                                    return Err(PyValueError::new_err(format!("Failed to parse JSON from Python: {}", e)));
-                                }
-                            };
-                            
-                            let final_result = if py_res.success {
-                                Ok(py_res.data.unwrap_or_default())
+                                Ok((Ok(out), resp.raw_response))
                             } else {
-                                Err(py_res.error.unwrap_or_else(|| "Unknown error from Python".into()))
-                            };
-
-                            Ok((final_result, py_res.raw_response.or_else(|| Some(result_json_str.to_string()))))
-                        })
+                                Ok((Err("Expected array of rows".to_string()), resp.raw_response))
+                            }
+                        } else {
+                            Ok((Err(resp.error.unwrap_or_else(|| "Unknown batch error".to_string())), resp.raw_response))
+                        }
                     })
-                    .await
-                    .unwrap_or_else(|e| Ok((Err(format!("Tokio task panicked: {}", e)), None))) // Handle task panic
-                    .unwrap_or_else(|e| (Err(format!("PyO3 Error: {}", e)), Some(e.to_string()))); // Handle PyO3 error
+                }).await.unwrap_or_else(|e| Ok((Err(format!("Tokio panic: {}", e)), None)))
+                .unwrap_or_else(|e| (Err(format!("PyO3 error: {}", e)), Some(e.to_string())));
 
-                    ctx.run_on_main_thread(move |world_ctx| {
-                        world_ctx.world.commands().entity(commands_entity).insert(
-                            SendEvent::<AiTaskResult> { event: AiTaskResult { original_row_index: row_index, result, raw_response } }
-                        );
-                    }).await;
-                });
-            }
+                ctx.run_on_main_thread(move |world_ctx| { world_ctx.world.commands().entity(commands_entity).insert(SendEvent::<AiBatchTaskResult>{ event: AiBatchTaskResult { original_row_indices: original_rows_clone, result, raw_response, included_non_structure_columns: included_cols_clone, key_prefix_count } }); }).await;
+            });
         }
 
         if state.ai_mode == AiModeState::ResultsReady {
             let num_results = state.ai_suggestions.len();
-            if ui.add_enabled(num_results > 0, egui::Button::new(format!("🧐 Review Suggestions ({})", num_results))).clicked() {
-                state.ai_mode = AiModeState::Reviewing;
-                state.ai_review_queue = state.ai_suggestions.keys().cloned().collect();
-                state.ai_review_queue.sort_unstable();
-                if !state.ai_review_queue.is_empty() {
-                    super::ai_helpers::setup_review_for_index(state, 0);
-                } else {
-                    super::ai_helpers::exit_review_mode(state);
+            if ui.add_enabled(num_results > 0, egui::Button::new(format!("🧐 Review Batch ({} rows)", num_results))).clicked() {
+                // Initialize batch buffers
+                state.ai_batch_suggestion_buffers.clear();
+                state.ai_batch_column_choices.clear();
+                state.ai_per_row_included_columns.clear();
+                state.ai_per_row_context_prefix_counts.clear();
+                for (row_idx, suggestion) in state.ai_suggestions.iter() {
+                    state.ai_batch_suggestion_buffers.insert(*row_idx, suggestion.clone());
+                    // Default all column choices to AI for now; will be sized on-demand in UI
                 }
+                state.ai_batch_review_active = true;
+                state.ai_mode = AiModeState::Reviewing; // reuse existing enum state
             }
         }
         

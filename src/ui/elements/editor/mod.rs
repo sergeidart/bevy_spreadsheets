@@ -17,6 +17,7 @@ pub mod editor_ai_log;
 // Existing AI modules
 pub mod ai_control_panel;
 pub mod ai_review_ui;
+pub mod ai_batch_review_ui;
 pub mod ai_helpers;
 pub mod ai_panel_structs;
 

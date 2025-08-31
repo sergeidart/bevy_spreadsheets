@@ -76,8 +76,24 @@ pub fn handle_sync_virtual_structure_sheet(
         // Collect ordered headers for rewriting cell JSON
     let ordered_headers: Vec<String> = new_schema.iter().map(|f| f.header.clone()).collect();
     // Mapping: header -> old index
-    use std::collections::HashMap;
-    let old_index_by_header: HashMap<&str, usize> = old_headers.iter().enumerate().map(|(i,h)| (h.as_str(), i)).collect();
+    use std::collections::{HashMap, HashSet};
+    let mut old_index_by_header: HashMap<&str, usize> = old_headers.iter().enumerate().map(|(i,h)| (h.as_str(), i)).collect();
+    // --- Rename Preservation Logic ---
+    // If exactly one header changed (pure rename, no add/remove), map the new name to the old index
+    if old_headers.len() == ordered_headers.len() {
+        let old_set: HashSet<&str> = old_headers.iter().map(|s| s.as_str()).collect();
+        let new_set: HashSet<&str> = ordered_headers.iter().map(|s| s.as_str()).collect();
+        if old_set != new_set {
+            let removed: Vec<&str> = old_set.difference(&new_set).copied().collect();
+            let added: Vec<&str> = new_set.difference(&old_set).copied().collect();
+            if removed.len() == 1 && added.len() == 1 {
+                if let Some(old_idx) = old_headers.iter().position(|h| h == removed[0]) {
+                    // Map the newly added (renamed) header to the old index so value is preserved
+                    old_index_by_header.insert(added[0], old_idx);
+                }
+            }
+        }
+    }
 
         // Rewrite each row's JSON cell in parent grid at parent_col_index
         for row in parent_sheet.grid.iter_mut() {
@@ -102,9 +118,11 @@ pub fn handle_sync_virtual_structure_sheet(
                                 if let Value::Array(inner_vals)=inner {
                                     let old_vals: Vec<String> = inner_vals.into_iter().map(|v| v.as_str().unwrap_or("").to_string()).collect();
                                     let mut reordered: Vec<String> = Vec::with_capacity(ordered_headers.len());
-                                    for h in &ordered_headers {
+                                    for (new_pos, h) in ordered_headers.iter().enumerate() {
                                         if let Some(old_i) = old_index_by_header.get(h.as_str()) { reordered.push(old_vals.get(*old_i).cloned().unwrap_or_default()); }
-                                        else { reordered.push(String::new()); }
+                                        else if old_headers.len() == ordered_headers.len() { // positional fallback for unexpected mismatch
+                                            reordered.push(old_vals.get(new_pos).cloned().unwrap_or_default());
+                                        } else { reordered.push(String::new()); }
                                     }
                                     rows_vec.push(reordered);
                                 }
@@ -112,8 +130,9 @@ pub fn handle_sync_virtual_structure_sheet(
                         } else if arr.iter().all(|v| v.is_string()) { // single row new format (positional array)
                             let old_vals: Vec<String> = arr.into_iter().map(|v| v.as_str().unwrap_or("").to_string()).collect();
                             let mut reordered: Vec<String> = Vec::with_capacity(ordered_headers.len());
-                            for h in &ordered_headers {
+                            for (new_pos, h) in ordered_headers.iter().enumerate() {
                                 if let Some(old_i) = old_index_by_header.get(h.as_str()) { reordered.push(old_vals.get(*old_i).cloned().unwrap_or_default()); }
+                                else if old_headers.len() == ordered_headers.len() { reordered.push(old_vals.get(new_pos).cloned().unwrap_or_default()); }
                                 else { reordered.push(String::new()); }
                             }
                             rows_vec.push(reordered);

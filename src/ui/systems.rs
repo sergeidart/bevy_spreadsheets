@@ -1,6 +1,6 @@
 // src/ui/systems.rs
 use crate::{
-    sheets::events::{AiTaskResult, SheetOperationFeedback},
+    sheets::events::{AiTaskResult, AiBatchTaskResult, SheetOperationFeedback},
     ui::{
         elements::editor::state::{AiModeState, EditorWindowState},
         UiFeedbackState,
@@ -76,18 +76,19 @@ pub fn handle_ai_task_results(
         match &ev.result {
             Ok(suggestion) => {
                 info!("  AI Task Success for row {}: {:?}", ev.original_row_index, suggestion);
-                // Re-expand suggestion back to full column width using mapping
-                let expanded = if !state.ai_included_non_structure_columns.is_empty() {
-                    // Determine required length (max index +1)
-                    let max_col = *state.ai_included_non_structure_columns.iter().max().unwrap_or(&0);
+                // Re-expand suggestion back to full column width using mapping stored in event
+                let expanded = if !ev.included_non_structure_columns.is_empty() {
+                    let max_col = *ev.included_non_structure_columns.iter().max().unwrap_or(&0);
                     let mut row_buf = vec![String::new(); max_col + 1];
-                    for (i, actual_col) in state.ai_included_non_structure_columns.iter().enumerate() {
-                        let src_index = i + state.ai_context_only_prefix_count; // skip context-only prefix
+                    for (i, actual_col) in ev.included_non_structure_columns.iter().enumerate() {
+                        let src_index = i + ev.context_only_prefix_count; // skip context-only prefix
                         if let Some(val) = suggestion.get(src_index) { if let Some(slot) = row_buf.get_mut(*actual_col) { *slot = val.clone(); } }
                     }
                     row_buf
                 } else { suggestion.clone() };
                 state.ai_suggestions.insert(ev.original_row_index, expanded);
+                state.ai_per_row_included_columns.insert(ev.original_row_index, ev.included_non_structure_columns.clone());
+                state.ai_per_row_context_prefix_counts.insert(ev.original_row_index, ev.context_only_prefix_count);
             }
             Err(err_msg) => {
                 error!("  AI Task Failure for row {}: {}", ev.original_row_index, err_msg);
@@ -95,6 +96,10 @@ pub fn handle_ai_task_results(
                     message: format!("AI Error (Row {}): {}", ev.original_row_index, err_msg),
                     is_error: true,
                 });
+                if let Some(raw) = &ev.raw_response {
+                    state.ai_raw_output_display = format!("Row {} Error: {}\n--- Raw Model Output ---\n{}", ev.original_row_index, err_msg, raw);
+                }
+                state.ai_output_panel_visible = true;
                 // The raw_output_display is already set with the error or raw response
                 all_tasks_successful_this_batch = false;
             }
@@ -217,5 +222,59 @@ pub fn apply_pending_structure_key_selection(
                 if let Some(meta_clone) = meta_clone_for_save { save_single_sheet(registry.as_ref(), &meta_clone); info!("Persisted structure key selection for column {} in '{:?}/{}'", structure_col_index + 1, cat, sheet); }
             }
         }
+    }
+}
+
+pub fn handle_ai_batch_results(
+    mut ev_batch: EventReader<AiBatchTaskResult>,
+    mut state: ResMut<EditorWindowState>,
+    mut feedback_writer: EventWriter<SheetOperationFeedback>,
+) {
+    if ev_batch.is_empty() { return; }
+    // Currently only process first batch event per frame
+    for ev in ev_batch.read() {
+        match &ev.result {
+            Ok(rows) => {
+                let originals = ev.original_row_indices.len();
+                if rows.len() < originals { feedback_writer.write(SheetOperationFeedback { message: format!("AI batch result malformed: returned {} rows but expected at least {}", rows.len(), originals), is_error: true }); continue; }
+                if let Some(raw) = &ev.raw_response { state.ai_raw_output_display = raw.clone(); }
+                for &row in &ev.original_row_indices { state.ai_suggestions.remove(&row); }
+                let (orig_slice, extra_slice) = rows.split_at(originals);
+                // Record prefix count so review UI can lock those cells
+                state.ai_context_only_prefix_count = ev.key_prefix_count;
+                for (i, &row_index) in ev.original_row_indices.iter().enumerate() {
+                    let suggestion_full = &orig_slice[i];
+                    // Strip key prefix columns (they are context only, should not overwrite data cells)
+                    let suggestion = if ev.key_prefix_count > 0 && suggestion_full.len() >= ev.key_prefix_count { &suggestion_full[ev.key_prefix_count..] } else { suggestion_full };
+                    let expanded = if !ev.included_non_structure_columns.is_empty() {
+                        let max_col = *ev.included_non_structure_columns.iter().max().unwrap_or(&0);
+                        let mut row_buf = vec![String::new(); max_col + 1];
+                        for (col_i, actual_col) in ev.included_non_structure_columns.iter().enumerate() {
+                            if let Some(val) = suggestion.get(col_i) { if let Some(slot) = row_buf.get_mut(*actual_col) { *slot = val.clone(); } }
+                        }
+                        row_buf
+                    } else { suggestion.to_vec() };
+                    state.ai_suggestions.insert(row_index, expanded);
+                }
+                // For new rows, also strip key prefix if present
+                state.ai_staged_new_rows = extra_slice.iter().map(|r| if ev.key_prefix_count > 0 && r.len() >= ev.key_prefix_count { r[ev.key_prefix_count..].to_vec() } else { r.clone() }).collect();
+                state.ai_staged_new_row_accept = vec![true; state.ai_staged_new_rows.len()];
+                state.ai_included_non_structure_columns = ev.included_non_structure_columns.clone();
+                state.ai_batch_review_active = true;
+                state.ai_mode = AiModeState::ResultsReady;
+                info!("Processed AI batch result: {} originals, {} new rows", originals, state.ai_staged_new_rows.len());
+            }
+            Err(err) => {
+                if let Some(raw) = &ev.raw_response {
+                    state.ai_raw_output_display = format!("Batch Error: {}\n--- Raw Model Output ---\n{}", err, raw);
+                } else {
+                    state.ai_raw_output_display = format!("Batch Error: {} (no raw output returned)", err);
+                }
+                state.ai_output_panel_visible = true; // ensure visible
+                feedback_writer.write(SheetOperationFeedback { message: format!("AI batch error: {}", err), is_error: true });
+                state.ai_mode = AiModeState::Preparing;
+            }
+        }
+        break;
     }
 }

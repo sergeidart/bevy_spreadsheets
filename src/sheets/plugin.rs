@@ -3,7 +3,7 @@ use bevy::prelude::*;
 
 use super::resources::{SheetRegistry, SheetRenderCache}; 
 use super::events::{
-    AddSheetRowRequest, AiTaskResult, JsonSheetUploaded, RequestDeleteRows,
+    AddSheetRowRequest, AiTaskResult, AiBatchTaskResult, JsonSheetUploaded, RequestDeleteRows,
     RequestDeleteSheet, RequestDeleteSheetFile, RequestInitiateFileUpload,
     RequestProcessUpload, RequestRenameSheet, RequestRenameSheetFile,
     RequestUpdateColumnName, RequestUpdateColumnValidator,
@@ -11,10 +11,10 @@ use super::events::{
     SheetDataModifiedInRegistryEvent, RequestSheetRevalidation,
     RequestDeleteColumns, RequestAddColumn, RequestReorderColumn,
     // NEW: Import RequestCreateNewSheet
-    RequestCreateNewSheet,
+    RequestCreateNewSheet, RequestToggleAiRowGeneration,
 };
 use super::systems; 
-use crate::ui::systems::handle_ai_task_results; 
+use crate::ui::systems::{handle_ai_task_results, handle_ai_batch_results}; 
 use crate::ui::systems::forward_events; 
 use crate::ui::systems::apply_pending_structure_key_selection;
 use super::systems::logic::handle_sheet_render_cache_update;
@@ -67,9 +67,11 @@ impl Plugin for SheetsPlugin {
             .add_event::<UpdateCellEvent>()
             .add_event::<RequestDeleteRows>()
             .add_event::<RequestDeleteColumns>()
-            .add_event::<AiTaskResult>() 
+            .add_event::<AiTaskResult>()
+            .add_event::<AiBatchTaskResult>()
             .add_event::<SheetDataModifiedInRegistryEvent>()
-            .add_event::<RequestSheetRevalidation>();
+            .add_event::<RequestSheetRevalidation>()
+            .add_event::<RequestToggleAiRowGeneration>();
 
         app.add_systems(
             Startup,
@@ -102,6 +104,7 @@ impl Plugin for SheetsPlugin {
                 systems::logic::handle_rename_request,
                 systems::logic::handle_delete_request,
                 systems::logic::handle_add_row_request,
+                systems::logic::handle_toggle_ai_row_generation,
                 systems::logic::handle_add_column_request,
                 systems::logic::handle_reorder_column_request,
                 // NEW: Add system for creating sheets
@@ -119,10 +122,12 @@ impl Plugin for SheetsPlugin {
         app.add_systems(
             Update,
             (
-                forward_events::<AiTaskResult>, 
-                ApplyDeferred, 
+                forward_events::<AiTaskResult>,
+                forward_events::<AiBatchTaskResult>,
+                ApplyDeferred,
                 apply_pending_structure_key_selection,
-                handle_ai_task_results, 
+                handle_ai_task_results,
+                handle_ai_batch_results,
             )
             .chain() 
             .in_set(SheetSystemSet::ProcessAsyncResults)

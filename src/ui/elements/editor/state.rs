@@ -94,6 +94,18 @@ pub struct EditorWindowState {
     pub ai_review_column_choices: Vec<ReviewChoice>,
     // Mapping of AI suggestion vector indices -> actual sheet column indices (non-structure columns included in last send)
     pub ai_included_non_structure_columns: Vec<usize>,
+    // NEW: Batch review buffers: each row -> (expanded suggestion over actual columns, per-column choices)
+    pub ai_batch_suggestion_buffers: HashMap<usize, Vec<String>>,
+    pub ai_batch_column_choices: HashMap<usize, Vec<ReviewChoice>>,
+    // Track per-row included mapping (at send time) to correctly expand suggestions
+    pub ai_per_row_included_columns: HashMap<usize, Vec<usize>>,
+    pub ai_per_row_context_prefix_counts: HashMap<usize, usize>,
+    // When batch review active, slide-in panel flag
+    pub ai_batch_review_active: bool,
+    // Staged new rows returned by batch AI beyond the original rows count
+    pub ai_staged_new_rows: Vec<Vec<String>>,
+    // Per staged new row acceptance flags (parallel to ai_staged_new_rows)
+    pub ai_staged_new_row_accept: Vec<bool>,
 
     pub ai_model_id_input: String,
     pub ai_general_rule_input: String,
@@ -103,6 +115,9 @@ pub struct EditorWindowState {
     pub show_ai_rule_popup: bool,
     pub ai_rule_popup_needs_init: bool,
     pub ai_raw_output_display: String,
+    // Bottom AI output panel visibility & context tracking
+    pub ai_output_panel_visible: bool,
+    pub ai_output_panel_last_context: Option<(Option<String>, String, bool)>, // (category, sheet, in_structure)
 
     // General Settings Popup
     pub show_settings_popup: bool, 
@@ -157,6 +172,8 @@ pub struct EditorWindowState {
     pub pending_structure_key_apply: Option<(Option<String>, String, usize, Option<usize>)>,
     // Stored context-only prefix values per row (for review UI display): Vec of (header, value)
     pub ai_context_prefix_by_row: HashMap<usize, Vec<(String, String)>>,
+    // Optimistic overrides for sheet-level flags (e.g., AI row generation) keyed by (category, sheet)
+    pub sheet_flag_overrides: HashMap<(Option<String>, String), SheetFlagOverrides>,
 }
 
 impl Default for EditorWindowState {
@@ -198,6 +215,13 @@ impl Default for EditorWindowState {
             current_ai_suggestion_edit_buffer: None,
             ai_review_column_choices: Vec::new(),
             ai_included_non_structure_columns: Vec::new(),
+            ai_batch_suggestion_buffers: HashMap::new(),
+            ai_batch_column_choices: HashMap::new(),
+            ai_per_row_included_columns: HashMap::new(),
+            ai_per_row_context_prefix_counts: HashMap::new(),
+            ai_batch_review_active: false,
+            ai_staged_new_rows: Vec::new(),
+            ai_staged_new_row_accept: Vec::new(),
             ai_model_id_input: String::new(),
             ai_general_rule_input: String::new(),
             ai_temperature_input: 0.7,
@@ -206,6 +230,8 @@ impl Default for EditorWindowState {
             show_ai_rule_popup: false,
             ai_rule_popup_needs_init: false,
             ai_raw_output_display: String::new(),
+            ai_output_panel_visible: false,
+            ai_output_panel_last_context: None,
             show_settings_popup: false,
             settings_new_api_key_input: String::new(),
             was_settings_popup_open: false,
@@ -238,8 +264,14 @@ impl Default for EditorWindowState {
             ai_context_only_prefix_count: 0,
             pending_structure_key_apply: None,
             ai_context_prefix_by_row: HashMap::new(),
+            sheet_flag_overrides: HashMap::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SheetFlagOverrides {
+    pub ai_enable_row_generation: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
