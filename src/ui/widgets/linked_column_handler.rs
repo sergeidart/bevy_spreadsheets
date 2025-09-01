@@ -110,14 +110,15 @@ pub fn handle_linked_column_edit(
                             });
                             let input_lower = current_input.to_lowercase();
 
-                            // Filter suggestions based on current input
-                            let suggestions = allowed_values
+                            // Filter & collect suggestions based on current input, then sort deterministically (case-insensitive)
+                            let mut suggestions: Vec<&String> = allowed_values
                                 .iter()
                                 .filter(|v| v.to_lowercase().contains(&input_lower))
-                                .take(20); // Limit suggestions shown
-
+                                .collect();
+                            suggestions.sort_unstable_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+                            // Limit number displayed after sorting for stability across frames
                             let mut any_suggestions = false;
-                            for suggestion in suggestions {
+                            for suggestion in suggestions.into_iter().take(50) { // raise cap a bit; UI scrolls anyway
                                 any_suggestions = true;
                                 // Highlight if current input exactly matches suggestion
                                 let is_selected = current_input == *suggestion;
