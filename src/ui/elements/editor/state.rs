@@ -87,25 +87,12 @@ pub struct EditorWindowState {
     // AI Mode specific state
     pub ai_mode: AiModeState,
     pub ai_selected_rows: HashSet<usize>, 
-    pub ai_suggestions: HashMap<usize, Vec<String>>,
-    pub ai_review_queue: Vec<usize>,
-    pub ai_current_review_index: Option<usize>,
-    pub current_ai_suggestion_edit_buffer: Option<(usize, Vec<String>)>,
-    pub ai_review_column_choices: Vec<ReviewChoice>,
-    // Mapping of AI suggestion vector indices -> actual sheet column indices (non-structure columns included in last send)
-    pub ai_included_non_structure_columns: Vec<usize>,
-    // NEW: Batch review buffers: each row -> (expanded suggestion over actual columns, per-column choices)
-    pub ai_batch_suggestion_buffers: HashMap<usize, Vec<String>>,
-    pub ai_batch_column_choices: HashMap<usize, Vec<ReviewChoice>>,
-    // Track per-row included mapping (at send time) to correctly expand suggestions
-    pub ai_per_row_included_columns: HashMap<usize, Vec<usize>>,
-    pub ai_per_row_context_prefix_counts: HashMap<usize, usize>,
-    // When batch review active, slide-in panel flag
-    pub ai_batch_review_active: bool,
-    // Staged new rows returned by batch AI beyond the original rows count
-    pub ai_staged_new_rows: Vec<Vec<String>>,
-    // Per staged new row acceptance flags (parallel to ai_staged_new_rows)
-    pub ai_staged_new_row_accept: Vec<bool>,
+    pub ai_batch_review_active: bool, // unified batch review flag
+    // Unified snapshot model
+    pub ai_row_reviews: Vec<RowReview>,
+    pub ai_new_row_reviews: Vec<NewRowReview>,
+    // New unified review model
+    // (legacy single-row review fields removed)
 
     pub ai_model_id_input: String,
     pub ai_general_rule_input: String,
@@ -172,8 +159,10 @@ pub struct EditorWindowState {
     pub pending_structure_key_apply: Option<(Option<String>, String, usize, Option<usize>)>,
     // Stored context-only prefix values per row (for review UI display): Vec of (header, value)
     pub ai_context_prefix_by_row: HashMap<usize, Vec<(String, String)>>,
-    // Optimistic overrides for sheet-level flags (e.g., AI row generation) keyed by (category, sheet)
-    pub sheet_flag_overrides: HashMap<(Option<String>, String), SheetFlagOverrides>,
+        // Removed per-sheet override cache: flag now read directly from persisted metadata.
+        pub effective_ai_can_add_rows: Option<bool>,
+    // Optimistic pending toggle for AI row generation (root sheet) to avoid UI flicker while event processes
+    pub pending_ai_row_generation_toggle: Option<(Option<String>, String, bool)>, // (root_category, root_sheet, desired_flag)
 }
 
 impl Default for EditorWindowState {
@@ -209,19 +198,9 @@ impl Default for EditorWindowState {
             new_sheet_target_category: None,
             ai_mode: AiModeState::Idle,
             ai_selected_rows: HashSet::new(),
-            ai_suggestions: HashMap::new(),
-            ai_review_queue: Vec::new(),
-            ai_current_review_index: None,
-            current_ai_suggestion_edit_buffer: None,
-            ai_review_column_choices: Vec::new(),
-            ai_included_non_structure_columns: Vec::new(),
-            ai_batch_suggestion_buffers: HashMap::new(),
-            ai_batch_column_choices: HashMap::new(),
-            ai_per_row_included_columns: HashMap::new(),
-            ai_per_row_context_prefix_counts: HashMap::new(),
             ai_batch_review_active: false,
-            ai_staged_new_rows: Vec::new(),
-            ai_staged_new_row_accept: Vec::new(),
+            ai_row_reviews: Vec::new(),
+            ai_new_row_reviews: Vec::new(),
             ai_model_id_input: String::new(),
             ai_general_rule_input: String::new(),
             ai_temperature_input: 0.7,
@@ -264,14 +243,10 @@ impl Default for EditorWindowState {
             ai_context_only_prefix_count: 0,
             pending_structure_key_apply: None,
             ai_context_prefix_by_row: HashMap::new(),
-            sheet_flag_overrides: HashMap::new(),
+            effective_ai_can_add_rows: None,
+            pending_ai_row_generation_toggle: None,
         }
     }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct SheetFlagOverrides {
-    pub ai_enable_row_generation: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -281,6 +256,22 @@ pub struct StructureParentContext {
     pub parent_row: usize,
     pub parent_col: usize,
     pub parent_column_header: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct RowReview {
+    pub row_index: usize,
+    pub original: Vec<String>,
+    pub ai: Vec<String>,
+    pub choices: Vec<ReviewChoice>, // length == editable (non-structure) columns shown order
+    pub non_structure_columns: Vec<usize>, // mapping for editable subset
+}
+
+#[derive(Debug, Clone)]
+pub struct NewRowReview {
+    pub ai: Vec<String>,
+    pub non_structure_columns: Vec<usize>,
+    pub accept: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -305,12 +296,7 @@ impl EditorWindowState {
         self.ai_mode = AiModeState::Idle; 
         self.ai_selected_rows.clear();
         self.selected_columns_for_deletion.clear();
-        
-        self.ai_suggestions.clear();
-        self.ai_review_queue.clear();
-        self.current_ai_suggestion_edit_buffer = None;
-        self.ai_review_column_choices.clear();
-        self.ai_current_review_index = None;
+    // Legacy single-row / multi-map AI review fields removed.
 
         self.column_drag_state = ColumnDragState::default();
 
@@ -326,6 +312,32 @@ impl EditorWindowState {
     // NOTE: virtual structure stack intentionally preserved so user can back out after mode changes
 
     // Keep random picker visible state as-is across mode changes.
+    }
+
+    /// Resolve ultimate root sheet (category, sheet) for current view (following structure parents).
+    pub fn resolve_root_sheet(&self, registry: &crate::sheets::resources::SheetRegistry) -> (Option<String>, Option<String>) {
+        if let Some(vctx) = self.virtual_structure_stack.last() {
+            let mut current_category = self.selected_category.clone();
+            let mut current_sheet = vctx.virtual_sheet_name.clone();
+            let mut safety = 0;
+            while safety < 32 {
+                safety += 1;
+                if let Some(meta) = registry.get_sheet(&current_category, &current_sheet).and_then(|s| s.metadata.as_ref()) {
+                    if let Some(parent) = &meta.structure_parent { current_category = parent.parent_category.clone(); current_sheet = parent.parent_sheet.clone(); continue; }
+                }
+                break;
+            }
+            return (current_category, Some(current_sheet));
+        }
+        (self.selected_category.clone(), self.selected_sheet_name.clone())
+    }
+
+    /// Compute effective AI row-generation permission (root sheet meta + override). Returns None if no meta.
+    pub fn effective_ai_add_rows(&self, registry: &crate::sheets::resources::SheetRegistry) -> Option<bool> {
+        let (cat, sheet_opt) = self.resolve_root_sheet(registry);
+        let sheet = sheet_opt?;
+        let meta_opt = registry.get_sheet(&cat, &sheet).and_then(|s| s.metadata.as_ref());
+    registry.get_sheet(&cat, &sheet).and_then(|s| s.metadata.as_ref()).map(|m| m.ai_enable_row_generation)
     }
 }
 

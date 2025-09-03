@@ -6,7 +6,7 @@ use crate::sheets::{
     resources::{SheetRegistry, SheetRenderCache},
     events::{RequestReorderColumn, UpdateCellEvent, OpenStructureViewEvent},
 };
-use crate::ui::elements::editor::state::EditorWindowState;
+use crate::ui::elements::editor::state::{EditorWindowState, AiModeState, SheetInteractionState};
 use crate::ui::elements::editor::table_header::sheet_table_header;
 use crate::ui::elements::editor::table_body::sheet_table_body;
 // No longer need to import SheetEventWriters as a whole struct here
@@ -148,7 +148,7 @@ pub(super) fn show_sheet_table(
                                    sheet_table_body(body, row_height, &current_category_clone, selected_name, registry, render_cache, cell_update_writer, state, &mut open_structure_writer);
                                } else {
                                    // Wrap body to inject prefix columns per row
-                                   let mut inner_body = body;
+                                   let inner_body = body;
                                    let original_category = current_category_clone.clone();
                                    // Reuse logic from sheet_table_body by manually iterating rows (can't easily intercept inside)
                                    // We'll replicate minimal needed rendering for prefix columns then delegate per-cell editing.
@@ -169,8 +169,22 @@ pub(super) fn show_sheet_table(
                                    inner_body.rows(row_height, filtered_indices.len(), |mut row| {
                                        let idx_in_list = row.index();
                                        let original_row_index = *filtered_indices.get(idx_in_list).unwrap_or(&0);
-                                       // Prefix key columns (same value for all rows)
-                                       for (_, value) in &ancestor_key_columns { row.col(|ui| { ui.colored_label(egui::Color32::from_rgb(0, 150, 0), value); }); }
+                                       // Determine if we show selection checkbox (AI preparing or delete mode)
+                                       let show_checkbox = (state.current_interaction_mode == SheetInteractionState::AiModeActive && state.ai_mode == AiModeState::Preparing) || (state.current_interaction_mode == SheetInteractionState::DeleteModeActive);
+                                       // Prefix key columns (same value for all rows). Place checkbox in the very first prefix column if needed.
+                                       for (p_idx, (_, value)) in ancestor_key_columns.iter().enumerate() {
+                                           row.col(|ui| {
+                                               if p_idx == 0 && show_checkbox {
+                                                   let mut is_selected = state.ai_selected_rows.contains(&original_row_index);
+                                                   let response = ui.add(egui::Checkbox::without_text(&mut is_selected));
+                                                   if response.changed() {
+                                                       if is_selected { state.ai_selected_rows.insert(original_row_index); } else { state.ai_selected_rows.remove(&original_row_index); }
+                                                   }
+                                                   ui.add_space(2.0); ui.separator(); ui.add_space(2.0);
+                                               }
+                                               ui.colored_label(egui::Color32::from_rgb(0, 150, 0), value);
+                                           });
+                                       }
                                        if let Some(row_data) = grid.get(original_row_index) {
                                            if row_data.len() != num_cols_local { row.col(|ui| { ui.colored_label(egui::Color32::RED, "Row Len Err"); }); return; }
                                            for c_idx in 0..num_cols_local { row.col(|ui| {

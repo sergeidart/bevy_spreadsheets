@@ -8,7 +8,7 @@ use crate::sheets::events::{AiBatchTaskResult, RequestToggleAiRowGeneration};
 use crate::sheets::resources::SheetRegistry;
 use crate::ui::systems::SendEvent;
 use crate::SessionApiKey;
-use super::state::{AiModeState, EditorWindowState, SheetFlagOverrides};
+use super::state::{AiModeState, EditorWindowState};
 
 use std::ffi::CString;
 // --- PyO3 Imports ---
@@ -43,43 +43,31 @@ pub(super) fn show_ai_control_panel(
         ui.label(format!("✨ AI Mode: {:?}", state.ai_mode));
         ui.separator();
 
-        // Per-sheet toggle: Allow AI to generate new rows
-        if let Some(root_selected_sheet) = selected_sheet_name_clone.clone() {
-            // Determine root sheet for toggle (if inside structure view, traverse to ultimate parent)
-            let mut toggle_target_category = selected_category_clone.clone();
-            let mut toggle_target_sheet = root_selected_sheet.clone();
-            if let Some(vctx) = state.virtual_structure_stack.last() {
-                // Start from current virtual sheet metadata and walk up via structure_parent links
-                let mut current_category = selected_category_clone.clone();
-                let mut current_sheet = vctx.virtual_sheet_name.clone();
-                let mut safety = 0;
-                while safety < 16 { // prevent infinite loop
-                    safety += 1;
-                    let meta_opt = registry.get_sheet(&current_category, &current_sheet).and_then(|s| s.metadata.as_ref());
-                    if let Some(meta) = meta_opt {
-                        if let Some(parent) = &meta.structure_parent { // move up
-                            current_category = parent.parent_category.clone();
-                            current_sheet = parent.parent_sheet.clone();
-                            continue;
+        // Per-root-sheet toggle: Allow AI to generate new rows (visible even in virtual sheet; applies to root)
+        if selected_sheet_name_clone.is_some() {
+            let (root_cat, root_sheet_opt) = state.resolve_root_sheet(registry);
+            if let Some(root_sheet) = root_sheet_opt {
+                if let Some(root_sheet_data) = registry.get_sheet(&root_cat, &root_sheet) {
+                    if let Some(meta) = &root_sheet_data.metadata {
+                        let mut flag = meta.ai_enable_row_generation;
+                        // Apply optimistic pending toggle if present and not yet reflected in metadata
+                        if let Some((p_cat, p_sheet, p_val)) = &state.pending_ai_row_generation_toggle {
+                            if *p_cat == root_cat && *p_sheet == root_sheet {
+                                if meta.ai_enable_row_generation != *p_val {
+                                    flag = *p_val; // show desired value
+                                } else {
+                                    // Metadata caught up, clear pending
+                                    state.pending_ai_row_generation_toggle = None;
+                                }
+                            }
                         }
-                        // reached root (no parent)
-                        toggle_target_category = current_category.clone();
-                        toggle_target_sheet = current_sheet.clone();
-                        break;
-                    } else { break; }
-                }
-            }
-            if let Some(target_sheet_data) = registry.get_sheet(&toggle_target_category, &toggle_target_sheet) {
-                if let Some(meta) = &target_sheet_data.metadata {
-                    // Use optimistic override if present
-                    let key = (toggle_target_category.clone(), toggle_target_sheet.clone());
-                    let current_override = state.sheet_flag_overrides.get(&key).and_then(|o| o.ai_enable_row_generation);
-                    let mut flag = current_override.unwrap_or(meta.ai_enable_row_generation);
-                    let resp = ui.checkbox(&mut flag, "AI Can Add Rows")
-                        .on_hover_text("If enabled, AI may generate additional new rows; they'll be inserted at top (root sheet setting)");
-                    if resp.changed() {
-                        state.sheet_flag_overrides.entry(key.clone()).or_insert_with(SheetFlagOverrides::default).ai_enable_row_generation = Some(flag);
-                        commands.spawn(SendEvent::<RequestToggleAiRowGeneration> { event: RequestToggleAiRowGeneration { category: key.0.clone(), sheet_name: key.1.clone(), enabled: flag } });
+                        let resp = ui.checkbox(&mut flag, "AI Can Add Rows").on_hover_text("If enabled, AI may generate additional new rows; applied at root sheet level (affects virtual views)");
+                        if resp.changed() {
+                            // Record optimistic pending toggle BEFORE dispatch
+                            state.pending_ai_row_generation_toggle = Some((root_cat.clone(), root_sheet.clone(), flag));
+                            commands.spawn(SendEvent::<RequestToggleAiRowGeneration> { event: RequestToggleAiRowGeneration { category: root_cat.clone(), sheet_name: root_sheet.clone(), enabled: flag } });
+                        }
+                        state.effective_ai_can_add_rows = Some(flag);
                     }
                 }
             }
@@ -103,10 +91,9 @@ pub(super) fn show_ai_control_panel(
             state.ai_mode = AiModeState::Submitting;
             state.ai_raw_output_display.clear();
             state.ai_output_panel_visible = true; // show bottom panel at start
-            state.ai_suggestions.clear();
-            state.ai_batch_suggestion_buffers.clear();
-            state.ai_staged_new_rows.clear();
-            state.ai_staged_new_row_accept.clear();
+            // Clear snapshot review data (legacy maps removed)
+            state.ai_row_reviews.clear();
+            state.ai_new_row_reviews.clear();
             state.ai_context_prefix_by_row.clear();
             ui.ctx().request_repaint();
 
@@ -151,7 +138,6 @@ pub(super) fn show_ai_control_panel(
                     column_contexts.push(col_def.ai_context.clone());
                 }
             }
-            state.ai_included_non_structure_columns = included_actual_indices.clone();
 
             // Build rows_data (only non-structure columns)
             let mut rows_data: Vec<Vec<String>> = Vec::new();
@@ -179,12 +165,7 @@ pub(super) fn show_ai_control_panel(
             }
 
             // Resolve root sheet meta for allow_row_additions flag
-            let allow_additions_flag = {
-                if let Some(meta) = root_meta.as_ref() {
-                    let key = (root_category.clone(), root_sheet.clone());
-                    if let Some(override_flag) = state.sheet_flag_overrides.get(&key).and_then(|o| o.ai_enable_row_generation) { override_flag } else { meta.ai_enable_row_generation }
-                } else { false }
-            };
+            let allow_additions_flag = root_meta.as_ref().map(|m| m.ai_enable_row_generation).unwrap_or(false);
             // ---- Build recursive key chain (ancestor keys) ----
             let mut key_chain_headers: Vec<String> = Vec::new();
             let mut key_chain_contexts: Vec<Option<String>> = Vec::new();
@@ -344,19 +325,12 @@ pub(super) fn show_ai_control_panel(
         }
 
         if state.ai_mode == AiModeState::ResultsReady {
-            let num_results = state.ai_suggestions.len();
-            if ui.add_enabled(num_results > 0, egui::Button::new(format!("🧐 Review Batch ({} rows)", num_results))).clicked() {
-                // Initialize batch buffers
-                state.ai_batch_suggestion_buffers.clear();
-                state.ai_batch_column_choices.clear();
-                state.ai_per_row_included_columns.clear();
-                state.ai_per_row_context_prefix_counts.clear();
-                for (row_idx, suggestion) in state.ai_suggestions.iter() {
-                    state.ai_batch_suggestion_buffers.insert(*row_idx, suggestion.clone());
-                    // Default all column choices to AI for now; will be sized on-demand in UI
-                }
+            let num_existing = state.ai_row_reviews.len();
+            let num_new = state.ai_new_row_reviews.len();
+            let total = num_existing + num_new;
+            if ui.add_enabled(total > 0, egui::Button::new(format!("🧐 Review Batch ({} rows)", total))).clicked() {
                 state.ai_batch_review_active = true;
-                state.ai_mode = AiModeState::Reviewing; // reuse existing enum state
+                state.ai_mode = AiModeState::Reviewing;
             }
         }
         

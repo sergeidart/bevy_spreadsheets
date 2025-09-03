@@ -3,6 +3,7 @@ use crate::sheets::{
     resources::SheetRegistry,
     events::SheetDataModifiedInRegistryEvent,
     definitions::{ColumnValidator, SheetMetadata, StructureFieldDefinition},
+    systems::io::save::save_single_sheet,
 };
 use serde_json::{Value};
 
@@ -20,7 +21,8 @@ pub fn handle_sync_virtual_structure_sheet(
     mut registry: ResMut<SheetRegistry>,
     mut pending: ResMut<PendingStructureCascade>,
 ) {
-    let mut parents_to_update: Vec<(Option<String>, String, usize, SheetMetadata)> = Vec::new();
+    // Store: parent_cat, parent_sheet, parent_col_index, virtual_meta_clone, virtual_sheet_name, virtual_grid_rows
+    let mut parents_to_update: Vec<(Option<String>, String, usize, SheetMetadata, String, Vec<Vec<String>>)> = Vec::new();
 
     for ev in events.read() {
         // Get modified sheet
@@ -40,14 +42,18 @@ pub fn handle_sync_virtual_structure_sheet(
         }).collect();
 
         // Fetch parent sheet mutably later; store intent now to avoid double borrow
-        parents_to_update.push((parent_link.parent_category.clone(), parent_link.parent_sheet.clone(), parent_link.parent_column_index, SheetMetadata { ..meta.clone() }));
+    // Capture virtual grid rows now to avoid later immutable borrow while mutably editing parent
+    let virtual_rows = sheet_data.grid.clone();
+    parents_to_update.push((parent_link.parent_category.clone(), parent_link.parent_sheet.clone(), parent_link.parent_column_index, SheetMetadata { ..meta.clone() }, ev.sheet_name.clone(), virtual_rows));
 
     // Apply schema to parent AFTER loop
     }
 
     if parents_to_update.is_empty() { return; }
 
-    for (parent_cat, parent_sheet_name, parent_col_index, virtual_meta_clone) in parents_to_update {
+    // Collect parent metas needing save after mutation to avoid immutable borrow during mutable access
+    let mut metas_to_save: Vec<SheetMetadata> = Vec::new();
+    for (parent_cat, parent_sheet_name, parent_col_index, virtual_meta_clone, virtual_sheet_name, virtual_grid_rows) in parents_to_update {
         // Get mutable parent sheet
         let Some(parent_sheet) = registry.get_sheet_mut(&parent_cat, &parent_sheet_name) else { continue; };
         let Some(parent_metadata) = &mut parent_sheet.metadata else { continue; };
@@ -95,61 +101,67 @@ pub fn handle_sync_virtual_structure_sheet(
         }
     }
 
-        // Rewrite each row's JSON cell in parent grid at parent_col_index
-        for row in parent_sheet.grid.iter_mut() {
-            if row.len() <= parent_col_index { row.resize(parent_col_index + 1, String::new()); }
-            let cell = &mut row[parent_col_index];
-            let trimmed = cell.trim();
-            let mut rows_vec: Vec<Vec<String>> = Vec::new();
-            if trimmed.is_empty() { rows_vec.push(vec![String::new(); ordered_headers.len()]); }
-            else if let Ok(val) = serde_json::from_str::<Value>(trimmed) {
-                match val {
-                    Value::Object(map) => { // legacy single object
-                        let mut row_vals = Vec::with_capacity(ordered_headers.len());
-                        for h in &ordered_headers { row_vals.push(map.get(h).and_then(|v| v.as_str()).unwrap_or("").to_string()); }
-                        rows_vec.push(row_vals);
-                    }
-                    Value::Array(arr) => {
-                        if arr.iter().all(|v| v.is_object()) { // legacy multi-row objects
-                            for obj in arr.into_iter() { if let Value::Object(m) = obj { let mut row_vals = Vec::with_capacity(ordered_headers.len()); for h in &ordered_headers { row_vals.push(m.get(h).and_then(|v| v.as_str()).unwrap_or("").to_string()); } rows_vec.push(row_vals); } }
-                        } else if arr.iter().all(|v| v.is_array()) { // already new format multi-row (positional arrays)
-                            // Reorder each inner row based on header mapping if old headers available
-                            for inner in arr.into_iter() {
-                                if let Value::Array(inner_vals)=inner {
-                                    let old_vals: Vec<String> = inner_vals.into_iter().map(|v| v.as_str().unwrap_or("").to_string()).collect();
-                                    let mut reordered: Vec<String> = Vec::with_capacity(ordered_headers.len());
-                                    for (new_pos, h) in ordered_headers.iter().enumerate() {
-                                        if let Some(old_i) = old_index_by_header.get(h.as_str()) { reordered.push(old_vals.get(*old_i).cloned().unwrap_or_default()); }
-                                        else if old_headers.len() == ordered_headers.len() { // positional fallback for unexpected mismatch
-                                            reordered.push(old_vals.get(new_pos).cloned().unwrap_or_default());
-                                        } else { reordered.push(String::new()); }
-                                    }
-                                    rows_vec.push(reordered);
-                                }
-                            }
-                        } else if arr.iter().all(|v| v.is_string()) { // single row new format (positional array)
-                            let old_vals: Vec<String> = arr.into_iter().map(|v| v.as_str().unwrap_or("").to_string()).collect();
-                            let mut reordered: Vec<String> = Vec::with_capacity(ordered_headers.len());
-                            for (new_pos, h) in ordered_headers.iter().enumerate() {
-                                if let Some(old_i) = old_index_by_header.get(h.as_str()) { reordered.push(old_vals.get(*old_i).cloned().unwrap_or_default()); }
-                                else if old_headers.len() == ordered_headers.len() { reordered.push(old_vals.get(new_pos).cloned().unwrap_or_default()); }
-                                else { reordered.push(String::new()); }
-                            }
-                            rows_vec.push(reordered);
-                        } else { rows_vec.push(vec![String::new(); ordered_headers.len()]); }
-                    }
-                    _ => rows_vec.push(vec![String::new(); ordered_headers.len()])
-                }
-            } else { rows_vec.push(vec![String::new(); ordered_headers.len()]); }
-            // Normalize to new storage: single row => [] of strings; multi-row => [[]]
-            if rows_vec.len() == 1 { *cell = Value::Array(rows_vec.remove(0).into_iter().map(Value::String).collect()).to_string(); }
-            else { let outer: Vec<Value> = rows_vec.into_iter().map(|r| Value::Array(r.into_iter().map(Value::String).collect())).collect(); *cell = Value::Array(outer).to_string(); }
+        // Helper to parse virtual sheet name pattern: __virtual__<parent>__r<row>c<col>__lvl<depth>
+        fn parse_virtual_indices(name: &str) -> Option<(usize, usize)> {
+            if !name.starts_with("__virtual__") { return None; }
+            let r_pos = name.find("__r")? + 3; // position after '__r'
+            let c_pos = name[r_pos..].find('c')? + r_pos; // index of 'c'
+            let row_str = &name[r_pos..c_pos];
+            let lvl_marker = "__lvl";
+            let lvl_pos = name.find(lvl_marker)?; // start of __lvl
+            let col_str = &name[c_pos+1 .. lvl_pos];
+            let row_idx: usize = row_str.parse().ok()?;
+            let col_idx: usize = col_str.parse().ok()?;
+            Some((row_idx, col_idx))
         }
-        let parent_changed = parent_metadata.ensure_column_consistency();
+
+        // If this is a virtual sheet, persist its grid rows back into ONLY that parent cell (not all rows)
+    if let Some((target_parent_row, target_parent_col)) = parse_virtual_indices(&virtual_sheet_name) {
+            if target_parent_col == parent_col_index && target_parent_row < parent_sheet.grid.len() {
+        // Build rows from captured virtual grid (respect ordered headers length)
+        let mut collected: Vec<Vec<String>> = Vec::new();
+        for r in &virtual_grid_rows { collected.push(r.iter().cloned().take(ordered_headers.len()).collect()); }
+        let cell_ref = &mut parent_sheet.grid[target_parent_row][parent_col_index];
+        if collected.is_empty() { *cell_ref = Value::Array(Vec::new()).to_string(); }
+        else if collected.len() == 1 { *cell_ref = Value::Array(collected.remove(0).into_iter().map(Value::String).collect()).to_string(); }
+        else { let outer: Vec<Value> = collected.into_iter().map(|r| Value::Array(r.into_iter().map(Value::String).collect())).collect(); *cell_ref = Value::Array(outer).to_string(); }
+            }
+        } else {
+            // Fallback: legacy behavior rewriting all rows (schema reorder only)
+            for row in parent_sheet.grid.iter_mut() {
+                if row.len() <= parent_col_index { row.resize(parent_col_index + 1, String::new()); }
+                let cell = &mut row[parent_col_index];
+                let trimmed = cell.trim();
+                let mut rows_vec: Vec<Vec<String>> = Vec::new();
+                if trimmed.is_empty() { rows_vec.push(vec![String::new(); ordered_headers.len()]); }
+                else if let Ok(val) = serde_json::from_str::<Value>(trimmed) {
+                    match val {
+                        Value::Object(map) => { let mut row_vals = Vec::with_capacity(ordered_headers.len()); for h in &ordered_headers { row_vals.push(map.get(h).and_then(|v| v.as_str()).unwrap_or("").to_string()); } rows_vec.push(row_vals); }
+                        Value::Array(arr) => {
+                            if arr.iter().all(|v| v.is_object()) { for obj in arr.into_iter() { if let Value::Object(m) = obj { let mut row_vals = Vec::with_capacity(ordered_headers.len()); for h in &ordered_headers { row_vals.push(m.get(h).and_then(|v| v.as_str()).unwrap_or("").to_string()); } rows_vec.push(row_vals); } } }
+                            else if arr.iter().all(|v| v.is_array()) { for inner in arr.into_iter() { if let Value::Array(inner_vals)=inner { let old_vals: Vec<String> = inner_vals.into_iter().map(|v| v.as_str().unwrap_or("").to_string()).collect(); let mut reordered: Vec<String>=Vec::with_capacity(ordered_headers.len()); for (new_pos,h) in ordered_headers.iter().enumerate(){ if let Some(old_i)=old_index_by_header.get(h.as_str()){ reordered.push(old_vals.get(*old_i).cloned().unwrap_or_default()); } else if old_headers.len()==ordered_headers.len(){ reordered.push(old_vals.get(new_pos).cloned().unwrap_or_default()); } else { reordered.push(String::new()); }} rows_vec.push(reordered); }} }
+                            else if arr.iter().all(|v| v.is_string()) { let old_vals: Vec<String> = arr.into_iter().map(|v| v.as_str().unwrap_or("").to_string()).collect(); let mut reordered: Vec<String>=Vec::with_capacity(ordered_headers.len()); for (new_pos,h) in ordered_headers.iter().enumerate(){ if let Some(old_i)=old_index_by_header.get(h.as_str()) { reordered.push(old_vals.get(*old_i).cloned().unwrap_or_default()); } else if old_headers.len()==ordered_headers.len(){ reordered.push(old_vals.get(new_pos).cloned().unwrap_or_default()); } else { reordered.push(String::new()); }} rows_vec.push(reordered); }
+                            else { rows_vec.push(vec![String::new(); ordered_headers.len()]); }
+                        }
+                        _ => rows_vec.push(vec![String::new(); ordered_headers.len()])
+                    }
+                } else { rows_vec.push(vec![String::new(); ordered_headers.len()]); }
+                if rows_vec.len() == 1 { *cell = Value::Array(rows_vec.remove(0).into_iter().map(Value::String).collect()).to_string(); }
+                else { let outer: Vec<Value> = rows_vec.into_iter().map(|r| Value::Array(r.into_iter().map(Value::String).collect())).collect(); *cell = Value::Array(outer).to_string(); }
+            }
+        }
+    let parent_changed = parent_metadata.ensure_column_consistency();
+    if let Some(meta_clone) = parent_sheet.metadata.clone() { metas_to_save.push(meta_clone); }
         // Cascade event upward if parent itself is virtual (nested) and we changed it
         if parent_changed || !new_schema.is_empty() {
             if let Some(pmeta) = &parent_sheet.metadata { if pmeta.structure_parent.is_some() { pending.0.push((parent_cat.clone(), parent_sheet_name.clone())); } }
         }
+    }
+
+    // Perform saves after loop (no active mutable borrows besides &mut registry itself)
+    if !metas_to_save.is_empty() {
+        let reg_ref = registry.as_ref();
+        for meta in metas_to_save { save_single_sheet(reg_ref, &meta); }
     }
 }
 

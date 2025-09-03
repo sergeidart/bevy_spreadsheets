@@ -46,14 +46,16 @@ pub fn show_delete_mode_active_controls<'a, 'w>(
             .on_hover_text("Delete the selected rows and/or columns from the table")
             .clicked()
         {
-            if let Some(sheet_name) = &state.selected_sheet_name {
+            // Determine effective target sheet (virtual if structure view active)
+            let effective_sheet_name = if let Some(vctx) = state.virtual_structure_stack.last() { &vctx.virtual_sheet_name } else { state.selected_sheet_name.as_ref().unwrap() };
+            if state.selected_sheet_name.is_some() {
                 let mut actions_taken = false;
                 if rows_selected_count > 0 {
                     event_writers
                         .delete_rows_event_writer
                         .write(RequestDeleteRows {
                             category: state.selected_category.clone(),
-                            sheet_name: sheet_name.clone(),
+                            sheet_name: effective_sheet_name.clone(),
                             row_indices: state.ai_selected_rows.clone(),
                         });
                     actions_taken = true;
@@ -63,7 +65,7 @@ pub fn show_delete_mode_active_controls<'a, 'w>(
                         .delete_columns_event_writer
                         .write(RequestDeleteColumns {
                             category: state.selected_category.clone(),
-                            sheet_name: sheet_name.clone(),
+                            sheet_name: effective_sheet_name.clone(),
                             column_indices: state.selected_columns_for_deletion.clone(),
                         });
                     actions_taken = true;

@@ -11,6 +11,7 @@ use crate::{
 use bevy::prelude::*;
 use std::any;
 
+use crate::ui::elements::editor::state::{RowReview, NewRowReview, ReviewChoice}; // retained for batch result construction
 
 pub fn handle_ui_feedback(
     mut feedback_events: EventReader<SheetOperationFeedback>,
@@ -86,9 +87,16 @@ pub fn handle_ai_task_results(
                     }
                     row_buf
                 } else { suggestion.clone() };
-                state.ai_suggestions.insert(ev.original_row_index, expanded);
-                state.ai_per_row_included_columns.insert(ev.original_row_index, ev.included_non_structure_columns.clone());
-                state.ai_per_row_context_prefix_counts.insert(ev.original_row_index, ev.context_only_prefix_count);
+                // Convert single-row suggestion directly into snapshot model entry for consistency
+                let included = ev.included_non_structure_columns.clone();
+                let mut original_snapshot: Vec<String> = Vec::with_capacity(included.len());
+                let mut ai_snapshot: Vec<String> = Vec::with_capacity(included.len());
+                for (logical_i, _actual_col) in included.iter().enumerate() {
+                    original_snapshot.push(String::new()); // original unknown in this lightweight path
+                    ai_snapshot.push(expanded.get(logical_i).cloned().unwrap_or_default());
+                }
+                state.ai_row_reviews.push(RowReview { row_index: ev.original_row_index, original: original_snapshot, ai: ai_snapshot, choices: vec![ReviewChoice::AI; included.len()], non_structure_columns: included });
+                state.ai_batch_review_active = true;
             }
             Err(err_msg) => {
                 error!("  AI Task Failure for row {}: {}", ev.original_row_index, err_msg);
@@ -114,7 +122,7 @@ pub fn handle_ai_task_results(
         } else {
             error!("One or more AI tasks failed in this batch. Reverting to Preparing state.");
             state.ai_mode = AiModeState::Preparing; // Or Idle, depending on desired flow
-            state.ai_suggestions.clear(); // Clear any partial suggestions
+            state.ai_row_reviews.clear();
             // state.ai_raw_output_display will show the last error/raw output
         }
     }
@@ -228,6 +236,7 @@ pub fn apply_pending_structure_key_selection(
 pub fn handle_ai_batch_results(
     mut ev_batch: EventReader<AiBatchTaskResult>,
     mut state: ResMut<EditorWindowState>,
+    registry: Res<SheetRegistry>,
     mut feedback_writer: EventWriter<SheetOperationFeedback>,
 ) {
     if ev_batch.is_empty() { return; }
@@ -238,7 +247,7 @@ pub fn handle_ai_batch_results(
                 let originals = ev.original_row_indices.len();
                 if rows.len() < originals { feedback_writer.write(SheetOperationFeedback { message: format!("AI batch result malformed: returned {} rows but expected at least {}", rows.len(), originals), is_error: true }); continue; }
                 if let Some(raw) = &ev.raw_response { state.ai_raw_output_display = raw.clone(); }
-                for &row in &ev.original_row_indices { state.ai_suggestions.remove(&row); }
+                // Legacy ai_suggestions map removed
                 let (orig_slice, extra_slice) = rows.split_at(originals);
                 // Record prefix count so review UI can lock those cells
                 state.ai_context_only_prefix_count = ev.key_prefix_count;
@@ -254,15 +263,53 @@ pub fn handle_ai_batch_results(
                         }
                         row_buf
                     } else { suggestion.to_vec() };
-                    state.ai_suggestions.insert(row_index, expanded);
+                    // Legacy ai_suggestions map removed; data now embedded directly in RowReview below
                 }
                 // For new rows, also strip key prefix if present
-                state.ai_staged_new_rows = extra_slice.iter().map(|r| if ev.key_prefix_count > 0 && r.len() >= ev.key_prefix_count { r[ev.key_prefix_count..].to_vec() } else { r.clone() }).collect();
-                state.ai_staged_new_row_accept = vec![true; state.ai_staged_new_rows.len()];
-                state.ai_included_non_structure_columns = ev.included_non_structure_columns.clone();
+                // New rows processed directly into ai_new_row_reviews below
+
+                // Build new unified review model (dual snapshots) including structure placeholders
+                state.ai_row_reviews.clear();
+                state.ai_new_row_reviews.clear();
+                // Determine full column span needed (sheet metadata + included structure columns)
+                // We infer max column index from included_non_structure_columns; structure columns are everything not listed.
+                let included = ev.included_non_structure_columns.clone();
+                let (cat_ctx, sheet_ctx) = state.current_sheet_context();
+                // Build per-original row reviews
+                for (i, &row_index) in ev.original_row_indices.iter().enumerate() {
+                    let suggestion_full = &orig_slice[i];
+                    let suggestion = if ev.key_prefix_count > 0 && suggestion_full.len() >= ev.key_prefix_count { &suggestion_full[ev.key_prefix_count..] } else { suggestion_full };
+                    // Prepare original snapshot (editable subset only, but we keep Vec sized to included.len())
+                    let mut original_snapshot: Vec<String> = Vec::with_capacity(included.len());
+                    let mut ai_snapshot: Vec<String> = Vec::with_capacity(included.len());
+                    // Fetch original row from registry (non-structure columns only)
+                    let mut original_row_opt: Option<Vec<String>> = None;
+                    if let Some(sheet_name) = &sheet_ctx {
+                        if let Some(sheet_ref) = registry.get_sheet(&cat_ctx, sheet_name) { original_row_opt = sheet_ref.grid.get(row_index).cloned(); }
+                    }
+                    for (logical_i, actual_col) in included.iter().enumerate() {
+                        let orig_val = original_row_opt.as_ref().and_then(|r| r.get(*actual_col)).cloned().unwrap_or_default();
+                        original_snapshot.push(orig_val);
+                        let ai_val = suggestion.get(logical_i).cloned().unwrap_or_default();
+                        ai_snapshot.push(ai_val);
+                    }
+                    let choices = included.iter().enumerate().map(|(idx, _)| {
+                        // Default to AI only if different; else Original
+                        if original_snapshot.get(idx) != ai_snapshot.get(idx) { ReviewChoice::AI } else { ReviewChoice::Original }
+                    }).collect();
+                    state.ai_row_reviews.push(RowReview { row_index, original: original_snapshot, ai: ai_snapshot, choices, non_structure_columns: included.clone() });
+                }
+                // New rows: clone staging first to avoid borrow conflict, then map included indices
+                for new_row in extra_slice.iter() {
+                    let mut ai_snapshot: Vec<String> = Vec::with_capacity(included.len());
+                    for (logical_i, _actual_col) in included.iter().enumerate() {
+                        ai_snapshot.push(new_row.get(logical_i).cloned().unwrap_or_default());
+                    }
+                    state.ai_new_row_reviews.push(NewRowReview { ai: ai_snapshot, non_structure_columns: included.clone(), accept: true });
+                }
                 state.ai_batch_review_active = true;
                 state.ai_mode = AiModeState::ResultsReady;
-                info!("Processed AI batch result: {} originals, {} new rows", originals, state.ai_staged_new_rows.len());
+                info!("Processed AI batch result: {} originals, {} new rows", originals, state.ai_new_row_reviews.len());
             }
             Err(err) => {
                 if let Some(raw) = &ev.raw_response {

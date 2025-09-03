@@ -87,7 +87,14 @@ def execute_ai_query(api_key: str, payload_json: str) -> str:  # noqa: D401
             + ("You may append new rows after originals." if allow_row_additions and not legacy_single else "Do not add extra rows.")
             + " Row length must equal number of column contexts. No markdown fences."
         )
-        system_full = system_instruction + "\n" + ordering if system_instruction else ordering
+        grounded_search_instruction = (
+            "For each row, use Google Search to verify every provided value and update it with the latest reliable data you find. "
+            "If a value is missing or clearly outdated, search for it and fill it in. Prefer authoritative, recent sources. "
+            "Never invent facts: leave a cell blank if after searching you cannot find a credible value."
+        )
+        # Merge user system instruction (if any) with ordering + grounded search enforcement (avoid duplication if user already provided similar text)
+        base_instr = system_instruction + "\n" if system_instruction else ""
+        system_full = base_instr + ordering + "\n" + grounded_search_instruction
 
         contents = [
             genai.types.Content(role="model", parts=[genai.types.Part.from_text(text=system_full)]),
