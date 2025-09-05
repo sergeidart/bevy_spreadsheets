@@ -111,12 +111,15 @@ pub fn show_column_options_popup(
         }
 
         if actions_ok {
-            let filter_to_store: Option<String> =
-                if state.options_column_filter_input.trim().is_empty() {
-                    None
-                } else {
-                    Some(state.options_column_filter_input.trim().to_string())
-                };
+            // Build filter from multi-term list (ignore empties)
+            let joined_terms: String = state.options_column_filter_terms
+                .iter()
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+                .join("|");
+            state.options_column_filter_input = joined_terms.clone();
+            let filter_to_store: Option<String> = if joined_terms.is_empty() { None } else { Some(joined_terms) };
             let context_to_store: Option<String> =
                 if state.options_column_ai_context_input.trim().is_empty() {
                     None
@@ -254,6 +257,17 @@ fn initialize_popup_state(state: &mut EditorWindowState, registry: &SheetRegistr
         state.options_column_rename_input = col_def.header.clone();
         state.options_column_filter_input =
             col_def.filter.clone().unwrap_or_default();
+        // Initialize multi-term filter vector from stored filter (split by '|')
+        state.options_column_filter_terms = if state.options_column_filter_input.is_empty() {
+            vec![String::new()]
+        } else {
+            state.options_column_filter_input
+                .split('|')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect::<Vec<_>>()
+        };
+        if state.options_column_filter_terms.is_empty() { state.options_column_filter_terms.push(String::new()); }
         state.options_column_ai_context_input =
             col_def.ai_context.clone().unwrap_or_default(); 
 
@@ -317,7 +331,8 @@ fn initialize_popup_state(state: &mut EditorWindowState, registry: &SheetRegistr
             col_index, target_category, target_sheet
         );
         state.options_column_rename_input.clear();
-        state.options_column_filter_input.clear();
+    state.options_column_filter_input.clear();
+    state.options_column_filter_terms = vec![String::new()];
         state.options_column_ai_context_input.clear();
         state.options_validator_type = None; 
         state.options_link_target_sheet = None;

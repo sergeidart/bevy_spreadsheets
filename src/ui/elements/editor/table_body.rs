@@ -34,13 +34,22 @@ fn get_filtered_row_indices_internal(
             if let Some(row) = grid.get(row_idx) {
                 filters.iter().enumerate().all(|(col_idx, filter_opt)| {
                     match filter_opt {
-                        Some(filter_text) if !filter_text.is_empty() => row
-                            .get(col_idx)
-                            .map_or(false, |cell_text| {
-                                cell_text
-                                    .to_lowercase()
-                                    .contains(&filter_text.to_lowercase())
-                            }),
+                        Some(filter_text) if !filter_text.is_empty() => {
+                            // OR semantics across '|' separated terms (case-insensitive)
+                            let terms: Vec<&str> = filter_text
+                                .split('|')
+                                .map(|s| s.trim())
+                                .filter(|s| !s.is_empty())
+                                .collect();
+                            if terms.is_empty() { return true; }
+                            row.get(col_idx).map_or(false, |cell_text| {
+                                let cell_lower = cell_text.to_lowercase();
+                                terms.iter().any(|t| {
+                                    let term_lower = t.to_lowercase();
+                                    cell_lower.contains(&term_lower)
+                                })
+                            })
+                        }
                         _ => true,
                     }
                 })

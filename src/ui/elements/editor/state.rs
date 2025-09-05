@@ -69,6 +69,8 @@ pub struct EditorWindowState {
     pub column_options_popup_needs_init: bool,
     pub options_column_rename_input: String,
     pub options_column_filter_input: String,
+    // Multi-term OR filter terms (each term 'contains' OR). Joined when stored.
+    pub options_column_filter_terms: Vec<String>,
     pub options_column_ai_context_input: String,
     pub options_validator_type: Option<ValidatorTypeChoice>,
     pub options_basic_type_select: ColumnDataType,
@@ -186,6 +188,7 @@ impl Default for EditorWindowState {
             column_options_popup_needs_init: false,
             options_column_rename_input: String::new(),
             options_column_filter_input: String::new(),
+            options_column_filter_terms: vec![String::new()],
             options_column_ai_context_input: String::new(),
             options_validator_type: None,
             options_basic_type_select: ColumnDataType::String,

@@ -72,29 +72,38 @@ pub(super) fn show_column_options_window_ui(
             });
             ui.separator();
 
-            // --- Filter Section ---
-            ui.strong("Filter (Contains)");
-            ui.horizontal(|ui| {
-                ui.label("Text:");
-                let filter_resp = ui.add(
-                    egui::TextEdit::singleline(
-                        &mut state.options_column_filter_input,
-                    )
-                    .desired_width(150.0),
-                );
-                if filter_resp.lost_focus()
-                    && ui.input(|i| i.key_pressed(egui::Key::Enter))
-                {
-                    if is_validator_config_valid(state) {
-                        // Allow applying filter change even if name empty
-                        apply_clicked = true;
+            // --- Filter Section (Multi-term OR) ---
+            // Title now holds the hover hint (moved from button) per user request
+            let filter_title = ui.add(egui::Label::new(egui::RichText::new("Filter (OR)" ).strong()));
+            filter_title.on_hover_text("Rows pass if ANY term appears (case-insensitive). Empty disables filter.");
+            // Ensure at least one term
+            if state.options_column_filter_terms.is_empty() { state.options_column_filter_terms.push(String::new()); }
+            let mut to_remove: Vec<usize> = Vec::new();
+            for i in 0..state.options_column_filter_terms.len() {
+                ui.horizontal(|ui_h| {
+                    let resp = ui_h.add(
+                        egui::TextEdit::singleline(&mut state.options_column_filter_terms[i])
+                            .desired_width(150.0)
+                            .hint_text("contains fragment"),
+                    );
+                    if resp.lost_focus() && ui_h.input(|inp| inp.key_pressed(egui::Key::Enter)) {
+                        if is_validator_config_valid(state) { apply_clicked = true; }
                     }
-                }
-                if ui.button("Clear").clicked() {
-                    state.options_column_filter_input.clear();
-                }
+                    if i + 1 < state.options_column_filter_terms.len() && ui_h.small_button("x").on_hover_text("Remove").clicked() {
+                        to_remove.push(i);
+                    }
+                });
+            }
+            if !to_remove.is_empty() {
+                for idx in to_remove.into_iter().rev() { if idx < state.options_column_filter_terms.len() { state.options_column_filter_terms.remove(idx); } }
+                if state.options_column_filter_terms.is_empty() { state.options_column_filter_terms.push(String::new()); }
+            }
+            let need_new = state.options_column_filter_terms.last().map(|s| !s.is_empty()).unwrap_or(false);
+            if need_new && state.options_column_filter_terms.len() < 12 { state.options_column_filter_terms.push(String::new()); }
+            ui.horizontal(|ui_h| {
+                if ui_h.button("Clear All").clicked() { state.options_column_filter_terms = vec![String::new()]; }
             });
-            ui.small("Leave empty or clear to disable filter.");
+            ui.small("Empty terms ignored. Max 12. Stored as 'term1|term2|...'.");
             ui.separator();
 
             // --- NEW: AI Context Section ---

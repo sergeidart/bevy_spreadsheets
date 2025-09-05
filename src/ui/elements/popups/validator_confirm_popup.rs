@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use crate::ui::elements::editor::state::EditorWindowState;
 use crate::sheets::resources::SheetRegistry;
 use crate::sheets::events::{RequestUpdateColumnValidator, SheetOperationFeedback};
-use crate::sheets::definitions::{ColumnValidator, StructureFieldDefinition};
+use crate::sheets::definitions::ColumnValidator;
 
 // Build positional vector for a structure row according to ordered headers
 fn build_structure_positional_row(row: &Vec<String>, _headers: &[String], source_indices: &[usize]) -> Vec<String> {
@@ -43,44 +43,9 @@ pub fn show_validator_confirm_popup(
                     let structure_sources: Vec<usize> = state.options_structure_source_columns
                         .iter()
                         .filter_map(|o| *o)
-                        .filter(|idx| *idx != col_index)
-                        .collect();
+                        .collect(); // allow self column now
 
-                    if target_is_structure {
-                        // Pre-populate cells & copy metadata if converting to Structure
-                        if let Some(sheet_data) = registry.get_sheet_mut(&cat, &sheet) {
-                            if let Some(meta) = &mut sheet_data.metadata {
-                                if col_index < meta.columns.len() {
-                                    meta.columns[col_index].validator = Some(ColumnValidator::Structure);
-                                    let mut seen = std::collections::HashSet::new();
-                                    let mut field_defs: Vec<StructureFieldDefinition> = Vec::new();
-                                    let mut effective_sources: Vec<usize> = Vec::new();
-                                    for src in structure_sources.iter().copied() {
-                                        if seen.insert(src) {
-                                            if let Some(src_col) = meta.columns.get(src) {
-                                                field_defs.push(StructureFieldDefinition::from(src_col));
-                                                effective_sources.push(src);
-                                            }
-                                        }
-                                    }
-                                    let key_parent_col = state.options_structure_key_parent_column_temp;
-                                    let col_mut = &mut meta.columns[col_index];
-                                    col_mut.structure_schema = Some(field_defs.clone());
-                                    col_mut.structure_column_order = Some((0..field_defs.len()).collect());
-                                    col_mut.structure_key_parent_column_index = key_parent_col;
-                                    col_mut.structure_ancestor_key_parent_column_indices = Some(Vec::new());
-                                    state.pending_structure_key_apply = Some((state.options_column_target_category.clone(), state.options_column_target_sheet.clone(), col_index, key_parent_col));
-                                    for row in sheet_data.grid.iter_mut() {
-                                        if row.len() <= col_index { row.resize(col_index+1, String::new()); }
-                                        if effective_sources.is_empty() { row[col_index] = "[]".to_string(); } else {
-                                            let arr = build_structure_positional_row(row, &[], &effective_sources);
-                                            row[col_index] = serde_json::Value::Array(arr.into_iter().map(serde_json::Value::String).collect()).to_string();
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } else {
+                    if !target_is_structure {
                         // Reverting away from structure: keep current text but clear validator (actual flattening handled in system)
                         if let Some(sheet_data) = registry.get_sheet_mut(&cat, &sheet) {
                             if let Some(meta) = &mut sheet_data.metadata { if col_index < meta.columns.len() { meta.columns[col_index].validator = None; } }
@@ -88,10 +53,17 @@ pub fn show_validator_confirm_popup(
                     }
 
                     if let (Some(vw), true) = (validator_writer.as_deref_mut(), true) {
+                        // Capture original validator BEFORE conversion for self inclusion fix
+                        let original_self_validator = registry.get_sheet(&cat, &sheet)
+                            .and_then(|s| s.metadata.as_ref())
+                            .and_then(|m| m.columns.get(col_index))
+                            .and_then(|c| c.validator.clone());
                         vw.write(RequestUpdateColumnValidator {
                             category: cat.clone(), sheet_name: sheet.clone(), column_index: col_index,
                             new_validator: if target_is_structure { Some(ColumnValidator::Structure) } else { None },
                             structure_source_columns: if target_is_structure && !structure_sources.is_empty() { Some(structure_sources.clone()) } else { None },
+                            key_parent_column_index: if target_is_structure { state.options_structure_key_parent_column_temp } else { None },
+                            original_self_validator,
                         });
                     }
                     if let Some(fw) = feedback_writer.as_deref_mut() {

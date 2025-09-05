@@ -103,9 +103,13 @@ pub fn handle_update_column_validator(
                     continue;
                 }
 
-                // Work with a temporary snapshot to avoid overlapping borrows
-                let old_validator = meta_mut.columns[col_index].validator.clone();
+                // Snapshot old column definition & cell values before mutating (needed if self is included as source)
+                let old_col_def_snapshot = meta_mut.columns[col_index].clone();
+                let old_validator = old_col_def_snapshot.validator.clone();
                 let old_was_structure = matches!(old_validator, Some(ColumnValidator::Structure));
+                let old_self_cells: Vec<String> = sheet_data_mut.grid.iter()
+                    .map(|row| row.get(col_index).cloned().unwrap_or_default())
+                    .collect();
                 meta_mut.columns[col_index].validator = new_validator_opt.clone();
                 // Derive data type
                 let derived_type = match &meta_mut.columns[col_index].validator {
@@ -146,27 +150,57 @@ pub fn handle_update_column_validator(
                             // Pre-collect source column definitions to avoid borrowing meta_mut during mutation loop
                             let mut seen = std::collections::HashSet::new();
                             let mut collected_defs: Vec<StructureFieldDefinition> = Vec::new();
-                            let mut effective_sources: Vec<usize> = Vec::new();
-                            {
-                                let columns_snapshot = meta_mut.columns.clone();
-                                for src in sources.iter().copied() {
-                                    if src == col_index { continue; }
-                                    if seen.insert(src) {
-                                        if let Some(src_col) = columns_snapshot.get(src) {
-                                            collected_defs.push(StructureFieldDefinition::from(src_col));
-                                            effective_sources.push(src);
+                            // (src_index, is_self)
+                            let mut value_sources: Vec<(usize, bool)> = Vec::new();
+                            let columns_snapshot = meta_mut.columns.clone();
+                            for src in sources.iter().copied() {
+                                if seen.insert(src) {
+                                    if src == col_index {
+                                        // Use old column definition (pre-conversion) so inner field reflects old Basic/Linked type
+                                        let mut def = StructureFieldDefinition::from(&old_col_def_snapshot);
+                                        // If UI supplied explicit original validator, prefer it (old_col_def_snapshot might already be Structure if premature mutation elsewhere)
+                                        if let Some(orig) = event.original_self_validator.clone() {
+                                            def.validator = Some(orig.clone());
+                                            def.data_type = match orig {
+                                                ColumnValidator::Basic(t) => t,
+                                                ColumnValidator::Linked { .. } => ColumnDataType::String,
+                                                ColumnValidator::Structure => ColumnDataType::String,
+                                            };
                                         }
+                                        // Never allow nested structure-of-structure for the self snapshot: if validator still Structure downgrade to String basic
+                                        if matches!(def.validator, Some(ColumnValidator::Structure)) {
+                                            def.validator = Some(ColumnValidator::Basic(ColumnDataType::String));
+                                            def.data_type = ColumnDataType::String;
+                                        }
+                                        collected_defs.push(def);
+                                        value_sources.push((src, true));
+                                    } else if let Some(src_col) = columns_snapshot.get(src) {
+                                        collected_defs.push(StructureFieldDefinition::from(src_col));
+                                        value_sources.push((src, false));
                                     }
                                 }
                             }
                             meta_mut.columns[col_index].structure_schema = Some(collected_defs.clone());
                             meta_mut.columns[col_index].structure_column_order = Some((0..collected_defs.len()).collect());
-                            for row in sheet_data_mut.grid.iter_mut() {
+                            if meta_mut.columns[col_index].structure_key_parent_column_index.is_none() {
+                                if let Some(k) = event.key_parent_column_index { meta_mut.columns[col_index].structure_key_parent_column_index = Some(k); }
+                            }
+                            for (row_idx, row) in sheet_data_mut.grid.iter_mut().enumerate() {
                                 if row.len() <= col_index { row.resize(col_index + 1, String::new()); }
-                                if effective_sources.is_empty() { row[col_index] = "[]".to_string(); } else {
-                                    let vec_vals: Vec<Value> = effective_sources.iter().map(|src_idx| {
-                                        row.get(*src_idx).map(|s| Value::String(s.clone())).unwrap_or(Value::String(String::new()))
-                                    }).collect();
+                                if value_sources.is_empty() {
+                                    row[col_index] = "[]".to_string();
+                                } else {
+                                    let mut vec_vals: Vec<Value> = Vec::with_capacity(value_sources.len());
+                                    for (src_idx, is_self) in value_sources.iter() {
+                                        if *is_self {
+                                            // Use pre-conversion cell value
+                                            let val = old_self_cells.get(row_idx).cloned().unwrap_or_default();
+                                            vec_vals.push(Value::String(val));
+                                        } else {
+                                            let val = row.get(*src_idx).cloned().unwrap_or_default();
+                                            vec_vals.push(Value::String(val));
+                                        }
+                                    }
                                     row[col_index] = Value::Array(vec_vals).to_string();
                                 }
                             }

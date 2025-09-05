@@ -103,6 +103,10 @@ pub struct RequestUpdateColumnValidator {
     pub new_validator: Option<ColumnValidator>,
     // NEW: Source column indices to snapshot into structure cells when converting to Structure
     pub structure_source_columns: Option<Vec<usize>>,
+    // NEW: Optional key parent column index captured at initial structure creation
+    pub key_parent_column_index: Option<usize>,
+    // NEW: Original validator of the target column BEFORE switching to Structure (for self-inclusion case)
+    pub original_self_validator: Option<ColumnValidator>,
 }
 
 #[derive(Event, Debug, Clone)]
