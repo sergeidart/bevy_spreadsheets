@@ -10,9 +10,9 @@ use crate::sheets::definitions::{
 #[derive(serde::Serialize, serde::Deserialize, Debug, Default)]
 pub struct ExampleItem {
     pub id: String,
-    pub name: Option<String>,
-    pub value: i32,
-    pub cost: Option<f32>,
+    pub name: String,
+    pub value: i64,
+    pub cost: f64,
     pub enabled: bool,
 }
 
@@ -20,16 +20,16 @@ const EXAMPLE_ITEMS_SHEET_NAME: &str = "ExampleItems";
 const EXAMPLE_ITEMS_FILENAME: &str = "ExampleItems.json";
 const EXAMPLE_ITEMS_COLUMN_TYPES: &[ColumnDataType] = &[
     ColumnDataType::String,
-    ColumnDataType::OptionString,
-    ColumnDataType::I32,
-    ColumnDataType::OptionF32,
+    ColumnDataType::String,
+    ColumnDataType::I64,
+    ColumnDataType::F64,
     ColumnDataType::Bool,
 ];
 const EXAMPLE_ITEMS_HEADERS: &[&str] = &[
     "ID",
-    "Optional Name",
-    "Value (i32)",
-    "Optional Cost (f32)",
+    "Name",
+    "Value (int)",
+    "Cost (float)",
     "Enabled (bool)",
 ];
 
@@ -70,13 +70,13 @@ pub fn create_example_items_metadata() -> SheetMetadata {
 
 const SIMPLE_CONFIG_SHEET_NAME: &str = "SimpleConfig";
 const SIMPLE_CONFIG_FILENAME: &str = "SimpleConfig.json";
-const SIMPLE_CONFIG_COLUMN_TYPES: &[ColumnDataType] = &[
+const SIMPLE_CONFIG_COLUMN_TYPES: &[ColumnDataType] = &[ 
     ColumnDataType::String,
     ColumnDataType::String,
-    ColumnDataType::OptionU16,
+    ColumnDataType::I64,
 ];
 const SIMPLE_CONFIG_HEADERS: &[&str] =
-    &["Setting Key", "Setting Value", "Priority (Optional u16)"];
+    &["Setting Key", "Setting Value", "Priority (int)"];
 
 pub fn create_simple_config_metadata() -> SheetMetadata {
     let num_cols = SIMPLE_CONFIG_HEADERS.len();

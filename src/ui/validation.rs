@@ -27,52 +27,23 @@ pub(crate) fn validate_basic_cell(
     current_cell_string: &str,
     basic_type: ColumnDataType,
 ) -> (ValidationState, bool) { // Return type is ValidationState
-    let is_option_type = matches!(
-        basic_type,
-        ColumnDataType::OptionString | ColumnDataType::OptionBool |
-        ColumnDataType::OptionU8 | ColumnDataType::OptionU16 | ColumnDataType::OptionU32 | ColumnDataType::OptionU64 |
-        ColumnDataType::OptionI8 | ColumnDataType::OptionI16 | ColumnDataType::OptionI32 | ColumnDataType::OptionI64 |
-        ColumnDataType::OptionF32 | ColumnDataType::OptionF64
-    );
-
     if current_cell_string.is_empty() {
-        let state = if is_option_type || matches!(basic_type, ColumnDataType::String | ColumnDataType::OptionString) {
-            ValidationState::Empty // Valid but empty
+        let state = if matches!(basic_type, ColumnDataType::String) {
+            ValidationState::Empty // empty string allowed only for String columns
         } else {
-            ValidationState::Invalid // Empty but not allowed
+            ValidationState::Invalid
         };
-        return (state, false); // No parse error for empty string itself
+        return (state, false);
     }
 
     let mut parse_error = false;
     match basic_type {
-        ColumnDataType::String | ColumnDataType::OptionString => {}
+    ColumnDataType::String => {}
         ColumnDataType::Bool => {
              if !matches!(current_cell_string.to_lowercase().as_str(), "true" | "1" | "false" | "0") { parse_error = true; }
         }
-        ColumnDataType::OptionBool => {
-             if !matches!(current_cell_string.to_lowercase().as_str(), "true" | "1" | "false" | "0") { parse_error = true; }
-        }
-        ColumnDataType::U8 => { if current_cell_string.parse::<u8>().is_err() { parse_error = true; } },
-        ColumnDataType::OptionU8 => { if current_cell_string.parse::<u8>().is_err() { parse_error = true; } },
-        ColumnDataType::U16 => { if current_cell_string.parse::<u16>().is_err() { parse_error = true; } },
-        ColumnDataType::OptionU16 => { if current_cell_string.parse::<u16>().is_err() { parse_error = true; } },
-        ColumnDataType::U32 => { if current_cell_string.parse::<u32>().is_err() { parse_error = true; } },
-        ColumnDataType::OptionU32 => { if current_cell_string.parse::<u32>().is_err() { parse_error = true; } },
-        ColumnDataType::U64 => { if current_cell_string.parse::<u64>().is_err() { parse_error = true; } },
-        ColumnDataType::OptionU64 => { if current_cell_string.parse::<u64>().is_err() { parse_error = true; } },
-        ColumnDataType::I8 => { if current_cell_string.parse::<i8>().is_err() { parse_error = true; } },
-        ColumnDataType::OptionI8 => { if current_cell_string.parse::<i8>().is_err() { parse_error = true; } },
-        ColumnDataType::I16 => { if current_cell_string.parse::<i16>().is_err() { parse_error = true; } },
-        ColumnDataType::OptionI16 => { if current_cell_string.parse::<i16>().is_err() { parse_error = true; } },
-        ColumnDataType::I32 => { if current_cell_string.parse::<i32>().is_err() { parse_error = true; } },
-        ColumnDataType::OptionI32 => { if current_cell_string.parse::<i32>().is_err() { parse_error = true; } },
         ColumnDataType::I64 => { if current_cell_string.parse::<i64>().is_err() { parse_error = true; } },
-        ColumnDataType::OptionI64 => { if current_cell_string.parse::<i64>().is_err() { parse_error = true; } },
-        ColumnDataType::F32 => { if current_cell_string.parse::<f32>().is_err() { parse_error = true; } },
-        ColumnDataType::OptionF32 => { if current_cell_string.parse::<f32>().is_err() { parse_error = true; } },
         ColumnDataType::F64 => { if current_cell_string.parse::<f64>().is_err() { parse_error = true; } },
-        ColumnDataType::OptionF64 => { if current_cell_string.parse::<f64>().is_err() { parse_error = true; } },
     }
 
 

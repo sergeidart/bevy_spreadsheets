@@ -13,7 +13,7 @@ use crate::ui::elements::editor::state::EditorWindowState;
 use crate::ui::validation::ValidationState; // Keep for enum access
 use crate::ui::widgets::handle_linked_column_edit;
 use crate::ui::widgets::linked_column_cache::{self, CacheResult};
-use crate::ui::widgets::option_widgets::{ui_option_bool, ui_option_numerical};
+// Option widgets removed
 
 /// Renders interactive UI for editing a single cell based on its validator.
 /// Handles displaying the appropriate widget and visual validation state.
@@ -118,22 +118,7 @@ pub fn edit_cell_widget(
                         }
                     };
                 }
-                macro_rules! handle_option_numeric {
-                     ($ui:ident, $T:ty, $id_suffix:expr) => {
-                        {
-                            let mut value_for_widget: Option<$T> = if current_display_text.is_empty() {
-                                None
-                            } else {
-                                current_display_text.parse().ok()
-                            };
-                            let (changed, resp) = ui_option_numerical($ui, id.with($id_suffix), &mut value_for_widget);
-                            if changed {
-                                temp_new_value = Some(value_for_widget.map_or_else(String::new, |v| v.to_string()));
-                            }
-                            response_opt = Some(resp);
-                        }
-                     };
-                }
+                // Option<T> support removed
 
                 widget_ui.vertical_centered(|centered_widget_ui| {
                     match validator_opt {
@@ -167,9 +152,9 @@ pub fn edit_cell_widget(
                                 );
                             }
                         }
-                        Some(ColumnValidator::Basic(_)) | None => { // Basic or No Validator
+            Some(ColumnValidator::Basic(_)) | None => { // Basic or No Validator
                             match basic_type {
-                                ColumnDataType::String | ColumnDataType::OptionString => {
+                ColumnDataType::String => {
                                     let mut temp_string = current_display_text.to_string();
                                     let resp = centered_widget_ui.add_sized(
                                         centered_widget_ui.available_size(),
@@ -188,39 +173,8 @@ pub fn edit_cell_widget(
                                     }
                                     response_opt = Some(resp);
                                 }
-                                ColumnDataType::OptionBool => {
-                                     let mut value_for_widget: Option<bool> = match current_display_text.to_lowercase().as_str() {
-                                        "" => None,
-                                        "true" | "1" => Some(true),
-                                        "false" | "0" => Some(false),
-                                        _ => None,
-                                    };
-                                    let (changed, resp) = ui_option_bool(centered_widget_ui, id.with("opt_bool"), &mut value_for_widget);
-                                    if changed {
-                                        temp_new_value = Some(value_for_widget.map_or_else(String::new, |v| v.to_string()));
-                                    }
-                                    response_opt = Some(resp);
-                                }
-                                ColumnDataType::U8 => { handle_numeric!(centered_widget_ui, u8, "u8", 0, 1.0) },
-                                ColumnDataType::OptionU8 => { handle_option_numeric!(centered_widget_ui, u8, "opt_u8") },
-                                ColumnDataType::U16 => { handle_numeric!(centered_widget_ui, u16, "u16", 0, 1.0) },
-                                ColumnDataType::OptionU16 => { handle_option_numeric!(centered_widget_ui, u16, "opt_u16") },
-                                ColumnDataType::U32 => { handle_numeric!(centered_widget_ui, u32, "u32", 0, 1.0) },
-                                ColumnDataType::OptionU32 => { handle_option_numeric!(centered_widget_ui, u32, "opt_u32") },
-                                ColumnDataType::U64 => { handle_numeric!(centered_widget_ui, u64, "u64", 0, 1.0) },
-                                ColumnDataType::OptionU64 => { handle_option_numeric!(centered_widget_ui, u64, "opt_u64") },
-                                ColumnDataType::I8 => { handle_numeric!(centered_widget_ui, i8, "i8", 0, 1.0) },
-                                ColumnDataType::OptionI8 => { handle_option_numeric!(centered_widget_ui, i8, "opt_i8") },
-                                ColumnDataType::I16 => { handle_numeric!(centered_widget_ui, i16, "i16", 0, 1.0) },
-                                ColumnDataType::OptionI16 => { handle_option_numeric!(centered_widget_ui, i16, "opt_i16") },
-                                ColumnDataType::I32 => { handle_numeric!(centered_widget_ui, i32, "i32", 0, 1.0) },
-                                ColumnDataType::OptionI32 => { handle_option_numeric!(centered_widget_ui, i32, "opt_i32") },
                                 ColumnDataType::I64 => { handle_numeric!(centered_widget_ui, i64, "i64", 0, 1.0) },
-                                ColumnDataType::OptionI64 => { handle_option_numeric!(centered_widget_ui, i64, "opt_i64") },
-                                ColumnDataType::F32 => { handle_numeric!(centered_widget_ui, f32, "f32", 0.0, 0.1) },
-                                ColumnDataType::OptionF32 => { handle_option_numeric!(centered_widget_ui, f32, "opt_f32") },
                                 ColumnDataType::F64 => { handle_numeric!(centered_widget_ui, f64, "f64", 0.0, 0.1) },
-                                ColumnDataType::OptionF64 => { handle_option_numeric!(centered_widget_ui, f64, "opt_f64") },
                             }
                         }
                         Some(ColumnValidator::Structure) => {

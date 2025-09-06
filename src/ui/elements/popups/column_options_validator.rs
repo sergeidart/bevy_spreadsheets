@@ -62,29 +62,9 @@ pub(super) fn show_validator_section(
                             use ColumnDataType::*;
                             let all_types = [
                                 String,
-                                OptionString,
                                 Bool,
-                                OptionBool,
-                                U8,
-                                OptionU8,
-                                U16,
-                                OptionU16,
-                                U32,
-                                OptionU32,
-                                U64,
-                                OptionU64,
-                                I8,
-                                OptionI8,
-                                I16,
-                                OptionI16,
-                                I32,
-                                OptionI32,
                                 I64,
-                                OptionI64,
-                                F32,
-                                OptionF32,
                                 F64,
-                                OptionF64,
                             ];
                             for t in all_types.iter() {
                                 ui.selectable_value(&mut state.options_basic_type_select, *t, format!("{:?}", t));

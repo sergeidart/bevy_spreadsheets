@@ -4,7 +4,7 @@
 pub(crate) mod linked_column_cache;
 pub(crate) mod linked_column_handler;
 pub(crate) mod linked_column_visualization;
-pub(crate) mod option_widgets; // <-- ADDED option widgets module
+// Option widgets removed along with Option<T> column types
 
 // Re-export the main handler function to be used by common.rs
 pub(crate) use linked_column_handler::handle_linked_column_edit;

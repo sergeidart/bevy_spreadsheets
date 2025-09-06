@@ -355,30 +355,19 @@ mod orchestrator {
                                         .unwrap_or(crate::sheets::definitions::ColumnDataType::String);
                                     let col_index = state.summarizer_selected_col;
                                     match dtype {
-                                        crate::sheets::definitions::ColumnDataType::String | crate::sheets::definitions::ColumnDataType::OptionString => {
+                                        crate::sheets::definitions::ColumnDataType::String => {
                                             let count = sheet.grid.iter().filter_map(|row| row.get(col_index)).filter(|v| !v.trim().is_empty()).count();
                                             state.summarizer_last_result = format!("Count: {}", count);
                                         }
-                                        crate::sheets::definitions::ColumnDataType::Bool | crate::sheets::definitions::ColumnDataType::OptionBool => {
+                                        crate::sheets::definitions::ColumnDataType::Bool => {
                                             let (t,f) = sheet.grid.iter().filter_map(|row| row.get(col_index)).filter(|v| !v.trim().is_empty()).fold((0usize,0usize), |acc, v| { let vl = v.to_ascii_lowercase(); if vl=="true" || vl=="1" { (acc.0+1, acc.1) } else { (acc.0, acc.1+1) } });
                                             state.summarizer_last_result = format!("Bool Count -> true: {}, false: {}", t, f);
                                         }
-                                        crate::sheets::definitions::ColumnDataType::U8 | crate::sheets::definitions::ColumnDataType::OptionU8 |
-                                        crate::sheets::definitions::ColumnDataType::U16 | crate::sheets::definitions::ColumnDataType::OptionU16 |
-                                        crate::sheets::definitions::ColumnDataType::U32 | crate::sheets::definitions::ColumnDataType::OptionU32 |
-                                        crate::sheets::definitions::ColumnDataType::U64 | crate::sheets::definitions::ColumnDataType::OptionU64 => {
-                                            let mut sum:u128=0; let mut count=0; let mut invalid=0; for row in &sheet.grid { if let Some(val)=row.get(col_index) { if val.trim().is_empty() {continue;} match val.parse::<u128>() { Ok(v)=>{sum+=v; count+=1;}, Err(_)=>invalid+=1 } } }
-                                            state.summarizer_last_result = format!("Sum: {} (values: {}, invalid: {})", sum, count, invalid);
-                                        }
-                                        crate::sheets::definitions::ColumnDataType::I8 | crate::sheets::definitions::ColumnDataType::OptionI8 |
-                                        crate::sheets::definitions::ColumnDataType::I16 | crate::sheets::definitions::ColumnDataType::OptionI16 |
-                                        crate::sheets::definitions::ColumnDataType::I32 | crate::sheets::definitions::ColumnDataType::OptionI32 |
-                                        crate::sheets::definitions::ColumnDataType::I64 | crate::sheets::definitions::ColumnDataType::OptionI64 => {
+                                        crate::sheets::definitions::ColumnDataType::I64 => {
                                             let mut sum:i128=0; let mut count=0; let mut invalid=0; for row in &sheet.grid { if let Some(val)=row.get(col_index) { if val.trim().is_empty(){continue;} match val.parse::<i128>() { Ok(v)=>{sum+=v; count+=1;}, Err(_)=>invalid+=1 } } }
                                             state.summarizer_last_result = format!("Sum: {} (values: {}, invalid: {})", sum, count, invalid);
                                         }
-                                        crate::sheets::definitions::ColumnDataType::F32 | crate::sheets::definitions::ColumnDataType::OptionF32 |
-                                        crate::sheets::definitions::ColumnDataType::F64 | crate::sheets::definitions::ColumnDataType::OptionF64 => {
+                                        crate::sheets::definitions::ColumnDataType::F64 => {
                                             let mut sum:f64=0.0; let mut count=0; let mut invalid=0; for row in &sheet.grid { if let Some(val)=row.get(col_index) { if val.trim().is_empty(){continue;} match val.parse::<f64>() { Ok(v)=>{sum+=v; count+=1;}, Err(_)=>invalid+=1 } } }
                                             state.summarizer_last_result = format!("Sum: {:.4} (values: {}, invalid: {})", sum, count, invalid);
                                         }
