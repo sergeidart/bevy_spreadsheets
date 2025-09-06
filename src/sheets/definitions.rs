@@ -172,6 +172,13 @@ pub struct StructureFieldDefinition {
     pub width: Option<f32>,
     #[serde(default)]
     pub structure_schema: Option<Vec<StructureFieldDefinition>>,
+    // NEW: Persist nested structure metadata for deeper levels
+    #[serde(default)]
+    pub structure_column_order: Option<Vec<usize>>,
+    #[serde(default)]
+    pub structure_key_parent_column_index: Option<usize>,
+    #[serde(default)]
+    pub structure_ancestor_key_parent_column_indices: Option<Vec<usize>>,
 }
 
 impl From<&ColumnDefinition> for StructureFieldDefinition {
@@ -184,6 +191,9 @@ impl From<&ColumnDefinition> for StructureFieldDefinition {
             ai_context: c.ai_context.clone(),
             width: None,
             structure_schema: c.structure_schema.clone(),
+            structure_column_order: c.structure_column_order.clone(),
+            structure_key_parent_column_index: c.structure_key_parent_column_index,
+            structure_ancestor_key_parent_column_indices: c.structure_ancestor_key_parent_column_indices.clone(),
         }
     }
 }

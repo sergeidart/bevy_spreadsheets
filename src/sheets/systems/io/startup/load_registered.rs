@@ -236,7 +236,18 @@ fn load_and_update_single_sheet_entry(
                         if let Ok(val) = serde_json::from_str::<serde_json::Value>(cell) {
                             if let serde_json::Value::Array(arr) = val {
                                 if let Some(serde_json::Value::Array(inner)) = arr.first() {
-                                    col.structure_schema = Some(inner.iter().enumerate().map(|(i, _)| StructureFieldDefinition { header: format!("Field{}", i+1), validator: Some(ColumnValidator::Basic(ColumnDataType::String)), data_type: ColumnDataType::String, filter: None, ai_context: None, width: None, structure_schema: None }).collect());
+                                    col.structure_schema = Some(inner.iter().enumerate().map(|(i, _)| StructureFieldDefinition {
+                                        header: format!("Field{}", i+1),
+                                        validator: Some(ColumnValidator::Basic(ColumnDataType::String)),
+                                        data_type: ColumnDataType::String,
+                                        filter: None,
+                                        ai_context: None,
+                                        width: None,
+                                        structure_schema: None,
+                                        structure_column_order: None,
+                                        structure_key_parent_column_index: None,
+                                        structure_ancestor_key_parent_column_indices: None,
+                                    }).collect());
                                     col.structure_column_order = col.structure_schema.as_ref().map(|s| (0..s.len()).collect());
                                     changed_local = true;
                                 }
@@ -292,6 +303,9 @@ fn derive_schema_from_cells(grid: &Vec<Vec<String>>, col_index: usize) -> Option
                 ai_context: None,
                 width: Some(140.0),
                 structure_schema: None,
+                structure_column_order: None,
+                structure_key_parent_column_index: None,
+                structure_ancestor_key_parent_column_indices: None,
             }).collect();
             if !fields.is_empty() { return Some(fields); }
         }

@@ -116,10 +116,11 @@ pub fn handle_open_structure_view(
                                         filter: def.filter.clone(),
                                         width: None,
                                         ai_context: def.ai_context.clone(),
-                                        structure_schema: None, // Avoid propagating nested schema inline
-                                        structure_column_order: None,
-                                        structure_key_parent_column_index: None,
-                                        structure_ancestor_key_parent_column_indices: None,
+                                        // Preserve deeper-level nested schemas & key metadata so that deeper levels persist and render consistently
+                                        structure_schema: def.structure_schema.clone(),
+                                        structure_column_order: def.structure_column_order.clone(),
+                                        structure_key_parent_column_index: def.structure_key_parent_column_index,
+                                        structure_ancestor_key_parent_column_indices: def.structure_ancestor_key_parent_column_indices.clone(),
                                     };
                                 }
                             }

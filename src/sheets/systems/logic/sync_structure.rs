@@ -39,6 +39,9 @@ pub fn handle_sync_virtual_structure_sheet(
             ai_context: c.ai_context.clone(),
             width: c.width,
             structure_schema: c.structure_schema.clone(),
+            structure_column_order: c.structure_column_order.clone(),
+            structure_key_parent_column_index: c.structure_key_parent_column_index,
+            structure_ancestor_key_parent_column_indices: c.structure_ancestor_key_parent_column_indices.clone(),
         }).collect();
 
         // Fetch parent sheet mutably later; store intent now to avoid double borrow
@@ -73,6 +76,9 @@ pub fn handle_sync_virtual_structure_sheet(
             ai_context: c.ai_context.clone(),
             width: c.width,
             structure_schema: c.structure_schema.clone(),
+            structure_column_order: c.structure_column_order.clone(),
+            structure_key_parent_column_index: c.structure_key_parent_column_index,
+            structure_ancestor_key_parent_column_indices: c.structure_ancestor_key_parent_column_indices.clone(),
         }).collect();
     // Maintain inline mirror for user visibility / persistence preferences
     parent_col.structure_schema = Some(new_schema.clone());

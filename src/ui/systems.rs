@@ -201,6 +201,20 @@ pub fn apply_pending_structure_key_selection(
                 root_parent_link = meta.structure_parent.clone();
             }
         }
+        // If this sheet is a virtual sheet (has structure_parent), also mirror the key selection into the parent's structure schema field
+        if let Some(parent_link) = &root_parent_link {
+            if let Some(parent_sheet) = registry.get_sheet_mut(&parent_link.parent_category, &parent_link.parent_sheet) {
+                if let Some(parent_meta) = &mut parent_sheet.metadata {
+                    if let Some(parent_col) = parent_meta.columns.get_mut(parent_link.parent_column_index) {
+                        if let Some(fields) = parent_col.structure_schema.as_mut() {
+                            if let Some(field) = fields.get_mut(structure_col_index) {
+                                field.structure_key_parent_column_index = new_key_opt;
+                            }
+                        }
+                    }
+                }
+            }
+        }
         let mut collected: Vec<usize> = Vec::new();
         let mut current_parent = root_parent_link;
         let mut safety = 0;

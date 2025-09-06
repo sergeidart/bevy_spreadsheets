@@ -238,8 +238,7 @@ pub fn show_column_options_popup(
         || ui_result.close_via_x;
 
     if should_close {
-        let registry_immut = &*registry; 
-        handle_on_close(state, registry_immut, needs_manual_save);
+    handle_on_close(state, registry, needs_manual_save);
     }
 }
 
@@ -248,12 +247,44 @@ fn initialize_popup_state(state: &mut EditorWindowState, registry: &SheetRegistr
     let target_sheet = &state.options_column_target_sheet;
     let col_index = state.options_column_target_index;
 
-    let column_def_opt = registry
-        .get_sheet(target_category, target_sheet)
-        .and_then(|s| s.metadata.as_ref())
-        .and_then(|m| m.columns.get(col_index));
+    // If target is a virtual sheet, try to resolve its parent field definition for consistent editing
+    let (column_def_opt, parent_field_opt) = {
+        let sheet_opt = registry.get_sheet(target_category, target_sheet);
+        if let Some(s) = sheet_opt {
+            if let Some(m) = &s.metadata {
+                let col = m.columns.get(col_index);
+                if m.structure_parent.is_some() {
+                    let parent = m.structure_parent.as_ref().unwrap();
+                    if let Some(p_sheet) = registry.get_sheet(&parent.parent_category, &parent.parent_sheet) {
+                        if let Some(p_meta) = &p_sheet.metadata {
+                            if let Some(p_col) = p_meta.columns.get(parent.parent_column_index) {
+                                let field = p_col.structure_schema.as_ref().and_then(|fields| fields.get(col_index)).cloned();
+                                (col, field)
+                            } else { (col, None) }
+                        } else { (col, None) }
+                    } else { (col, None) }
+                } else { (col, None) }
+            } else { (None, None) }
+        } else { (None, None) }
+    };
 
-    if let Some(col_def) = column_def_opt {
+    // Prefer real column_def; else synthesize from parent field definition for initialization
+    let synthesized_from_parent: Option<crate::sheets::definitions::ColumnDefinition> = parent_field_opt.as_ref().map(|f| crate::sheets::definitions::ColumnDefinition {
+        header: f.header.clone(),
+        validator: f.validator.clone(),
+        data_type: f.data_type,
+        filter: f.filter.clone(),
+        ai_context: f.ai_context.clone(),
+        width: None,
+        structure_schema: f.structure_schema.clone(),
+        structure_column_order: f.structure_column_order.clone(),
+        structure_key_parent_column_index: f.structure_key_parent_column_index,
+        structure_ancestor_key_parent_column_indices: f.structure_ancestor_key_parent_column_indices.clone(),
+    });
+    let col_def_owned;
+    let col_def_ref: &crate::sheets::definitions::ColumnDefinition = if let Some(cd) = column_def_opt { cd } else if let Some(synth) = synthesized_from_parent.as_ref() { col_def_owned = synth.clone(); &col_def_owned } else { None.expect("unreachable") };
+    if let Some(_guard) = Some(()) {
+        let col_def = col_def_ref;
         state.options_column_rename_input = col_def.header.clone();
         state.options_column_filter_input =
             col_def.filter.clone().unwrap_or_default();
@@ -271,7 +302,7 @@ fn initialize_popup_state(state: &mut EditorWindowState, registry: &SheetRegistr
         state.options_column_ai_context_input =
             col_def.ai_context.clone().unwrap_or_default(); 
 
-        match &col_def.validator {
+    match &col_def.validator {
             Some(ColumnValidator::Basic(data_type)) => {
                 state.options_validator_type = Some(ValidatorTypeChoice::Basic);
                 state.options_basic_type_select = *data_type; 
@@ -301,16 +332,15 @@ fn initialize_popup_state(state: &mut EditorWindowState, registry: &SheetRegistr
                 state.options_link_target_column_index = None;
                 state.options_basic_type_select = col_def.data_type;
                 // Always refresh existing structure key selection from authoritative metadata
-                if let Some(sheet_meta) = registry
-                    .get_sheet(target_category, target_sheet)
-                    .and_then(|s| s.metadata.as_ref())
-                {
-                    let refreshed = sheet_meta.columns.get(col_index).and_then(|c| c.structure_key_parent_column_index);
-                    debug!("Popup init: refreshed structure key selection for {:?}/{} col {} -> {:?}", target_category, target_sheet, col_index, refreshed);
-                    state.options_existing_structure_key_parent_column = refreshed;
-                } else {
-                    state.options_existing_structure_key_parent_column = None;
-                }
+                let refreshed = if let Some(f) = parent_field_opt.as_ref() { f.structure_key_parent_column_index } else {
+                    registry
+                        .get_sheet(target_category, target_sheet)
+                        .and_then(|s| s.metadata.as_ref())
+                        .and_then(|m| m.columns.get(col_index))
+                        .and_then(|c| c.structure_key_parent_column_index)
+                };
+                debug!("Popup init: refreshed structure key selection for {:?}/{} col {} -> {:?}", target_category, target_sheet, col_index, refreshed);
+                state.options_existing_structure_key_parent_column = refreshed;
                 // Clear creation-temp field (not used in existing structure editing)
                 state.options_structure_key_parent_column_temp = None;
             }

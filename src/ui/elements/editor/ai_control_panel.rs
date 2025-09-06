@@ -109,7 +109,7 @@ pub(super) fn show_ai_control_panel(
             let sheet_data_opt = registry.get_sheet(&task_category, &task_sheet_name);
             let metadata_opt_ref = sheet_data_opt.and_then(|d| d.metadata.as_ref());
             // Resolve root sheet metadata (for model & general rule & allow additions)
-            let (root_category, root_sheet, root_meta) = {
+            let (_root_category, _root_sheet, root_meta) = {
                 let mut root_category = selected_category_clone.clone();
                 let mut root_sheet = task_sheet_name.clone();
                 let mut safety = 0;
@@ -184,10 +184,13 @@ pub(super) fn show_ai_control_panel(
             for (anc_cat, anc_sheet, _row_idx) in &ancestry {
                 if let Some(sheet) = registry.get_sheet(anc_cat, anc_sheet) {
                     if let Some(meta) = &sheet.metadata {
-                        // Identify the column that is the structure key parent for any child referencing it.
-                        // We look for columns that have structure_key_parent_column_index == None but are referenced by children via structure_key_parent_column_index.
-                        // Simpler: choose first column whose validator is not Structure and maybe has ai_context.
-                        let key_col_index = meta.columns.iter().position(|c| !matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure))).unwrap_or(0);
+                        // Prefer an explicitly selected key column from any structure child on this sheet; else fallback to first non-structure
+                        let key_col_index = meta.columns.iter().enumerate().find_map(|(_idx, c)| {
+                            // If any structure column on this sheet points to a parent key, that is the key for this level
+                            if matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure)) {
+                                c.structure_key_parent_column_index
+                            } else { None }
+                        }).unwrap_or_else(|| meta.columns.iter().position(|c| !matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure))).unwrap_or(0));
                         if let Some(col_def) = meta.columns.get(key_col_index) {
                             key_chain_headers.push(col_def.header.clone());
                             key_chain_contexts.push(col_def.ai_context.clone());
@@ -206,14 +209,24 @@ pub(super) fn show_ai_control_panel(
                 for (anc_cat, anc_sheet, anc_row_idx) in &ancestry {
                     if let Some(sheet) = registry.get_sheet(anc_cat, anc_sheet) {
                         if let Some(meta) = &sheet.metadata {
-                            let key_col_index = meta.columns.iter().position(|c| !matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure))).unwrap_or(0);
+                            let key_col_index = meta.columns.iter().enumerate().find_map(|(_idx, c)| {
+                                if matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure)) {
+                                    c.structure_key_parent_column_index
+                                } else { None }
+                            }).unwrap_or_else(|| meta.columns.iter().position(|c| !matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure))).unwrap_or(0));
                             let val = sheet.grid.get(*anc_row_idx).and_then(|r| r.get(key_col_index)).cloned().unwrap_or_default();
                             row_vals.push(val);
                         }
                     }
                 }
                 // Current sheet key value for this row
-                if let Some(sheet) = sheet_data_opt { if let Some(meta) = &sheet.metadata { if let Some(idx) = meta.columns.iter().position(|c| !matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure))) { let val = sheet.grid.get(row_idx).and_then(|r| r.get(idx)).cloned().unwrap_or_default(); row_vals.push(val); } } }
+                if let Some(sheet) = sheet_data_opt { if let Some(meta) = &sheet.metadata {
+                    // Use local explicit key if any child structure selected it; else first non-structure
+                    let idx = meta.columns.iter().enumerate().find_map(|(_i,c)| if matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure)) { c.structure_key_parent_column_index } else { None })
+                        .or_else(|| meta.columns.iter().position(|c| !matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure))))
+                        .unwrap_or(0);
+                    let val = sheet.grid.get(row_idx).and_then(|r| r.get(idx)).cloned().unwrap_or_default(); row_vals.push(val);
+                } }
                 key_chain_values_per_row.push(row_vals);
             }
 

@@ -230,11 +230,8 @@ pub(super) fn show_validator_section(
                         let mut current_key = state.options_existing_structure_key_parent_column;
                         ui.horizontal(|ui_h| {
                             ui_h.label("Key Column:");
-                            let (headers, is_parent_headers) = if let Some(parent_link) = &meta.structure_parent {
-                                if let Some(parent_sheet) = registry_immut.get_sheet(&parent_link.parent_category, &parent_link.parent_sheet) {
-                                    if let Some(parent_meta) = &parent_sheet.metadata { (parent_meta.columns.iter().map(|c| c.header.clone()).collect::<Vec<_>>(), true) } else { (Vec::new(), true) }
-                                } else { (Vec::new(), true) }
-                            } else { (meta.columns.iter().map(|c| c.header.clone()).collect::<Vec<_>>(), false) };
+                            // Always allow picking from the same-level sheet the metadata belongs to
+                            let headers: Vec<String> = meta.columns.iter().map(|c| c.header.clone()).collect();
                             if headers.is_empty() { ui_h.label("<no headers>"); return; }
                             let sel_text = current_key.and_then(|i| headers.get(i)).cloned().unwrap_or_else(|| "(none)".to_string());
                             let combo_id = format!("key_parent_column_selector_internal_{}_{}", state.options_column_target_category.as_deref().unwrap_or(""), state.options_column_target_index);
@@ -267,10 +264,11 @@ pub(super) fn show_validator_section(
                                         if ui_h2.small_button("x").clicked() { filter_text.clear(); ui_h2.memory_mut(|mem| mem.data.insert_temp(filter_key.clone().into(), filter_text.clone())); }
                                     });
                                     let current_filter = filter_text.to_lowercase();
-                                    egui::ScrollArea::vertical().max_height(300.0).show(popup_ui, |list_ui| {
+                    egui::ScrollArea::vertical().max_height(300.0).show(popup_ui, |list_ui| {
                                         if list_ui.selectable_label(current_key.is_none(), "(none)").clicked() { current_key = None; list_ui.memory_mut(|mem| mem.close_popup()); }
                                         for (i, h) in headers.iter().enumerate() {
-                                            if !is_parent_headers && i == state.options_column_target_index { continue; }
+                        // Exclude the structure column itself only when the same sheet
+                        if i == state.options_column_target_index { continue; }
                                             if !current_filter.is_empty() && !h.to_lowercase().contains(&current_filter) { continue; }
                                             if list_ui.selectable_label(current_key == Some(i), h).clicked() { current_key = Some(i); list_ui.memory_mut(|mem| mem.close_popup()); }
                                         }
@@ -290,13 +288,8 @@ pub(super) fn show_validator_section(
                     if let Some(meta) = meta_opt {
                         // If we are creating the structure from the parent sheet (usual case) there is no structure_parent yet.
                         // Use current sheet headers (excluding the target structure column itself) as potential key columns.
-                        let (headers, is_parent_headers) = if let Some(parent_link) = &meta.structure_parent {
-                            if let Some(parent_sheet) = registry_immut.get_sheet(&parent_link.parent_category, &parent_link.parent_sheet) {
-                                if let Some(parent_meta) = &parent_sheet.metadata { (parent_meta.columns.iter().map(|c| c.header.clone()).collect::<Vec<_>>(), true) } else { (Vec::new(), true) }
-                            } else { (Vec::new(), true) }
-                        } else {
-                            (meta.columns.iter().map(|c| c.header.clone()).collect::<Vec<_>>(), false)
-                        };
+                        // For creation, the key must also be chosen from this sheet (same level)
+                        let headers: Vec<String> = meta.columns.iter().map(|c| c.header.clone()).collect();
                         ui.horizontal(|ui_k| {
                             ui_k.label("Key Column:");
                             if headers.is_empty() { ui_k.label("<none>"); return; }
@@ -335,7 +328,7 @@ pub(super) fn show_validator_section(
                                     egui::ScrollArea::vertical().max_height(300.0).show(popup_ui, |list_ui| {
                                         if list_ui.selectable_label(temp_choice.is_none(), "(none)").clicked() { temp_choice = None; list_ui.memory_mut(|mem| mem.close_popup()); }
                                         for (i,h) in headers.iter().enumerate() {
-                                            if !is_parent_headers && i == state.options_column_target_index { continue; }
+                                            if i == state.options_column_target_index { continue; }
                                             if !current_filter.is_empty() && !h.to_lowercase().contains(&current_filter) { continue; }
                                             if list_ui.selectable_label(temp_choice == Some(i), h).clicked() { temp_choice = Some(i); list_ui.memory_mut(|mem| mem.close_popup()); }
                                         }
@@ -349,7 +342,7 @@ pub(super) fn show_validator_section(
                     }
                     ui.add(egui::Separator::default());
                     ui.label("Schema: choose source columns to copy into object fields.");
-                    let (headers, self_index) = meta_opt.map(|m| (m.columns.iter().map(|c| c.header.clone()).collect::<Vec<_>>(), state.options_column_target_index)).unwrap_or_default();
+                    let (headers, _self_index) = meta_opt.map(|m| (m.columns.iter().map(|c| c.header.clone()).collect::<Vec<_>>(), state.options_column_target_index)).unwrap_or_default();
                     if state.options_structure_source_columns.is_empty() { state.options_structure_source_columns.push(None); }
                     let mut to_remove: Vec<usize> = Vec::new();
                     for i in 0..state.options_structure_source_columns.len() {
@@ -473,12 +466,10 @@ pub(super) fn apply_validator_update(
             "Validator change detected for col {} of '{:?}/{}'. Sending update event.",
             col_index + 1, category, sheet_name
         );
-        // Capture initial key parent column if switching to Structure and no existing key yet.
-        let mut key_parent_col: Option<usize> = None;
         if matches!(new_validator, Some(ColumnValidator::Structure)) {
             // If sheet currently has no structure validator (we're creating) try to use temp creation key.
             if !matches!(current_validator, Some(ColumnValidator::Structure)) {
-                key_parent_col = state.options_structure_key_parent_column_temp;
+                let _ = state.options_structure_key_parent_column_temp; // selection carried via event below
             }
         }
         column_validator_writer.write(RequestUpdateColumnValidator {
