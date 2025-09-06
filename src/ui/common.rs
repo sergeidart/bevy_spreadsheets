@@ -57,13 +57,38 @@ pub fn edit_cell_widget(
         .and_then(|meta| meta.columns.get(col_index))
         .map_or(ColumnDataType::String, |col_def| col_def.data_type);
 
+    // Prefetch allowed values for linked columns once (and reuse below)
+    let mut prefetch_allowed_values: Option<&HashSet<String>> = None;
+    if let Some(ColumnValidator::Linked { target_sheet_name, target_column_index }) = validator_opt {
+        if let CacheResult::Success(values) = linked_column_cache::get_or_populate_linked_options(
+            target_sheet_name,
+            *target_column_index,
+            registry,
+            state,
+        ) {
+            prefetch_allowed_values = Some(values);
+        }
+    }
+
 
     // --- 2. Allocate Space & Draw Frame ---
     let desired_size = egui::vec2(ui.available_width(), ui.style().spacing.interact_size.y);
     let (frame_id, frame_rect) = ui.allocate_space(desired_size);
 
-    // Determine Background Color based on pre-calculated state
-    let bg_color = match cell_validation_state {
+    // Determine an effective validation state: prefer the up-to-date cached linked set when present
+    let effective_validation_state = if let Some(values) = prefetch_allowed_values {
+        if current_display_text.is_empty() {
+            ValidationState::Empty
+        } else if values.contains(current_display_text) {
+            ValidationState::Valid
+        } else {
+            ValidationState::Invalid
+        }
+    } else {
+        cell_validation_state
+    };
+
+    let mut bg_color = match effective_validation_state {
         ValidationState::Empty => Color32::TRANSPARENT,
         ValidationState::Valid => Color32::from_gray(40),
         ValidationState::Invalid => Color32::from_rgba_unmultiplied(80, 20, 20, 180),
@@ -116,14 +141,13 @@ pub fn edit_cell_widget(
                             target_sheet_name,
                             target_column_index,
                         }) => {
-                            let allowed_values = match linked_column_cache::get_or_populate_linked_options(
-                                target_sheet_name,
-                                *target_column_index,
-                                registry,
-                                state,
-                            ) {
-                                CacheResult::Success(values) => values,
-                                CacheResult::Error(_) => &HashSet::new(),
+                            // Use prefetch if available; provide stable empty backing otherwise
+                            let mut empty_backing: Option<HashSet<String>> = None;
+                            let allowed_values: &HashSet<String> = if let Some(values) = prefetch_allowed_values {
+                                values
+                            } else {
+                                empty_backing = Some(HashSet::new());
+                                empty_backing.as_ref().unwrap()
                             };
                             temp_new_value = handle_linked_column_edit(
                                 centered_widget_ui,
@@ -293,7 +317,7 @@ pub fn edit_cell_widget(
     let (_widget_resp_opt, final_new_value) = inner_response;
 
     // --- 4. Add Hover Text for Invalid State ---
-    if cell_validation_state == ValidationState::Invalid {
+    if effective_validation_state == ValidationState::Invalid {
         let hover_text = format!("Invalid Value! '{}' is not allowed here.", current_display_text);
         ui.interact(frame_rect, frame_id.with("hover_invalid"), Sense::hover())
             .on_hover_text(hover_text);
