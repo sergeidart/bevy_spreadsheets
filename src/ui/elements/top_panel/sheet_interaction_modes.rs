@@ -29,7 +29,7 @@ pub(super) fn show_sheet_interaction_mode_buttons<'a, 'w>(
     {
         let (cat_opt, sheet_opt) = state.current_sheet_context();
         if let Some(sheet_name) = sheet_opt {
-            event_writers.add_row_event_writer.write(AddSheetRowRequest { category: cat_opt, sheet_name });
+            event_writers.add_row_event_writer.write(AddSheetRowRequest { category: cat_opt, sheet_name, initial_values: None });
             state.request_scroll_to_new_row = true;
             state.force_filter_recalculation = true;
         }

@@ -109,7 +109,7 @@ pub(super) fn show_ai_control_panel(
             let sheet_data_opt = registry.get_sheet(&task_category, &task_sheet_name);
             let metadata_opt_ref = sheet_data_opt.and_then(|d| d.metadata.as_ref());
             // Resolve root sheet metadata (for model & general rule & allow additions)
-            let (_root_category, _root_sheet, root_meta) = {
+            let (root_category, root_sheet, root_meta) = {
                 let mut root_category = selected_category_clone.clone();
                 let mut root_sheet = task_sheet_name.clone();
                 let mut safety = 0;
@@ -164,8 +164,15 @@ pub(super) fn show_ai_control_panel(
                 allow_row_additions: bool,
             }
 
-            // Resolve root sheet meta for allow_row_additions flag
-            let allow_additions_flag = root_meta.as_ref().map(|m| m.ai_enable_row_generation).unwrap_or(false);
+            // Resolve allow_row_additions flag with optimistic UI toggle support
+            let mut allow_additions_flag = root_meta.as_ref().map(|m| m.ai_enable_row_generation).unwrap_or(false);
+            // Prefer an in-flight pending toggle for this specific root sheet, if any
+            if let Some((p_cat, p_sheet, p_val)) = &state.pending_ai_row_generation_toggle {
+                if *p_cat == root_category && *p_sheet == root_sheet { allow_additions_flag = *p_val; }
+            } else if let Some(eff) = state.effective_ai_can_add_rows {
+                // Fallback to UI-cached effective flag (kept in sync in the panel)
+                allow_additions_flag = eff;
+            }
             // ---- Build recursive key chain (ancestor keys) ----
             let mut key_chain_headers: Vec<String> = Vec::new();
             let mut key_chain_contexts: Vec<Option<String>> = Vec::new();

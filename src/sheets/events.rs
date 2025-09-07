@@ -16,6 +16,9 @@ pub struct RequestCreateNewSheet {
 pub struct AddSheetRowRequest {
     pub category: Option<String>,
     pub sheet_name: String,
+    // Optional: initial cell values to set on the newly inserted row (at insert time)
+    // Vector of (col_index, value)
+    pub initial_values: Option<Vec<(usize, String)>>,
 }
 // ... (rest of the existing events remain the same) ...
 #[derive(Event, Debug, Clone)]

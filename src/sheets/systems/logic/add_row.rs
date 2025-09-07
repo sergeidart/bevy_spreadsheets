@@ -33,6 +33,14 @@ pub fn handle_add_row_request(
                 let num_cols = metadata.columns.len();
                 // Unified behavior: always insert at top for consistency
                 sheet_data.grid.insert(0, vec![String::new(); num_cols]);
+                // If initial values provided, set them now to avoid race with subsequent events
+                if let Some(init) = &event.initial_values {
+                    if let Some(row0) = sheet_data.grid.get_mut(0) {
+                        for (col, val) in init {
+                            if *col < row0.len() { row0[*col] = val.clone(); }
+                        }
+                    }
+                }
 
                 let msg = format!("Added new row at the top of sheet '{:?}/{}'.", category, sheet_name);
                 info!("{}", msg);

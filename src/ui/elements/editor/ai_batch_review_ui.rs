@@ -221,19 +221,14 @@ pub(super) fn draw_ai_batch_review_panel(
         new_accept.sort_unstable(); new_cancel.sort_unstable();
         // Apply accepts (reverse so user order preserved at top insertion)
         for idx in new_accept.iter().rev() { if let Some(nr) = state.ai_new_row_reviews.get(*idx) {
-            add_row_writer.write(AddSheetRowRequest { category: selected_category_clone.clone(), sheet_name: active_sheet_name.to_string() });
-            let target_row_index = 0usize;
-            // Populate non-structure (editable) columns
+            // Build initial values payload for insertion time
+            let mut init_vals: Vec<(usize, String)> = Vec::new();
             for (pos, actual_col) in nr.non_structure_columns.iter().enumerate() {
-                if let Some(val) = nr.ai.get(pos) { if !val.is_empty() { cell_update_writer.write(UpdateCellEvent { category: selected_category_clone.clone(), sheet_name: active_sheet_name.to_string(), row_index: target_row_index, col_index: *actual_col, new_value: val.clone() }); } }
+                if let Some(val) = nr.ai.get(pos) { if !val.is_empty() { init_vals.push((*actual_col, val.clone())); } }
             }
-            // Explicitly initialize structure columns with empty placeholders so downstream structure navigation is deterministic.
-            let structure_cols: Vec<usize> = metadata.columns.iter().enumerate()
-                .filter(|(_, c)| matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure)))
-                .map(|(i, _)| i).collect();
-            for scol in structure_cols { // even though row starts empty, emit event to ensure caches/listeners react
-                cell_update_writer.write(UpdateCellEvent { category: selected_category_clone.clone(), sheet_name: active_sheet_name.to_string(), row_index: target_row_index, col_index: scol, new_value: String::new() });
-            }
+            // Also clear structure columns explicitly at creation
+            for (i, c) in metadata.columns.iter().enumerate() { if matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure)) { init_vals.push((i, String::new())); } }
+            add_row_writer.write(AddSheetRowRequest { category: selected_category_clone.clone(), sheet_name: active_sheet_name.to_string(), initial_values: Some(init_vals) });
         }}
         for idx in new_accept.into_iter().chain(new_cancel.into_iter()).collect::<Vec<_>>().into_iter().rev() { if idx < state.ai_new_row_reviews.len() { state.ai_new_row_reviews.remove(idx); } }
     }
@@ -244,15 +239,10 @@ pub(super) fn draw_ai_batch_review_panel(
         for rr in &state.ai_row_reviews { apply_existing_row(rr); }
         // New rows (reverse insertion order to keep first near top)
         for nr in state.ai_new_row_reviews.iter().rev() {
-            add_row_writer.write(AddSheetRowRequest { category: selected_category_clone.clone(), sheet_name: active_sheet_name.to_string() });
-            let target_row_index = 0usize;
-            // Populate editable columns
-            for (pos, actual_col) in nr.non_structure_columns.iter().enumerate() { if let Some(val) = nr.ai.get(pos) { if !val.is_empty() { cell_update_writer.write(UpdateCellEvent { category: selected_category_clone.clone(), sheet_name: active_sheet_name.to_string(), row_index: target_row_index, col_index: *actual_col, new_value: val.clone() }); } } }
-            // Initialize structure columns explicitly (same reasoning as above)
-            let structure_cols: Vec<usize> = metadata.columns.iter().enumerate()
-                .filter(|(_, c)| matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure)))
-                .map(|(i, _)| i).collect();
-            for scol in structure_cols { cell_update_writer.write(UpdateCellEvent { category: selected_category_clone.clone(), sheet_name: active_sheet_name.to_string(), row_index: target_row_index, col_index: scol, new_value: String::new() }); }
+            let mut init_vals: Vec<(usize, String)> = Vec::new();
+            for (pos, actual_col) in nr.non_structure_columns.iter().enumerate() { if let Some(val) = nr.ai.get(pos) { if !val.is_empty() { init_vals.push((*actual_col, val.clone())); } } }
+            for (i, c) in metadata.columns.iter().enumerate() { if matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure)) { init_vals.push((i, String::new())); } }
+            add_row_writer.write(AddSheetRowRequest { category: selected_category_clone.clone(), sheet_name: active_sheet_name.to_string(), initial_values: Some(init_vals) });
         }
         state.ai_row_reviews.clear();
         state.ai_new_row_reviews.clear();

@@ -265,20 +265,7 @@ pub fn handle_ai_batch_results(
                 let (orig_slice, extra_slice) = rows.split_at(originals);
                 // Record prefix count so review UI can lock those cells
                 state.ai_context_only_prefix_count = ev.key_prefix_count;
-                for (i, &row_index) in ev.original_row_indices.iter().enumerate() {
-                    let suggestion_full = &orig_slice[i];
-                    // Strip key prefix columns (they are context only, should not overwrite data cells)
-                    let suggestion = if ev.key_prefix_count > 0 && suggestion_full.len() >= ev.key_prefix_count { &suggestion_full[ev.key_prefix_count..] } else { suggestion_full };
-                    let expanded = if !ev.included_non_structure_columns.is_empty() {
-                        let max_col = *ev.included_non_structure_columns.iter().max().unwrap_or(&0);
-                        let mut row_buf = vec![String::new(); max_col + 1];
-                        for (col_i, actual_col) in ev.included_non_structure_columns.iter().enumerate() {
-                            if let Some(val) = suggestion.get(col_i) { if let Some(slot) = row_buf.get_mut(*actual_col) { *slot = val.clone(); } }
-                        }
-                        row_buf
-                    } else { suggestion.to_vec() };
-                    // Legacy ai_suggestions map removed; data now embedded directly in RowReview below
-                }
+                // (original rows are processed below when building snapshot model)
                 // For new rows, also strip key prefix if present
                 // New rows processed directly into ai_new_row_reviews below
 
@@ -313,8 +300,11 @@ pub fn handle_ai_batch_results(
                     }).collect();
                     state.ai_row_reviews.push(RowReview { row_index, original: original_snapshot, ai: ai_snapshot, choices, non_structure_columns: included.clone() });
                 }
-                // New rows: clone staging first to avoid borrow conflict, then map included indices
-                for new_row in extra_slice.iter() {
+                // New rows: strip key prefix (if any) then map included indices
+                for new_row_full in extra_slice.iter() {
+                    let new_row = if ev.key_prefix_count > 0 && new_row_full.len() >= ev.key_prefix_count {
+                        &new_row_full[ev.key_prefix_count..]
+                    } else { new_row_full };
                     let mut ai_snapshot: Vec<String> = Vec::with_capacity(included.len());
                     for (logical_i, _actual_col) in included.iter().enumerate() {
                         ai_snapshot.push(new_row.get(logical_i).cloned().unwrap_or_default());
