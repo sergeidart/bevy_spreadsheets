@@ -16,10 +16,19 @@ use crate::ui::elements::editor::state::{RowReview, NewRowReview, ReviewChoice};
 pub fn handle_ui_feedback(
     mut feedback_events: EventReader<SheetOperationFeedback>,
     mut ui_feedback_state: ResMut<UiFeedbackState>,
+    mut state: ResMut<crate::ui::elements::editor::state::EditorWindowState>,
 ) {
     let mut last_message = None;
     for event in feedback_events.read() {
         last_message = Some((event.message.clone(), event.is_error));
+        // Append to bottom log buffer
+        if !state.ai_raw_output_display.is_empty() {
+            state.ai_raw_output_display.push('\n');
+        }
+        state.ai_raw_output_display.push_str(&event.message);
+        if event.is_error {
+            state.ai_output_panel_visible = true; // open log for errors
+        }
         // Prioritize showing the first non-error, or the last error
         if !event.is_error {
             break;
@@ -41,7 +50,15 @@ pub fn handle_ai_task_results(
     mut state: ResMut<EditorWindowState>,
     mut feedback_writer: EventWriter<SheetOperationFeedback>,
 ) {
-    debug!("handle_ai_task_results checking for events. Current AI Mode: {:?}", state.ai_mode);
+    // Early-out when there are no events to process to avoid per-frame log spam
+    if ev_ai_results.is_empty() {
+        return;
+    }
+    debug!(
+        "handle_ai_task_results: processing {} event(s). Current AI Mode: {:?}",
+        ev_ai_results.len(),
+        state.ai_mode
+    );
     if state.ai_mode != AiModeState::Submitting && state.ai_mode != AiModeState::ResultsReady {
         if !ev_ai_results.is_empty() {
             let event_count = ev_ai_results.len();

@@ -4,8 +4,12 @@ use bevy::log::info;
 use bevy_egui::egui;
 use crate::ApiKeyDisplayStatus;
 use crate::SessionApiKey;
+use crate::sheets::resources::SheetRegistry;
 // Removed: use bevy::prelude::ResMut;
 use whoami;
+use crate::visual_copier::resources::VisualCopierManager;
+use bevy::prelude::EventWriter;
+use crate::visual_copier::events::{PickFolderRequest, QueueTopPanelCopyEvent, ReverseTopPanelFoldersEvent, VisualCopierStateChanged};
 
 // --- MODIFIED: Function signature uses plain mutable references ---
 pub fn show_settings_popup(
@@ -13,6 +17,15 @@ pub fn show_settings_popup(
     state: &mut EditorWindowState,
     api_key_status: &mut ApiKeyDisplayStatus, // Changed from ResMut<>
     session_api_key: &mut SessionApiKey,    // Changed from ResMut<>
+    // Registry retained for potential future settings, currently unused
+    _registry: &mut SheetRegistry,
+    // NEW: Quick Copy settings (Copy on Exit)
+    copier_manager: &mut VisualCopierManager,
+    // Event writers to drive Quick Copy actions inside Settings
+    pick_folder_writer: &mut EventWriter<PickFolderRequest>,
+    queue_top_panel_copy_writer: &mut EventWriter<QueueTopPanelCopyEvent>,
+    reverse_folders_writer: &mut EventWriter<ReverseTopPanelFoldersEvent>,
+    state_changed_writer: &mut EventWriter<VisualCopierStateChanged>,
 ) {
 // --- END MODIFIED ---
     if state.show_settings_popup {
@@ -51,23 +64,15 @@ pub fn show_settings_popup(
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .open(&mut is_window_open)
         .show(ctx, |ui| {
-            ui.heading("API Key Management");
-            ui.separator();
-
-            ui.horizontal(|ui| {
-                ui.label("Current Status:");
-                ui.label(api_key_status.status.as_str()); // Use directly
-            });
-            ui.separator();
-
-            ui.label("Enter API Key:");
-            let _key_input_response = ui.add(
-                egui::TextEdit::singleline(&mut state.settings_new_api_key_input)
-                    .password(true)
-                    .desired_width(f32::INFINITY),
-            );
-
-            if ui.button("Set Key").clicked() {
+            ui.horizontal_wrapped(|ui_h| {
+                ui_h.label("API Key:");
+                let _key_input_response = ui_h.add(
+                    egui::TextEdit::singleline(&mut state.settings_new_api_key_input)
+                        .password(true)
+                        .desired_width(280.0),
+                );
+                ui_h.label(api_key_status.status.as_str());
+                if ui_h.button("Set Key").clicked() {
                 let username = whoami::username();
                 info!("[DEBUG] Saving key for username: {username}");
                 // Clone the input before any mutable borrow
@@ -100,11 +105,9 @@ pub fn show_settings_popup(
                 } else {
                     info!("API Key input was empty.");
                 }
-            }
-
-            ui.separator();
-
-            if ui.button("Clear Key").clicked() {
+                }
+                ui_h.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui_r| {
+                    if ui_r.button("Clear Key").clicked() {
                 let username = whoami::username();
                 info!("[DEBUG] Clearing key for username: {username}");
                 session_api_key.0 = None;
@@ -126,8 +129,43 @@ pub fn show_settings_popup(
                     Err(e) => info!("[DEBUG] After clear, failed to load key: {e}"),
                 }
                 api_key_status.status = "No Key Set".to_string();
-            }
-
+                    }
+                });
+            });
+            ui.separator();
+            ui.heading("Quick Copy");
+            // Row 1: FROM
+            ui.horizontal_wrapped(|ui_h| {
+                ui_h.label("FROM");
+                if ui_h.button("Pick...").on_hover_text("Select source folder").clicked() {
+                    pick_folder_writer.write(PickFolderRequest { for_task_id: None, is_start_folder: true });
+                }
+                let from_path_str = copier_manager.top_panel_from_folder.as_ref().map_or("None".to_string(), |p| p.display().to_string());
+                ui_h.monospace(from_path_str);
+            });
+            // Row 2: TO
+            ui.horizontal_wrapped(|ui_h| {
+                ui_h.label("TO");
+                if ui_h.button("Pick...").on_hover_text("Select destination folder").clicked() {
+                    pick_folder_writer.write(PickFolderRequest { for_task_id: None, is_start_folder: false });
+                }
+                let to_path_str = copier_manager.top_panel_to_folder.as_ref().map_or("None".to_string(), |p| p.display().to_string());
+                ui_h.monospace(to_path_str);
+            });
+            // Row 3: actions
+            ui.horizontal_wrapped(|ui_h| {
+                if ui_h.button("Swap ↔").clicked() { reverse_folders_writer.write(ReverseTopPanelFoldersEvent); }
+                let can_copy = copier_manager.top_panel_from_folder.is_some() && copier_manager.top_panel_to_folder.is_some();
+                if ui_h.add_enabled(can_copy, egui::Button::new("COPY")).clicked() {
+                    queue_top_panel_copy_writer.write(QueueTopPanelCopyEvent);
+                }
+                ui_h.label(&copier_manager.top_panel_copy_status);
+                let mut copy_on_exit = copier_manager.copy_top_panel_on_exit;
+                if ui_h.checkbox(&mut copy_on_exit, "Copy on Exit").on_hover_text("Perform this Quick Copy operation synchronously on App Exit.").changed() {
+                    copier_manager.copy_top_panel_on_exit = copy_on_exit;
+                    state_changed_writer.write(VisualCopierStateChanged);
+                }
+            });
             ui.separator();
              if ui.button("Close").clicked(){
                   close_requested = true;

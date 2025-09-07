@@ -27,7 +27,7 @@ pub(super) fn show_active_mode_panel(
 
     if state.current_interaction_mode == SheetInteractionState::AiModeActive &&
        matches!(state.ai_mode, AiModeState::Preparing | AiModeState::Submitting | AiModeState::ResultsReady) {
-        ui.separator();
+        // No leading separator before AI panel per new design
         show_ai_control_panel(
             ui,
             state,
@@ -42,7 +42,7 @@ pub(super) fn show_active_mode_panel(
      }
 
     if state.current_interaction_mode == SheetInteractionState::DeleteModeActive {
-         if !panel_shown { ui.separator(); }
+        // No leading separator before Delete panel either
          show_delete_mode_active_controls(
              ui,
              state,
@@ -54,9 +54,7 @@ pub(super) fn show_active_mode_panel(
          panel_shown = true;
     }
 
-    if panel_shown {
-        ui.separator();
-    }
+    // No trailing separator after mode panels
 
     // Review panel is separate as it replaces the main table view
     if state.current_interaction_mode == SheetInteractionState::AiModeActive && state.ai_mode == AiModeState::Reviewing {

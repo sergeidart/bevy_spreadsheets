@@ -60,8 +60,6 @@ pub(super) fn process_editor_events_and_state(
     if initial_selected_category != &state.selected_category || initial_selected_sheet_name != &state.selected_sheet_name {
         debug!("Selected sheet or category changed by UI interaction.");
         state.reset_interaction_modes_and_selections();
-        // Close AI config popup if open
-        state.show_ai_rule_popup = false;
         state.random_picker_needs_init = true;
         if let Some(sheet_name) = &state.selected_sheet_name {
             if render_cache.get_cell_data(&state.selected_category, sheet_name, 0, 0).is_none()
@@ -91,8 +89,7 @@ pub(super) fn process_editor_events_and_state(
                 }
             }
         }
-        state.force_filter_recalculation = true;
-        state.ai_rule_popup_needs_init = true;
+    state.force_filter_recalculation = true;
     }
 
     // Initialize Random Picker UI from metadata when flagged (e.g., on startup UI pass)

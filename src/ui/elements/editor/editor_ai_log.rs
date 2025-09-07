@@ -15,16 +15,12 @@ pub(super) fn show_ai_output_log_bottom(
         .show_separator_line(true)
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.strong("AI Output / Log");
+                ui.strong("Log");
                 ui.add_space(8.0);
                 if ui.button("Copy Raw").clicked() {
                     ctx.copy_text(state.ai_raw_output_display.clone());
                 }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("✖ Close").on_hover_text("Hide AI Output Panel (will reappear on next AI run)").clicked() {
-                        state.ai_output_panel_visible = false;
-                    }
-                });
+                // Close is controlled by the bottom bar toggle; no close button here
             });
             ui.separator();
             egui::ScrollArea::vertical()

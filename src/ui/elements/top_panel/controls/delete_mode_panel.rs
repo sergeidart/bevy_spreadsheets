@@ -17,13 +17,14 @@ pub fn show_delete_mode_active_controls<'a, 'w>(
     state: &mut EditorWindowState, 
     event_writers: DeleteModeEventWriters<'a, 'w>,
 ) {
-    ui.horizontal(|ui| {
-        ui.label(
-            egui::RichText::new("Delete Mode Active: Select rows and/or columns to delete.")
-                .color(egui::Color32::YELLOW)
-                .strong(),
-        );
-        ui.separator();
+    ui.horizontal_wrapped(|ui| {
+        // Indent under the Delete toggle position for unified second-row layout
+        if state.last_edit_mode_button_min_x > 0.0 {
+            let panel_left = ui.max_rect().min.x;
+            let indent = (state.last_edit_mode_button_min_x - panel_left).max(0.0);
+            ui.add_space(indent);
+        }
+        // No description or separators per new design
 
         let is_sheet_selected = state.selected_sheet_name.is_some();
         let rows_selected_count = state.ai_selected_rows.len();
@@ -43,13 +44,11 @@ pub fn show_delete_mode_active_controls<'a, 'w>(
 
         if ui
             .add_enabled(can_delete_anything, egui::Button::new(button_text))
-            .on_hover_text("Delete the selected rows and/or columns from the table")
             .clicked()
         {
             // Determine effective target sheet (virtual if structure view active)
             let effective_sheet_name = if let Some(vctx) = state.virtual_structure_stack.last() { &vctx.virtual_sheet_name } else { state.selected_sheet_name.as_ref().unwrap() };
             if state.selected_sheet_name.is_some() {
-                let mut actions_taken = false;
                 if rows_selected_count > 0 {
                     event_writers
                         .delete_rows_event_writer
@@ -58,7 +57,6 @@ pub fn show_delete_mode_active_controls<'a, 'w>(
                             sheet_name: effective_sheet_name.clone(),
                             row_indices: state.ai_selected_rows.clone(),
                         });
-                    actions_taken = true;
                 }
                 if cols_selected_count > 0 {
                     event_writers
@@ -68,13 +66,11 @@ pub fn show_delete_mode_active_controls<'a, 'w>(
                             sheet_name: effective_sheet_name.clone(),
                             column_indices: state.selected_columns_for_deletion.clone(),
                         });
-                    actions_taken = true;
                 }
 
-                if actions_taken {
-                    state.reset_interaction_modes_and_selections();
-                    state.force_filter_recalculation = true;
-                }
+                // Always exit Delete Mode after a delete action is performed
+                state.reset_interaction_modes_and_selections();
+                state.force_filter_recalculation = true;
             }
         }
     });

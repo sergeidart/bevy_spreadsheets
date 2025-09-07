@@ -13,6 +13,7 @@ pub mod editor_popups_integration;
 pub mod editor_mode_panels;
 pub mod editor_sheet_display;
 pub mod editor_ai_log;
+pub mod prefs;
 
 // Existing AI modules
 pub mod ai_control_panel;

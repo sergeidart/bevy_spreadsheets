@@ -32,50 +32,36 @@ pub(super) fn show_column_options_window_ui(
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .open(&mut popup_open) // Control opening via state flag
         .show(ctx, |ui| {
-            // Get column definition using index
-            let column_def_opt = registry_immut
+            // Get column definition using index (unused for minimal header, kept for potential future use)
+            let _column_def_opt = registry_immut
                 .get_sheet(&popup_category, &popup_sheet_name) // Use cached category/name
                 .and_then(|s| s.metadata.as_ref())
                 .and_then(|m| m.columns.get(state.options_column_target_index));
 
-            let header_text = column_def_opt.map(|c| c.header.as_str()).unwrap_or("?");
+            // Minimal header only (no verbose subtitles)
 
-            ui.label(format!(
-                "Options for '{:?}/{}' - Column '{}' (#{})", // Show category/sheet
-                popup_category,
-                popup_sheet_name,
-                header_text,
-                state.options_column_target_index + 1
-            ));
-            ui.separator();
-
-            // --- Rename Section ---
-            ui.strong("Rename");
-            ui.horizontal(|ui| {
-                ui.label("New Name:");
-                let rename_resp = ui.add(
-                    egui::TextEdit::singleline(
-                        &mut state.options_column_rename_input,
-                    )
-                    .desired_width(150.0)
-                    .lock_focus(true), // Keep focus on open
-                );
-                if rename_resp.lost_focus()
-                    && ui.input(|i| i.key_pressed(egui::Key::Enter))
+            // Name field
+            ui.strong("Name");
+            let rename_resp = ui.add(
+                egui::TextEdit::singleline(
+                    &mut state.options_column_rename_input,
+                )
+                .desired_width(150.0)
+                .lock_focus(true), // Keep focus on open
+            );
+            if rename_resp.lost_focus()
+                && ui.input(|i| i.key_pressed(egui::Key::Enter))
+            {
+                if !state.options_column_rename_input.trim().is_empty()
+                    && is_validator_config_valid(state)
                 {
-                    if !state.options_column_rename_input.trim().is_empty()
-                        && is_validator_config_valid(state)
-                    {
-                        apply_clicked = true;
-                    }
+                    apply_clicked = true;
                 }
-            });
+            }
             ui.separator();
 
             // --- Filter Section (Multi-term OR) ---
-            // Title now holds the hover hint (moved from button) per user request
-            let filter_title = ui.add(egui::Label::new(egui::RichText::new("Filter (OR)" ).strong()));
-            filter_title.on_hover_text("Rows pass if ANY term appears (case-insensitive). Empty disables filter.");
+            let _filter_title = ui.add(egui::Label::new(egui::RichText::new("Filter (OR)" ).strong()));
             // Ensure at least one term
             if state.options_column_filter_terms.is_empty() { state.options_column_filter_terms.push(String::new()); }
             let mut to_remove: Vec<usize> = Vec::new();
@@ -103,23 +89,17 @@ pub(super) fn show_column_options_window_ui(
             ui.horizontal(|ui_h| {
                 if ui_h.button("Clear All").clicked() { state.options_column_filter_terms = vec![String::new()]; }
             });
-            ui.small("Empty terms ignored. Max 12. Stored as 'term1|term2|...'.");
             ui.separator();
 
-            // --- NEW: AI Context Section ---
-            ui.strong("AI Context Hint");
-            ui.horizontal(|ui| {
-                ui.label("Context:");
-                // Use add_sized for potentially larger text areas if needed
-                ui.add(
-                    egui::TextEdit::multiline(
-                        &mut state.options_column_ai_context_input,
-                    )
-                    .desired_width(f32::INFINITY) // Fill available width
-                    .desired_rows(2), // Start with 2 rows, allow expansion
-                );
-            });
-            ui.small("Optional hint for AI about this column's meaning.");
+            // AI Context Section
+            ui.strong("AI Context");
+            ui.add(
+                egui::TextEdit::multiline(
+                    &mut state.options_column_ai_context_input,
+                )
+                .desired_width(f32::INFINITY)
+                .desired_rows(2),
+            );
             ui.separator();
 
             // --- Validator Section (using helper) ---

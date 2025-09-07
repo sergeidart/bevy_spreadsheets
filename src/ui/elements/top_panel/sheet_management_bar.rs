@@ -2,11 +2,20 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 
-use crate::sheets::events::RequestInitiateFileUpload;
 use crate::sheets::events::CloseStructureViewEvent;
 use crate::sheets::resources::SheetRegistry;
 use crate::ui::elements::editor::state::{EditorWindowState, SheetInteractionState};
-use crate::visual_copier::events::RequestAppExit;
+
+// Compute a fixed button width approximating `chars` visible characters for Button text
+fn fixed_button_width(ui: &egui::Ui, chars: usize) -> f32 {
+    let font_id = egui::TextStyle::Button.resolve(ui.style());
+    let ten = "0".repeat(10);
+    let ten_w = ui.fonts(|f| f.layout_no_wrap(ten, font_id.clone(), ui.style().visuals.text_color())).rect.width();
+    let per = (ten_w / 10.0).max(4.0);
+    // Aim for ~chars average glyphs plus tiny padding
+    let w = per * (chars as f32) + 2.0;
+    w.clamp(80.0, 420.0)
+}
 
 // Helper struct signature might need to use owned EventWriter if cloned,
 // or keep &mut if that's the pattern. Let's assume it needs to match what orchestrator passes.
@@ -15,184 +24,79 @@ use crate::visual_copier::events::RequestAppExit;
 // this struct definition is fine.
 
 // Sticking to the previous pattern of this struct taking mutable references to EventWriters
-pub(super) struct SheetManagementEventWriters<'a, 'w> {
-    pub upload_req_writer: &'a mut EventWriter<'w, RequestInitiateFileUpload>,
-    pub request_app_exit_writer: &'a mut EventWriter<'w, RequestAppExit>,
-    pub close_structure_writer: &'a mut EventWriter<'w, CloseStructureViewEvent>,
+pub struct SheetManagementEventWriters<'a, 'w> {
+    #[allow(dead_code)]
+    pub close_structure_writer: Option<&'a mut EventWriter<'w, CloseStructureViewEvent>>,
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(super) fn show_sheet_management_controls<'a, 'w>(
+/// Wrapper that draws both rows: category row and sheet controls row.
+pub fn show_sheet_management_controls<'a, 'w>(
     ui: &mut egui::Ui,
     state: &mut EditorWindowState,
     registry: &SheetRegistry,
-    event_writers: SheetManagementEventWriters<'a, 'w>, // Takes the struct of mutable refs
+    event_writers: SheetManagementEventWriters<'a, 'w>,
 ) {
-    ui.label("Category:");
+    ui.vertical(|ui_v| {
+        show_category_picker(ui_v, state, registry);
+        ui_v.add_space(4.0);
+        show_sheet_controls(ui_v, state, registry, event_writers);
+    });
+}
+
+/// First bottom row: Category dropdown only
+pub fn show_category_picker(
+    ui: &mut egui::Ui,
+    state: &mut EditorWindowState,
+    registry: &SheetRegistry,
+) {
+    // Category dropdown row: [Category button] [scrollable category tabs...]
+    // Ensure this row does not expand vertically beyond a single line height
+    let line_h = ui.text_style_height(&egui::TextStyle::Body) + ui.style().spacing.item_spacing.y;
+    let row_size = egui::Vec2::new(ui.available_width(), line_h + 6.0);
     let categories = registry.get_categories();
-    let selected_category_text = state
+    const MAX_LABEL_CHARS: usize = 32;
+    // Use owned copies to avoid borrowing from `state` across the closure
+    let selected_category_full: String = state
         .selected_category
-        .as_deref()
-        .unwrap_or("Root (Uncategorized)");
-    // Use owned copies for popup closures to avoid holding an immutable borrow of `state`.
-    let selected_category_text_owned = selected_category_text.to_string();
-
-    // Filter for categories: render outside the ComboBox so focusing it won't close a popup.
-    let category_combo_id = format!("category_selector_top_panel_refactored_{}", selected_category_text);
-    let category_filter_key = format!("{}_filter", category_combo_id);
-    // Show selection via a button that opens a popup below it. The popup contains
-    // a small inline filter TextEdit (so focusing it doesn't close the anchor widget).
+        .clone()
+        .unwrap_or_else(|| "--Root--".to_string());
+    let selected_category_text_owned: String = selected_category_full.chars().take(MAX_LABEL_CHARS).collect();
     let previous_selected_category = state.selected_category.clone();
-    let category_button = ui.button(&selected_category_text_owned);
-    let category_popup_id = egui::Id::new(category_combo_id.clone());
-    if category_button.clicked() {
-        ui.ctx().memory_mut(|mem| mem.open_popup(category_popup_id));
+
+    ui.allocate_ui_with_layout(row_size, egui::Layout::left_to_right(egui::Align::Min), |row| {
+        // Left side: category selector and tabs
+        // Prepare popup ids and filter keys
+        let category_combo_id = format!(
+            "category_selector_top_panel_refactored_{}",
+            selected_category_full
+        );
+        let category_filter_key = format!("{}_filter", category_combo_id);
+
+        // Button with fixed width ~32 chars
+        let btn_w = fixed_button_width(row, MAX_LABEL_CHARS);
+        let category_button = row.add_sized([btn_w, 0.0], egui::Button::new(&selected_category_text_owned));
+        let category_popup_id = egui::Id::new(category_combo_id.clone());
+        if category_button.clicked() {
+            row.ctx().memory_mut(|mem| mem.open_popup(category_popup_id));
     }
-    egui::containers::popup::popup_below_widget(
-        ui,
-        category_popup_id,
-        &category_button,
-        egui::containers::popup::PopupCloseBehavior::CloseOnClickOutside,
-        |popup_ui| {
-                    // Read and size the popup based on longest category name so long names fit.
-                    let mut filter_text = popup_ui
-                        .memory(|mem| mem.data.get_temp::<String>(category_filter_key.clone().into()).unwrap_or_default());
-                    // Compute a reasonable min width from the longest category name to fit long names.
-                    // Size popup to max item name length + small padding
-                    let char_w = 8.0_f32; // tighter per-character estimate
-                    let max_name_len = categories
-                        .iter()
-                        .filter_map(|o| o.as_ref())
-                        .map(|s| s.len())
-                        .max()
-                        .unwrap_or(12);
-                    let padding = 24.0_f32; // small horizontal padding
-                    let mut popup_min_width = (max_name_len as f32) * char_w + padding;
-                    if popup_min_width < 120.0 { popup_min_width = 120.0; }
-                    if popup_min_width > 900.0 { popup_min_width = 900.0; }
-                    popup_ui.set_min_width(popup_min_width);
-
-                    popup_ui.horizontal(|ui_h| {
-                        ui_h.label("Filter:");
-                        let avail = ui_h.available_width();
-                        // Use a fixed comfortable default width for the filter input (doesn't grow with text)
-                        let default_chars = 28usize; // default input width in characters
-                        let desired = (default_chars as f32) * char_w;
-                        // Keep input width not wider than popup_min_width minus padding and available width
-                        let width = desired.min(avail).min(popup_min_width - 40.0);
-                        let resp = ui_h.add(
-                            egui::TextEdit::singleline(&mut filter_text)
-                                .desired_width(width)
-                                .hint_text("type to filter categories"),
-                        );
-                        if resp.changed() {
-                            ui_h.memory_mut(|mem| mem.data.insert_temp(category_filter_key.clone().into(), filter_text.clone()));
-                        }
-                        if ui_h.small_button("x").clicked() {
-                            filter_text.clear();
-                            ui_h.memory_mut(|mem| mem.data.insert_temp(category_filter_key.clone().into(), filter_text.clone()));
-                        }
-                    });
-
-            let is_selected_root = state.selected_category.is_none();
-            let current_filter = filter_text.clone();
-            if current_filter.is_empty() || "root (uncategorized)".contains(&current_filter.to_lowercase()) {
-                if popup_ui
-                    .selectable_label(is_selected_root, "Root (Uncategorized)")
-                    .clicked()
-                {
-                    if !is_selected_root {
-                        state.selected_category = None;
-                        state.selected_sheet_name = None;
-                        state.reset_interaction_modes_and_selections();
-                        state.force_filter_recalculation = true;
-                        state.ai_rule_popup_needs_init = true;
-                        popup_ui.memory_mut(|mem| mem.close_popup());
-                    }
-                }
-            }
-
-            for cat_opt in categories.iter() {
-                if let Some(cat_name) = cat_opt {
-                    if !current_filter.is_empty() && !cat_name.to_lowercase().contains(&current_filter.to_lowercase()) {
-                        continue;
-                    }
-                    let is_selected_cat = state.selected_category.as_deref() == Some(cat_name.as_str());
-                    if popup_ui.selectable_label(is_selected_cat, cat_name).clicked() {
-                        if !is_selected_cat {
-                            state.selected_category = Some(cat_name.clone());
-                            state.selected_sheet_name = None;
-                            state.reset_interaction_modes_and_selections();
-                            state.force_filter_recalculation = true;
-                            state.ai_rule_popup_needs_init = true;
-                        }
-                        popup_ui.memory_mut(|mem| mem.close_popup());
-                    }
-                }
-            }
-        },
-    );
-    if state.selected_category != previous_selected_category {
-        if state.selected_sheet_name.is_none() {
-            state.reset_interaction_modes_and_selections();
-        }
-        state.force_filter_recalculation = true;
-        state.ai_rule_popup_needs_init = true;
-    }
-    ui.separator(); 
-    // Back button handled in top panel orchestrator for virtual structure stack.
-    
-    if ui
-        .button("➕ New Sheet")
-        .on_hover_text("Create a new empty sheet in the current category")
-        .clicked()
-    {
-        state.new_sheet_target_category = state.selected_category.clone();
-        state.new_sheet_name_input.clear();
-        state.show_new_sheet_popup = true;
-    }
-    ui.separator();
-
-    if ui
-        .button("⬆ Upload JSON")
-        .on_hover_text("Upload a JSON file (will be placed in Root category)")
-        .clicked()
-    {
-        event_writers.upload_req_writer.write(RequestInitiateFileUpload); // Use directly
-    }
-    ui.separator();
-
-    ui.label("Sheet:");
-    let sheets_in_category = registry.get_sheet_names_in_category(&state.selected_category);
-    // Sheet picker filter (render outside the ComboBox so typing doesn't close any open popups)
-    let sheet_combo_id = format!(
-        "sheet_selector_top_panel_refactored_{}_{}",
-        state.selected_category.as_deref().unwrap_or("Root"),
-        state.selected_sheet_name.as_deref().unwrap_or("")
-    );
-    let sheet_filter_key = format!("{}_filter", sheet_combo_id);
-    // Owned display text for sheet button to avoid borrowing state inside popup closures
-    let selected_sheet_text_owned = state.selected_sheet_name.as_deref().unwrap_or("--Select--").to_string();
-    ui.add_enabled_ui(!sheets_in_category.is_empty() || state.selected_sheet_name.is_some(), |ui| {
-        let previous_sheet = state.selected_sheet_name.clone();
-        let sheet_button = ui.button(&selected_sheet_text_owned);
-        let sheet_popup_id = egui::Id::new(sheet_combo_id.clone());
-        if sheet_button.clicked() {
-            ui.ctx().memory_mut(|mem| mem.open_popup(sheet_popup_id));
-        }
         egui::containers::popup::popup_below_widget(
-            ui,
-            sheet_popup_id,
-            &sheet_button,
+            row,
+            category_popup_id,
+            &category_button,
             egui::containers::popup::PopupCloseBehavior::CloseOnClickOutside,
             |popup_ui| {
-                // filter input inside popup; size popup according to longest sheet name
-                let mut filter_text = popup_ui.memory(|mem| mem.data.get_temp::<String>(sheet_filter_key.clone().into()).unwrap_or_default());
-                // compute desired popup width from longest sheet name
-                let char_w = 10.0_f32;
-                let max_name_len = sheets_in_category.iter().map(|s| s.len()).max().unwrap_or(12);
-                let mut popup_min_width = (max_name_len.max(12) as f32) * char_w;
-                if popup_min_width > 900.0 { popup_min_width = 900.0; }
+                // Filter row and entries
+                let mut filter_text = popup_ui
+                    .memory(|mem| mem.data.get_temp::<String>(category_filter_key.clone().into()).unwrap_or_default());
+                let char_w = 8.0_f32;
+                let max_name_len = categories
+                    .iter()
+                    .filter_map(|o| o.as_ref())
+                    .map(|s| s.len())
+                    .max()
+                    .unwrap_or(12);
+                let mut popup_min_width = (max_name_len as f32) * char_w + 24.0;
+                popup_min_width = popup_min_width.clamp(160.0, 900.0);
                 popup_ui.set_min_width(popup_min_width);
 
                 popup_ui.horizontal(|ui_h| {
@@ -200,89 +104,334 @@ pub(super) fn show_sheet_management_controls<'a, 'w>(
                     let avail = ui_h.available_width();
                     let default_chars = 28usize;
                     let desired = (default_chars as f32) * char_w;
-                    let width = desired.min(avail).min(popup_min_width * 0.95);
-                    let resp = ui_h.add(egui::TextEdit::singleline(&mut filter_text).desired_width(width).hint_text("type to filter sheets"));
-                    if resp.changed() { ui_h.memory_mut(|mem| mem.data.insert_temp(sheet_filter_key.clone().into(), filter_text.clone())); }
-                    if ui_h.small_button("x").clicked() { filter_text.clear(); ui_h.memory_mut(|mem| mem.data.insert_temp(sheet_filter_key.clone().into(), filter_text.clone())); }
+                    let width = desired.min(avail).min(popup_min_width - 40.0);
+                    let resp = ui_h.add(
+                        egui::TextEdit::singleline(&mut filter_text)
+                            .desired_width(width)
+                            .hint_text("type to filter categories"),
+                    );
+                    if resp.changed() {
+                        ui_h.memory_mut(|mem| mem.data.insert_temp(category_filter_key.clone().into(), filter_text.clone()));
+                    }
+                    if ui_h.small_button("x").clicked() {
+                        filter_text.clear();
+                        ui_h.memory_mut(|mem| mem.data.insert_temp(category_filter_key.clone().into(), filter_text.clone()));
+                    }
                 });
 
-                popup_ui.selectable_value(&mut state.selected_sheet_name, None, "--Select--");
-                for name in sheets_in_category.iter().filter(|n| {
-                    filter_text.is_empty() || n.to_lowercase().contains(&filter_text.to_lowercase())
-                }) {
-                    if popup_ui.selectable_label(state.selected_sheet_name.as_deref() == Some(name.as_str()), name).clicked() {
-                        state.selected_sheet_name = Some(name.clone());
-                        state.reset_interaction_modes_and_selections();
-                        state.force_filter_recalculation = true;
-                        state.ai_rule_popup_needs_init = true;
-                        state.show_column_options_popup = false;
-                        popup_ui.memory_mut(|mem| mem.close_popup());
+                let is_selected_root = state.selected_category.is_none();
+                let current_filter = filter_text.clone();
+                let root_match = "--root--".to_string();
+                if current_filter.is_empty() || root_match.contains(&current_filter.to_lowercase()) || "root (uncategorized)".contains(&current_filter.to_lowercase()) {
+                    if popup_ui
+                        .selectable_label(is_selected_root, "--Root--")
+                        .clicked()
+                    {
+                        if !is_selected_root {
+                            state.selected_category = None;
+                            state.selected_sheet_name = None;
+                            state.reset_interaction_modes_and_selections();
+                            state.force_filter_recalculation = true;
+                            popup_ui.memory_mut(|mem| mem.close_popup());
+                        }
+                    }
+                }
+
+                for cat_opt in categories.iter() {
+                    if let Some(cat_name) = cat_opt {
+                        if !current_filter.is_empty() && !cat_name.to_lowercase().contains(&current_filter.to_lowercase()) {
+                            continue;
+                        }
+                        let is_selected_cat = state.selected_category.as_deref() == Some(cat_name.as_str());
+                        let display_name: String = cat_name.chars().take(MAX_LABEL_CHARS).collect();
+                        if popup_ui.selectable_label(is_selected_cat, display_name).on_hover_text(cat_name).clicked() {
+                            if !is_selected_cat {
+                                state.selected_category = Some(cat_name.clone());
+                                state.selected_sheet_name = None;
+                                state.reset_interaction_modes_and_selections();
+                                state.force_filter_recalculation = true;
+                            }
+                            popup_ui.memory_mut(|mem| mem.close_popup());
+                        }
                     }
                 }
             },
         );
-        // after popup usage, handle selection change
-        if state.selected_sheet_name != previous_sheet {
-            if state.selected_sheet_name.is_none() {
-                if !state.virtual_structure_stack.is_empty() {
-                    event_writers.close_structure_writer.write(CloseStructureViewEvent);
+
+        // Toggle expand/shrink button just to the right of the picker
+        row.add_space(6.0);
+        let expanded = state.category_picker_expanded;
+        let toggle_label = if expanded { "<" } else { ">" };
+        if row.button(toggle_label).on_hover_text(if expanded { "Shrink category row" } else { "Expand category row" }).clicked() {
+            state.category_picker_expanded = !expanded;
+        }
+
+        // Categories list to the right (like tabs), only when expanded
+        if state.category_picker_expanded {
+            row.add_space(8.0);
+            let line_h = row.text_style_height(&egui::TextStyle::Body) + row.style().spacing.item_spacing.y;
+            // Limit the scroll area to the current row height so it doesn't expand vertically
+            let avail_w = row.available_width();
+            row.allocate_ui_with_layout(
+                egui::Vec2::new(avail_w, line_h + 6.0),
+                egui::Layout::left_to_right(egui::Align::Min),
+                |inner| {
+                    egui::ScrollArea::horizontal()
+                        .id_salt("category_tabs_list")
+                        .auto_shrink([false, false])
+                        .max_height(line_h + 6.0)
+                        .min_scrolled_height(0.0)
+                        .show(inner, |tabs_ui| {
+                    tabs_ui.horizontal(|ui_th| {
+                        // Root first
+                        let is_root = state.selected_category.is_none();
+                        let root_resp = ui_th.selectable_label(is_root, "--Root--");
+                        if root_resp.clicked() && !is_root {
+                            state.selected_category = None;
+                            state.selected_sheet_name = None;
+                            state.reset_interaction_modes_and_selections();
+                            state.force_filter_recalculation = true;
+                        }
+                        for cat_opt in categories.iter() {
+                            if let Some(cat) = cat_opt {
+                                let is_sel = state.selected_category.as_deref() == Some(cat.as_str());
+                                let disp: String = cat.chars().take(MAX_LABEL_CHARS).collect();
+                                let resp = ui_th.selectable_label(is_sel, disp).on_hover_text(cat);
+                                if resp.clicked() && !is_sel {
+                                    state.selected_category = Some(cat.clone());
+                                    state.selected_sheet_name = None;
+                                    state.reset_interaction_modes_and_selections();
+                                    state.force_filter_recalculation = true;
+                                }
+                            }
+                        }
+                            });
+                        });
+                },
+            );
+        }
+        // Rightmost: place the log button on the far right with a small right padding
+        row.with_layout(egui::Layout::right_to_left(egui::Align::Center), |r| {
+            r.add_space(12.0);
+            let label = if state.ai_output_panel_visible { "Close" } else { "Log" };
+            if r.button(label).on_hover_text("Open/close the Log panel").clicked() {
+                state.ai_output_panel_visible = !state.ai_output_panel_visible;
+            }
+        });
+    });
+    if state.selected_category != previous_selected_category {
+        if state.selected_sheet_name.is_none() {
+            state.reset_interaction_modes_and_selections();
+        }
+        state.force_filter_recalculation = true;
+        
+    }
+}
+
+/// Second bottom row: Sheet dropdown, rename/delete, tabs, and rightmost New Sheet
+pub fn show_sheet_controls<'a, 'w>(
+    ui: &mut egui::Ui,
+    state: &mut EditorWindowState,
+    registry: &SheetRegistry,
+    _event_writers: SheetManagementEventWriters<'a, 'w>,
+) {
+    // Compute sheets in current category
+    let sheets_in_category = registry.get_sheet_names_in_category(&state.selected_category);
+
+    // Layout row with rightmost Add button
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui_r| {
+        // Rightmost: Add button
+        ui_r.add_space(12.0); // right padding
+        if ui_r
+            .button("➕ New Sheet")
+            .on_hover_text("Create a new empty sheet in the current category")
+            .clicked()
+        {
+            state.new_sheet_target_category = state.selected_category.clone();
+            state.new_sheet_name_input.clear();
+            state.show_new_sheet_popup = true;
+        }
+
+    // Left side contents (sheet dropdown + rename/delete + tabs)
+    ui_r.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
+            // Sheet dropdown button with filterable popup (fixed-width ~32 chars)
+            let sheet_combo_id = format!(
+                "sheet_selector_{}",
+                state.selected_category.as_deref().unwrap_or("root")
+            );
+            let sheet_filter_key = format!("{}_filter", sheet_combo_id);
+
+            // Owned display text for sheet button
+            let selected_sheet_text_owned = state
+                .selected_sheet_name
+                .as_deref()
+                .unwrap_or("--Select--");
+            const MAX_LABEL_CHARS: usize = 32;
+            let display_trunc: String = selected_sheet_text_owned.chars().take(MAX_LABEL_CHARS).collect();
+            let target_width = fixed_button_width(ui, MAX_LABEL_CHARS);
+
+            ui.add_enabled_ui(
+                !sheets_in_category.is_empty() || state.selected_sheet_name.is_some(),
+                |ui| {
+                    let previous_sheet = state.selected_sheet_name.clone();
+                    let sheet_button = ui.add_sized([target_width, 0.0], egui::Button::new(&display_trunc));
+                    let sheet_popup_id = egui::Id::new(sheet_combo_id.clone());
+                    if sheet_button.clicked() {
+                        ui.ctx().memory_mut(|mem| mem.open_popup(sheet_popup_id));
+                    }
+                    egui::containers::popup::popup_below_widget(
+                        ui,
+                        sheet_popup_id,
+                        &sheet_button,
+                        egui::containers::popup::PopupCloseBehavior::CloseOnClickOutside,
+                        |popup_ui| {
+                            // filter input inside popup; size popup according to longest sheet name
+                            let mut filter_text = popup_ui
+                                .memory(|mem| mem
+                                    .data
+                                    .get_temp::<String>(sheet_filter_key.clone().into())
+                                    .unwrap_or_default());
+                            // compute desired popup width from longest sheet name
+                            let char_w = 10.0_f32;
+                            let max_name_len = sheets_in_category.iter().map(|s| s.len()).max().unwrap_or(12);
+                            let mut popup_min_width = (max_name_len.max(12) as f32) * char_w + 24.0;
+                            if popup_min_width > 900.0 { popup_min_width = 900.0; }
+                            if popup_min_width < 160.0 { popup_min_width = 160.0; }
+                            popup_ui.set_min_width(popup_min_width);
+
+                            popup_ui.horizontal(|ui_h| {
+                                ui_h.label("Filter:");
+                                let avail = ui_h.available_width();
+                                let default_chars = 28usize;
+                                let desired = (default_chars as f32) * char_w;
+                                let width = desired.min(avail).min(popup_min_width * 0.95);
+                                let resp = ui_h.add(
+                                    egui::TextEdit::singleline(&mut filter_text)
+                                        .desired_width(width)
+                                        .hint_text("type to filter sheets"),
+                                );
+                                if resp.changed() {
+                                    ui_h.memory_mut(|mem| mem
+                                        .data
+                                        .insert_temp(sheet_filter_key.clone().into(), filter_text.clone()));
+                                }
+                                if ui_h.small_button("x").clicked() {
+                                    filter_text.clear();
+                                    ui_h.memory_mut(|mem| mem
+                                        .data
+                                        .insert_temp(sheet_filter_key.clone().into(), filter_text.clone()));
+                                }
+                            });
+
+                            popup_ui.selectable_value(&mut state.selected_sheet_name, None, "--Select--");
+                            for name in sheets_in_category.iter().filter(|n| {
+                                filter_text.is_empty() || n.to_lowercase().contains(&filter_text.to_lowercase())
+                            }) {
+                                let truncated: String = name.chars().take(MAX_LABEL_CHARS).collect();
+                                if popup_ui
+                                    .selectable_label(
+                                        state.selected_sheet_name.as_deref() == Some(name.as_str()),
+                                        truncated,
+                                    )
+                                    .on_hover_text(name)
+                                    .clicked()
+                                {
+                                    state.selected_sheet_name = Some(name.clone());
+                                    state.reset_interaction_modes_and_selections();
+                                    state.force_filter_recalculation = true;
+                                    state.show_column_options_popup = false;
+                                    popup_ui.memory_mut(|mem| mem.close_popup());
+                                }
+                            }
+                        },
+                    );
+
+                    // after popup usage, handle selection change
+                    if state.selected_sheet_name != previous_sheet {
+                        if state.selected_sheet_name.is_none() {
+                            // No-op: do not close any panels; just reset modes
+                            state.reset_interaction_modes_and_selections();
+                        }
+                        state.force_filter_recalculation = true;
+                        state.show_column_options_popup = false;
+                    }
+
+                    if let Some(current_sheet_name) = state.selected_sheet_name.as_ref() {
+                        if !registry
+                            .get_sheet_names_in_category(&state.selected_category)
+                            .contains(current_sheet_name)
+                        {
+                            state.selected_sheet_name = None;
+                            state.reset_interaction_modes_and_selections();
+                            state.force_filter_recalculation = true;
+                            state.show_column_options_popup = false;
+                        }
+                    }
+                },
+            );
+
+            // Rename/Delete icon-only buttons
+            let is_sheet_selected = state.selected_sheet_name.is_some();
+            let can_manage_sheet =
+                is_sheet_selected && state.current_interaction_mode == SheetInteractionState::Idle;
+
+            if ui
+                .add_enabled(can_manage_sheet, egui::Button::new("✏"))
+                .on_hover_text("Rename sheet")
+                .clicked()
+            {
+                if let Some(ref name_to_rename) = state.selected_sheet_name {
+                    state.rename_target_category = state.selected_category.clone();
+                    state.rename_target_sheet = name_to_rename.clone();
+                    state.new_name_input = state.rename_target_sheet.clone();
+                    state.show_rename_popup = true;
                 }
-                state.reset_interaction_modes_and_selections();
             }
-            state.force_filter_recalculation = true;
-            state.ai_rule_popup_needs_init = true;
-            state.show_column_options_popup = false;
-        }
-        if let Some(current_sheet_name) = state.selected_sheet_name.as_ref() {
-            if !registry.get_sheet_names_in_category(&state.selected_category).contains(current_sheet_name) {
-                state.selected_sheet_name = None;
-                state.reset_interaction_modes_and_selections();
-                state.force_filter_recalculation = true;
-                state.ai_rule_popup_needs_init = true;
-                state.show_column_options_popup = false;
+            if ui
+                .add_enabled(can_manage_sheet, egui::Button::new("🗑"))
+                .on_hover_text("Delete sheet")
+                .clicked()
+            {
+                if let Some(ref name_to_delete) = state.selected_sheet_name {
+                    state.delete_target_category = state.selected_category.clone();
+                    state.delete_target_sheet = name_to_delete.clone();
+                    state.show_delete_confirm_popup = true;
+                }
             }
-        }
+
+            // Expand/shrink toggle for sheet row, placed to the right of Delete
+            ui.add_space(6.0);
+            let s_expanded = state.sheet_picker_expanded;
+            let s_toggle_label = if s_expanded { "<" } else { ">" };
+            if ui.button(s_toggle_label).on_hover_text(if s_expanded { "Shrink sheet row" } else { "Expand sheet row" }).clicked() {
+                state.sheet_picker_expanded = !s_expanded;
+            }
+
+            // Tabs list: all sheets in current category (selected one is highlighted)
+            if state.sheet_picker_expanded && !sheets_in_category.is_empty() {
+                let line_h = ui.text_style_height(&egui::TextStyle::Body) + ui.style().spacing.item_spacing.y;
+                egui::ScrollArea::horizontal()
+                    .id_salt("sheet_tabs_list")
+                    .auto_shrink([false, false])
+                    .max_height(line_h + 6.0)
+                    .min_scrolled_height(0.0)
+                    .show(ui, |ui_tabs| {
+                        ui_tabs.horizontal(|ui_th| {
+                            for name in sheets_in_category.iter() {
+                                let is_sel = state.selected_sheet_name.as_deref() == Some(name.as_str());
+                                let resp = ui_th.selectable_label(is_sel, name).on_hover_text(name);
+                                if resp.clicked() && !is_sel {
+                                    state.selected_sheet_name = Some(name.clone());
+                                    state.reset_interaction_modes_and_selections();
+                                    state.force_filter_recalculation = true;
+                                    state.show_column_options_popup = false;
+                                }
+                            }
+                        });
+                    });
+            }
+        });
     });
 
-    let is_sheet_selected = state.selected_sheet_name.is_some();
-    let can_manage_sheet =
-        is_sheet_selected && state.current_interaction_mode == SheetInteractionState::Idle;
-
-    if ui
-        .add_enabled(can_manage_sheet, egui::Button::new("✏ Rename"))
-        .clicked()
-    {
-        if let Some(ref name_to_rename) = state.selected_sheet_name {
-            state.rename_target_category = state.selected_category.clone();
-            state.rename_target_sheet = name_to_rename.clone();
-            state.new_name_input = state.rename_target_sheet.clone();
-            state.show_rename_popup = true;
-        }
-    }
-    if ui
-        .add_enabled(can_manage_sheet, egui::Button::new("🗑 Delete Sheet"))
-        .clicked()
-    {
-        if let Some(ref name_to_delete) = state.selected_sheet_name {
-            state.delete_target_category = state.selected_category.clone();
-            state.delete_target_sheet = name_to_delete.clone();
-            state.show_delete_confirm_popup = true;
-        }
-    }
-
-    let copy_button_text = if state.show_quick_copy_bar {
-        "❌ Close Copy"
-    } else {
-        "📋 Copy"
-    };
-    if ui.button(copy_button_text).clicked() {
-        state.show_quick_copy_bar = !state.show_quick_copy_bar;
-    }
-
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        if ui.add(egui::Button::new("❌ App Exit")).clicked() {
-            info!("'App Exit' button clicked. Sending RequestAppExit event.");
-            event_writers.request_app_exit_writer.write(RequestAppExit); // Use directly
-        }
-    });
+    // App Exit and Settings are in the top row (orchestrator)
 }

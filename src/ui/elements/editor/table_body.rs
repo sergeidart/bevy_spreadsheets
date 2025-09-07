@@ -163,7 +163,7 @@ pub fn sheet_table_body(
                         // MODIFIED: Use current_interaction_mode to determine if checkboxes are shown
                         let show_checkbox =
                             (state.current_interaction_mode == SheetInteractionState::AiModeActive && state.ai_mode == AiModeState::Preparing) ||
-                            (state.current_interaction_mode == SheetInteractionState::DeleteModeActive);
+                            matches!(state.current_interaction_mode, SheetInteractionState::DeleteModeActive);
 
                         if c_idx == 0 && show_checkbox {
                             let mut is_selected = state.ai_selected_rows.contains(&original_row_index);
@@ -172,7 +172,6 @@ pub fn sheet_table_body(
                                 if is_selected { state.ai_selected_rows.insert(original_row_index); }
                                 else { state.ai_selected_rows.remove(&original_row_index); }
                             }
-                            ui.add_space(2.0); ui.separator(); ui.add_space(2.0);
                         }
 
                         let validator_opt_for_cell = validators.get(c_idx).cloned().flatten();

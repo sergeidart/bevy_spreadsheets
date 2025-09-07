@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use bevy_tokio_tasks::TokioTasksRuntime;
 use crate::sheets::definitions::default_ai_model_id;
-use crate::sheets::events::{AiBatchTaskResult, RequestToggleAiRowGeneration};
+use crate::sheets::events::AiBatchTaskResult;
 use crate::sheets::resources::SheetRegistry;
 use crate::ui::systems::SendEvent;
 use crate::SessionApiKey;
@@ -19,7 +19,7 @@ use pyo3::exceptions::PyValueError;
 
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn show_ai_control_panel(
+pub(crate) fn show_ai_control_panel(
     ui: &mut egui::Ui,
     state: &mut EditorWindowState,
     selected_category_clone: &Option<String>,
@@ -29,49 +29,17 @@ pub(super) fn show_ai_control_panel(
     commands: &mut Commands,
     session_api_key: &SessionApiKey,
 ) {
-    ui.horizontal(|ui| {
-        if ui.button("⚙ Settings").on_hover_text("Configure API Key (Session)").clicked() {
-            state.show_settings_popup = true;
+    ui.horizontal_wrapped(|ui| {
+        // Indent this sub-row directly under the AI toggle button position
+        if state.last_ai_button_min_x > 0.0 {
+            let panel_left = ui.max_rect().min.x;
+            let indent = (state.last_ai_button_min_x - panel_left).max(0.0);
+            ui.add_space(indent);
         }
 
-        if ui.button("Edit AI Config").on_hover_text("Edit sheet-specific AI model, rules, and parameters").clicked() {
-            state.show_ai_rule_popup = true;
-            state.ai_rule_popup_needs_init = true;
-        }
+    // Send button first, then status label to its right
 
-        ui.separator();
-        ui.label(format!("✨ AI Mode: {:?}", state.ai_mode));
-        ui.separator();
-
-        // Per-root-sheet toggle: Allow AI to generate new rows (visible even in virtual sheet; applies to root)
-        if selected_sheet_name_clone.is_some() {
-            let (root_cat, root_sheet_opt) = state.resolve_root_sheet(registry);
-            if let Some(root_sheet) = root_sheet_opt {
-                if let Some(root_sheet_data) = registry.get_sheet(&root_cat, &root_sheet) {
-                    if let Some(meta) = &root_sheet_data.metadata {
-                        let mut flag = meta.ai_enable_row_generation;
-                        // Apply optimistic pending toggle if present and not yet reflected in metadata
-                        if let Some((p_cat, p_sheet, p_val)) = &state.pending_ai_row_generation_toggle {
-                            if *p_cat == root_cat && *p_sheet == root_sheet {
-                                if meta.ai_enable_row_generation != *p_val {
-                                    flag = *p_val; // show desired value
-                                } else {
-                                    // Metadata caught up, clear pending
-                                    state.pending_ai_row_generation_toggle = None;
-                                }
-                            }
-                        }
-                        let resp = ui.checkbox(&mut flag, "AI Can Add Rows").on_hover_text("If enabled, AI may generate additional new rows; applied at root sheet level (affects virtual views)");
-                        if resp.changed() {
-                            // Record optimistic pending toggle BEFORE dispatch
-                            state.pending_ai_row_generation_toggle = Some((root_cat.clone(), root_sheet.clone(), flag));
-                            commands.spawn(SendEvent::<RequestToggleAiRowGeneration> { event: RequestToggleAiRowGeneration { category: root_cat.clone(), sheet_name: root_sheet.clone(), enabled: flag } });
-                        }
-                        state.effective_ai_can_add_rows = Some(flag);
-                    }
-                }
-            }
-        }
+    // Removed inline 'AI Can Add Rows' toggle (managed in Settings popup only)
 
         let can_send = (state.ai_mode == AiModeState::Preparing || state.ai_mode == AiModeState::ResultsReady)
             && !state.ai_selected_rows.is_empty()
@@ -84,9 +52,9 @@ pub(super) fn show_ai_control_panel(
             hover_text_send = "Select at least one row first.".to_string();
         }
 
-        let send_button_text = format!("🚀 Send to AI ({} Rows)", state.ai_selected_rows.len());
+    let send_button_text = format!("🚀 Send to AI");
 
-        if ui.add_enabled(can_send, egui::Button::new(send_button_text)).on_hover_text(hover_text_send).clicked() {
+    if ui.add_enabled(can_send, egui::Button::new(send_button_text)).on_hover_text(hover_text_send).clicked() {
             // BATCH SEND IMPLEMENTATION
             state.ai_mode = AiModeState::Submitting;
             state.ai_raw_output_display.clear();
@@ -125,8 +93,10 @@ pub(super) fn show_ai_control_panel(
             };
             let model_id = root_meta.as_ref().map_or_else(default_ai_model_id, |m| m.ai_model_id.clone());
             let rule = root_meta.as_ref().and_then(|m| m.ai_general_rule.clone());
-            // Always enable grounding for now per user request
-            let grounding = true; // previously: metadata_opt_ref.and_then(|m| m.requested_grounding_with_google_search)...
+            // Use per-sheet grounding flag (default false if missing)
+            let grounding = root_meta.as_ref()
+                .and_then(|m| m.requested_grounding_with_google_search)
+                .unwrap_or(false);
 
             // Determine included columns (non-structure) & contexts
             let mut included_actual_indices: Vec<usize> = Vec::new();
@@ -344,6 +314,24 @@ pub(super) fn show_ai_control_panel(
             });
         }
 
+        // Status label right of the send button. Include row count and remove the words "AI Mode" from the text.
+        let status_text = match state.ai_mode {
+            AiModeState::Preparing => format!("Preparing ({} Rows)", state.ai_selected_rows.len()),
+            AiModeState::Submitting => "Submitting".to_string(),
+            AiModeState::ResultsReady => "Results Ready".to_string(),
+            AiModeState::Reviewing => "Reviewing".to_string(),
+            AiModeState::Idle => "".to_string(),
+        };
+        if !status_text.is_empty() { ui.label(status_text); }
+        // Place AI Context just to the right of the status instead of far right
+        if ui.add_enabled(selected_sheet_name_clone.is_some(), egui::Button::new("⚙ AI Context")).on_hover_text("Edit per-sheet AI model and context").clicked() {
+            // Reset tracking so popup initializes for the currently selected sheet, regardless of prior context
+            state.ai_rule_popup_last_category = None;
+            state.ai_rule_popup_last_sheet = None;
+            state.ai_rule_popup_needs_init = true;
+            state.show_ai_rule_popup = true;
+        }
+
         if state.ai_mode == AiModeState::ResultsReady {
             let num_existing = state.ai_row_reviews.len();
             let num_new = state.ai_new_row_reviews.len();
@@ -353,7 +341,8 @@ pub(super) fn show_ai_control_panel(
                 state.ai_mode = AiModeState::Reviewing;
             }
         }
-        
+    // No far-right push; the controls remain inline to resemble the Toybox row
+
         if state.ai_mode == AiModeState::Submitting {
             ui.spinner();
         }

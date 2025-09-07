@@ -19,7 +19,6 @@ pub enum SheetInteractionState {
     Idle, 
     AiModeActive,
     DeleteModeActive,
-    ColumnModeActive,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -34,6 +33,13 @@ pub enum ValidatorTypeChoice {
 pub enum ReviewChoice {
     Original,
     AI,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ToyboxMode {
+    #[default]
+    Randomizer,
+    Summarizer,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -84,6 +90,7 @@ pub struct EditorWindowState {
     pub show_new_sheet_popup: bool,
     pub new_sheet_name_input: String, // Re-using new_name_input is an option, but separate is cleaner
     pub new_sheet_target_category: Option<String>,
+    pub new_sheet_show_validation_hint: bool,
 
 
     // AI Mode specific state
@@ -98,11 +105,7 @@ pub struct EditorWindowState {
 
     pub ai_model_id_input: String,
     pub ai_general_rule_input: String,
-    pub ai_temperature_input: f32,
-    pub ai_top_k_input: i32,
-    pub ai_top_p_input: f32,
-    pub show_ai_rule_popup: bool,
-    pub ai_rule_popup_needs_init: bool,
+    
     pub ai_raw_output_display: String,
     // Bottom AI output panel visibility & context tracking
     pub ai_output_panel_visible: bool,
@@ -112,6 +115,14 @@ pub struct EditorWindowState {
     pub show_settings_popup: bool, 
     pub settings_new_api_key_input: String,
     pub was_settings_popup_open: bool, // Tracks previous state of settings popup
+
+    // AI Rule (per-sheet AI Context) Popup state
+    pub show_ai_rule_popup: bool,
+    pub ai_rule_popup_needs_init: bool,
+    pub ai_rule_popup_last_category: Option<Option<String>>, // tracks last category when popup opened
+    pub ai_rule_popup_last_sheet: Option<String>,
+    // Grounding toggle value while the AI Context popup is open
+    pub ai_rule_popup_grounding: Option<bool>,
 
     // Table rendering helpers
     pub filtered_row_indices_cache: HashMap<(Option<String>, String, u64), Vec<usize>>,
@@ -127,9 +138,7 @@ pub struct EditorWindowState {
     pub selected_columns_for_deletion: HashSet<usize>,
     pub column_drag_state: ColumnDragState,
 
-    // NEW: Fields for AI Rule Popup context
-    pub ai_rule_popup_last_category: Option<String>,
-    pub ai_rule_popup_last_sheet: Option<String>,
+    
 
     // NEW: Random Picker UI state (per-session)
     pub show_random_picker_panel: bool,
@@ -165,6 +174,22 @@ pub struct EditorWindowState {
         pub effective_ai_can_add_rows: Option<bool>,
     // Optimistic pending toggle for AI row generation (root sheet) to avoid UI flicker while event processes
     pub pending_ai_row_generation_toggle: Option<(Option<String>, String, bool)>, // (root_category, root_sheet, desired_flag)
+
+    // UI layout prefs (persisted): expand/collapse of pickers
+    pub category_picker_expanded: bool,
+    pub sheet_picker_expanded: bool,
+
+    // Edit Mode expanded row visibility (toolbar-expander)
+    pub show_edit_mode_panel: bool,
+
+    // UI alignment helpers (not persisted): store x positions where toggles were placed
+    pub last_ai_button_min_x: f32,
+    pub last_edit_mode_button_min_x: f32,
+    pub last_toybox_button_min_x: f32,
+
+    // Toybox (container for Random Picker + Summarizer)
+    pub show_toybox_menu: bool,
+    pub toybox_mode: ToyboxMode,
 }
 
 impl Default for EditorWindowState {
@@ -199,6 +224,7 @@ impl Default for EditorWindowState {
             show_new_sheet_popup: false,
             new_sheet_name_input: String::new(),
             new_sheet_target_category: None,
+            new_sheet_show_validation_hint: false,
             ai_mode: AiModeState::Idle,
             ai_selected_rows: HashSet::new(),
             ai_batch_review_active: false,
@@ -206,27 +232,27 @@ impl Default for EditorWindowState {
             ai_new_row_reviews: Vec::new(),
             ai_model_id_input: String::new(),
             ai_general_rule_input: String::new(),
-            ai_temperature_input: 0.7,
-            ai_top_k_input: 40,
-            ai_top_p_input: 0.9,
-            show_ai_rule_popup: false,
-            ai_rule_popup_needs_init: false,
+            
             ai_raw_output_display: String::new(),
             ai_output_panel_visible: false,
             ai_output_panel_last_context: None,
             show_settings_popup: false,
             settings_new_api_key_input: String::new(),
             was_settings_popup_open: false,
+            show_ai_rule_popup: false,
+            ai_rule_popup_needs_init: false,
+            ai_rule_popup_last_category: None,
+            ai_rule_popup_last_sheet: None,
+            ai_rule_popup_grounding: None,
             filtered_row_indices_cache: HashMap::new(),
             force_filter_recalculation: false,
             request_scroll_to_new_row: false,
             scroll_to_row_index: None,
-            show_quick_copy_bar: false,
+            show_quick_copy_bar: true,
             current_interaction_mode: SheetInteractionState::Idle,
             selected_columns_for_deletion: HashSet::new(),
             column_drag_state: ColumnDragState::default(),
-            ai_rule_popup_last_category: None,
-            ai_rule_popup_last_sheet: None,
+            
             show_random_picker_panel: false,
             random_picker_mode_is_complex: false,
             random_simple_result_col: 0,
@@ -248,6 +274,14 @@ impl Default for EditorWindowState {
             ai_context_prefix_by_row: HashMap::new(),
             effective_ai_can_add_rows: None,
             pending_ai_row_generation_toggle: None,
+            category_picker_expanded: true,
+            sheet_picker_expanded: true,
+            show_edit_mode_panel: false,
+            last_ai_button_min_x: 0.0,
+            last_edit_mode_button_min_x: 0.0,
+            last_toybox_button_min_x: 0.0,
+            show_toybox_menu: false,
+            toybox_mode: ToyboxMode::Randomizer,
         }
     }
 }
@@ -339,7 +373,6 @@ impl EditorWindowState {
     pub fn effective_ai_add_rows(&self, registry: &crate::sheets::resources::SheetRegistry) -> Option<bool> {
         let (cat, sheet_opt) = self.resolve_root_sheet(registry);
         let sheet = sheet_opt?;
-        let meta_opt = registry.get_sheet(&cat, &sheet).and_then(|s| s.metadata.as_ref());
     registry.get_sheet(&cat, &sheet).and_then(|s| s.metadata.as_ref()).map(|m| m.ai_enable_row_generation)
     }
 }

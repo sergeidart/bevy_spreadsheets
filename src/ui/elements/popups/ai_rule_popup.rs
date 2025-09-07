@@ -1,7 +1,7 @@
 // src/ui/elements/popups/ai_rule_popup.rs
 use crate::{
     sheets::{
-        definitions::{SheetMetadata, default_ai_model_id, default_temperature, default_top_k, default_top_p}, // Added defaults
+        definitions::{SheetMetadata, default_ai_model_id},
         resources::SheetRegistry,
         systems::io::save::save_single_sheet
     },
@@ -20,7 +20,7 @@ pub fn show_ai_rule_popup(
         return;
     }
 
-    // --- MODIFIED: Robust Initialization Logic ---
+    // --- Simplified Initialization Logic ---
     if state.ai_rule_popup_needs_init {
         if let Some(sheet_name) = &state.selected_sheet_name {
             if let Some(sheet_data) = registry.get_sheet(&state.selected_category, sheet_name) {
@@ -28,63 +28,44 @@ pub fn show_ai_rule_popup(
                     info!("Initializing AI Config popup for sheet: '{:?}/{}'", state.selected_category, sheet_name);
                     state.ai_model_id_input = metadata.ai_model_id.clone();
                     state.ai_general_rule_input = metadata.ai_general_rule.clone().unwrap_or_default();
-                    state.ai_temperature_input = metadata.ai_temperature.unwrap_or_else(|| default_temperature().unwrap_or(0.9));
-                    state.ai_top_k_input = metadata.ai_top_k.unwrap_or_else(|| default_top_k().unwrap_or(1));
-                    state.ai_top_p_input = metadata.ai_top_p.unwrap_or_else(|| default_top_p().unwrap_or(1.0));
+                    // Initialize toggles from metadata
+                    state.effective_ai_can_add_rows = Some(metadata.ai_enable_row_generation);
+                    state.ai_rule_popup_grounding = Some(metadata.requested_grounding_with_google_search.unwrap_or(false));
                 } else {
                     warn!("Metadata not found for sheet '{:?}/{}' during AI Config popup init. Using defaults.", state.selected_category, sheet_name);
                     state.ai_model_id_input = default_ai_model_id();
                     state.ai_general_rule_input = "".to_string();
-                    state.ai_temperature_input = default_temperature().unwrap_or(0.9);
-                    state.ai_top_k_input = default_top_k().unwrap_or(1);
-                    state.ai_top_p_input = default_top_p().unwrap_or(1.0);
+                    state.effective_ai_can_add_rows = Some(false);
+                    state.ai_rule_popup_grounding = Some(false);
                 }
             } else {
                 warn!("Sheet '{:?}/{}' not found during AI Config popup init. Using defaults.", state.selected_category, sheet_name);
                 state.ai_model_id_input = default_ai_model_id();
                 state.ai_general_rule_input = "".to_string();
-                state.ai_temperature_input = default_temperature().unwrap_or(0.9);
-                state.ai_top_k_input = default_top_k().unwrap_or(1);
-                state.ai_top_p_input = default_top_p().unwrap_or(1.0);
+                state.effective_ai_can_add_rows = Some(false);
+                state.ai_rule_popup_grounding = Some(false);
             }
         } else {
             info!("No sheet selected for AI Config popup. Using defaults.");
             state.ai_model_id_input = default_ai_model_id();
             state.ai_general_rule_input = "".to_string();
-            state.ai_temperature_input = default_temperature().unwrap_or(0.9);
-            state.ai_top_k_input = default_top_k().unwrap_or(1);
-            state.ai_top_p_input = default_top_p().unwrap_or(1.0);
+            state.effective_ai_can_add_rows = Some(false);
+            state.ai_rule_popup_grounding = Some(false);
         }
         state.ai_rule_popup_needs_init = false; // Consumed the init flag
     }
     // --- END MODIFIED ---
 
-    // --- ADDITION: Close popup if context changed ---
-    // Use fields on EditorWindowState instead of static muts
-    let context_changed = if state.show_ai_rule_popup {
-        match (&state.ai_rule_popup_last_category, &state.ai_rule_popup_last_sheet, &state.selected_category, &state.selected_sheet_name) {
-            (Some(last_cat), Some(last_sheet), Some(current_cat), Some(current_sheet)) => {
-                if last_cat != current_cat || last_sheet != current_sheet {
-                    true
-                } else {
-                    false
-                }
-            },
-            (None, None, Some(current_cat), Some(current_sheet)) => {
-                state.ai_rule_popup_last_category = Some(current_cat.clone());
-                state.ai_rule_popup_last_sheet = Some(current_sheet.clone());
-                false
-            },
-            _ => false,
+    // If selection changed while open, reinitialize instead of closing
+    if let (Some(last_cat_opt), Some(last_sheet)) = (&state.ai_rule_popup_last_category, &state.ai_rule_popup_last_sheet) {
+        if &state.selected_category != last_cat_opt || state.selected_sheet_name.as_deref() != Some(last_sheet) {
+            state.ai_rule_popup_needs_init = true;
+            state.ai_rule_popup_last_category = Some(state.selected_category.clone());
+            state.ai_rule_popup_last_sheet = state.selected_sheet_name.clone();
         }
-    } else {
-        state.ai_rule_popup_last_category = None;
-        state.ai_rule_popup_last_sheet = None;
-        false
-    };
-    if context_changed {
-        state.show_ai_rule_popup = false;
-        return;
+    } else if state.show_ai_rule_popup {
+        state.ai_rule_popup_last_category = Some(state.selected_category.clone());
+        state.ai_rule_popup_last_sheet = state.selected_sheet_name.clone();
     }
 
     let mut is_window_open = state.show_ai_rule_popup;
@@ -92,60 +73,42 @@ pub fn show_ai_rule_popup(
     let mut cancel_requested = false;
     let mut close_popup = false;
 
-    egui::Window::new("Edit AI Model & Parameters")
+    egui::Window::new("AI Context")
         .id(egui::Id::new("ai_rule_popup_window")) // Keep ID for memory
         .collapsible(false)
         .resizable(true)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .open(&mut is_window_open)
         .show(ctx, |ui| {
-            ui.label(format!(
-                "Editing AI Config for Sheet: '{:?}/{}'",
-                state.selected_category,
-                state.selected_sheet_name.as_deref().unwrap_or("?")
-            ));
-            ui.separator();
-
             ui.horizontal(|ui| {
-                ui.label("AI Model ID:");
+        ui.label("AI Model:");
                 // The TextEdit for ai_model_id_input. No validation here.
                 ui.add(
                     egui::TextEdit::singleline(&mut state.ai_model_id_input)
                         .desired_width(f32::INFINITY)
-                        .hint_text("e.g., gemini-1.5-flash, gemini-2.5-flash-preview-04-17"),
+            .hint_text("e.g., gemini-1.5-flash, gemini-2.5-flash-preview-04-17"),
                 );
             });
-            ui.small("Specify the AI model identifier (e.g., 'gemini-1.5-flash').");
             ui.separator();
-
-            ui.label("Provide a general instruction or context for the AI processing this sheet:");
+        ui.label("Sheet AI Context");
             ui.add_sized(
                 [ui.available_width(), 100.0],
                 egui::TextEdit::multiline(&mut state.ai_general_rule_input)
-                    .hint_text("e.g., 'Correct spelling and grammar. Output as JSON array of strings.'")
+            .hint_text("Provide a general instruction or context for the AI processing this sheet" )
                     .desired_rows(5),
             );
-
             ui.separator();
-            egui::CollapsingHeader::new("⚙️ Advanced Generation Settings")
-                .default_open(false)
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label("Temperature:");
-                        ui.add(egui::DragValue::new(&mut state.ai_temperature_input).speed(0.01).range(0.0..=2.0))
-                            .on_hover_text("Controls randomness. Lower is more deterministic (e.g., 0.2), higher is more creative (e.g., 0.9). Default: 0.9");
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Top-K:");
-                        ui.add(egui::DragValue::new(&mut state.ai_top_k_input).speed(1.0).range(1..=100))
-                            .on_hover_text("Considers the top K most likely tokens at each step. Set to 1 for greedy. Default: 1");
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Top-P:");
-                        ui.add(egui::DragValue::new(&mut state.ai_top_p_input).speed(0.01).range(0.0..=1.0))
-                            .on_hover_text("Considers tokens with a cumulative probability mass of P. 1.0 means no filtering by probability. Default: 1.0");
-                    });
-                });
+            // Row: AI options toggles (stacked vertically)
+            ui.vertical(|ui_v| {
+                let mut can_add_rows = state.effective_ai_can_add_rows.unwrap_or(false);
+                if ui_v.checkbox(&mut can_add_rows, "AI can add rows").on_hover_text("Permit the AI to append rows when generating results").changed() {
+                    state.effective_ai_can_add_rows = Some(can_add_rows);
+                }
+                let mut grounded = state.ai_rule_popup_grounding.unwrap_or(false);
+                if ui_v.checkbox(&mut grounded, "Search").on_hover_text("Enable Google Search grounding for AI responses").changed() {
+                    state.ai_rule_popup_grounding = Some(grounded);
+                }
+            });
             ui.separator();
             ui.horizontal(|ui| {
                 // Enable save if a sheet is actually selected
@@ -181,33 +144,26 @@ pub fn show_ai_rule_popup(
                     let rule_to_save = if state.ai_general_rule_input.trim().is_empty() { None } else { Some(state.ai_general_rule_input.trim().to_string()) };
                     if meta_mut.ai_general_rule != rule_to_save { meta_mut.ai_general_rule = rule_to_save; changed = true; }
 
-                    const EPSILON: f32 = 0.001;
-                    // Temperature
-                    let new_temp_opt = Some(state.ai_temperature_input); // Assuming UI always provides a value
-                    if meta_mut.ai_temperature.map_or(true, |val| (val - state.ai_temperature_input).abs() > EPSILON) || meta_mut.ai_temperature.is_none() {
-                        meta_mut.ai_temperature = new_temp_opt;
-                        changed = true;
+                    // Persist AI add rows flag if changed
+                    if let Some(can_add) = state.effective_ai_can_add_rows {
+                        if meta_mut.ai_enable_row_generation != can_add { meta_mut.ai_enable_row_generation = can_add; changed = true; }
                     }
 
-                    // Top-K
-                    let new_top_k_opt = Some(state.ai_top_k_input);
-                    if meta_mut.ai_top_k != new_top_k_opt {
-                        meta_mut.ai_top_k = new_top_k_opt;
-                        changed = true;
+                    // Persist Grounding toggle
+                    if let Some(ground) = state.ai_rule_popup_grounding {
+                        if meta_mut.requested_grounding_with_google_search != Some(ground) {
+                            meta_mut.requested_grounding_with_google_search = Some(ground);
+                            changed = true;
+                        }
                     }
 
-                    // Top-P
-                    let new_top_p_opt = Some(state.ai_top_p_input);
-                     if meta_mut.ai_top_p.map_or(true, |val| (val - state.ai_top_p_input).abs() > EPSILON) || meta_mut.ai_top_p.is_none() {
-                        meta_mut.ai_top_p = new_top_p_opt;
-                        changed = true;
-                    }
 
                     if changed {
                         info!(
-                            "AI Config updated for '{:?}/{}': Model ID='{}', Rule='{:?}', Temp={:?}, TopK={:?}, TopP={:?}. Triggering save.",
+                            "AI Config updated for '{:?}/{}': Model ID='{}', Rule='{:?}', AddRows={}, Grounding={:?}. Triggering save.",
                             state.selected_category, sheet_name_clone,
-                            meta_mut.ai_model_id, meta_mut.ai_general_rule, meta_mut.ai_temperature, meta_mut.ai_top_k, meta_mut.ai_top_p
+                            meta_mut.ai_model_id, meta_mut.ai_general_rule,
+                            meta_mut.ai_enable_row_generation, meta_mut.requested_grounding_with_google_search
                         );
                         meta_to_save_cloned = Some(meta_mut.clone());
                     } else {

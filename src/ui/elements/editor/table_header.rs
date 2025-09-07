@@ -19,7 +19,8 @@ pub fn sheet_table_header(
     let filters = metadata.get_filters();
     let num_cols = headers.len();
 
-    let is_column_mode = state.current_interaction_mode == SheetInteractionState::ColumnModeActive;
+    // Column drag is now always enabled regardless of mode
+    let is_column_mode = true;
     let dnd_id_source = Id::new("column_dnd_context")
         .with(&state.selected_category)
         .with(sheet_name);
@@ -43,7 +44,7 @@ pub fn sheet_table_header(
             
             ui.allocate_ui_at_rect(response.rect, |header_content_ui| {
                 header_content_ui.horizontal(|ui_h| {
-                    if state.current_interaction_mode == SheetInteractionState::DeleteModeActive {
+                    if matches!(state.current_interaction_mode, SheetInteractionState::DeleteModeActive) {
                         let mut is_selected_for_delete = state.selected_columns_for_deletion.contains(&c_idx);
                         if ui_h.checkbox(&mut is_selected_for_delete, "").changed() {
                             if is_selected_for_delete {

@@ -96,7 +96,7 @@ pub fn handle_create_new_sheet_request(
             editor_state.selected_sheet_name = Some(desired_name.to_string());
             editor_state.reset_interaction_modes_and_selections(); // Reset modes
             editor_state.force_filter_recalculation = true; // Ensure UI updates
-            editor_state.ai_rule_popup_needs_init = true; // For AI config if opened
+            // Legacy AI config popup removed; no init flag needed
             info!("Set newly created sheet '{:?}/{}' as active.", category, desired_name);
         }
     }

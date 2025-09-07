@@ -22,7 +22,6 @@ use crate::ui::{
 use super::state::{AiModeState, EditorWindowState, SheetInteractionState};
 use super::editor_event_handling;
 use super::editor_popups_integration;
-use super::editor_mode_panels;
 use super::editor_sheet_display;
 use super::editor_ai_log;
 
@@ -32,8 +31,7 @@ use crate::visual_copier::{
     resources::VisualCopierManager,
     events::{
         PickFolderRequest, QueueTopPanelCopyEvent, ReverseTopPanelFoldersEvent,
-        VisualCopierStateChanged,
-        RequestAppExit,
+        VisualCopierStateChanged, RequestAppExit,
     },
 };
 
@@ -55,6 +53,7 @@ pub struct SheetEventWriters<'w> {
     pub open_structure: EventWriter<'w, crate::sheets::events::OpenStructureViewEvent>,
 }
 
+// Quick Copy controls moved into Settings popup; no dedicated top-row event writers required here.
 #[derive(SystemParam)]
 pub struct CopierEventWriters<'w> {
     pub pick_folder: EventWriter<'w, PickFolderRequest>,
@@ -62,6 +61,7 @@ pub struct CopierEventWriters<'w> {
     pub reverse_folders: EventWriter<'w, ReverseTopPanelFoldersEvent>,
     pub state_changed: EventWriter<'w, VisualCopierStateChanged>,
 }
+
 
 #[derive(SystemParam)]
 pub struct EditorMiscParams<'w> {
@@ -82,7 +82,7 @@ pub fn generic_sheet_editor_ui(
     mut contexts: EguiContexts,
     mut state: ResMut<EditorWindowState>,
     mut sheet_writers: SheetEventWriters,
-    copier_writers: CopierEventWriters,
+    mut copier_writers: CopierEventWriters,
     mut misc: EditorMiscParams,
     mut commands: Commands,
     mut sheet_data_modified_events: EventReader<SheetDataModifiedInRegistryEvent>,
@@ -109,57 +109,61 @@ pub fn generic_sheet_editor_ui(
         ctx,
         &mut state,
         &mut sheet_writers,
-        &mut misc.registry,
+    &mut misc.registry,
         &misc.ui_feedback,
         &mut misc.api_key_status_res,
         &mut misc.session_api_key_res,
+    &mut misc.copier_manager,
+        &mut copier_writers.pick_folder,
+        &mut copier_writers.queue_top_panel_copy,
+        &mut copier_writers.reverse_folders,
+        &mut copier_writers.state_changed,
     );
 
-    // Render central panel (main content) first
+    // Bottom panels must be declared before CentralPanel to reserve space
+    // Draw persistent Category/Sheet bar at window bottom (always the bottom-most)
+    egui::TopBottomPanel::bottom("category_sheet_bottom_bar").show(ctx, |ui_b| {
+        crate::ui::elements::top_panel::sheet_management_bar::show_sheet_management_controls(
+            ui_b,
+            &mut state,
+            &*misc.registry,
+            crate::ui::elements::top_panel::sheet_management_bar::SheetManagementEventWriters {
+                close_structure_writer: None,
+            },
+        );
+    });
+    // Draw Log panel above the category/sheet bar
+    editor_ai_log::show_ai_output_log_bottom(ctx, &mut state);
+
+    // Render central panel (main content)
     egui::CentralPanel::default().show(ctx, |ui| {
         if keys.just_pressed(KeyCode::Escape) && !state.virtual_structure_stack.is_empty() {
             misc.close_structure_writer.write(CloseStructureViewEvent);
         }
-        let text_style = egui::TextStyle::Body;
-        let row_height = ui.text_style_height(&text_style) + ui.style().spacing.item_spacing.y;
+    // Fix row height to the checkbox/interact size so cell height never changes when the left checkbox appears
+    let row_height = ui.style().spacing.interact_size.y;
 
+        // Keep the top panel minimal (Back + App Exit + toolbars) and move category/sheet row down
         show_top_panel_orchestrator(
             ui,
             &mut state,
             &mut *misc.registry,
             &mut sheet_writers,
-            misc.copier_manager,
-            copier_writers.pick_folder,
-            copier_writers.queue_top_panel_copy,
-            copier_writers.reverse_folders,
             misc.request_app_exit_writer,
-            copier_writers.state_changed,
             misc.close_structure_writer,
+            &misc.runtime,
+            &misc.session_api_key_res,
+            &mut commands,
         );
 
-        ui.add_space(10.0);
-
-        if !misc.ui_feedback.last_message.is_empty() {
-            let text_color = if misc.ui_feedback.is_error { egui::Color32::RED } else { ui.style().visuals.text_color() };
-            ui.colored_label(text_color, &misc.ui_feedback.last_message);
-        }
+    ui.add_space(10.0);
 
         let current_category_clone = state.selected_category.clone();
         let current_sheet_name_clone = state.selected_sheet_name.clone();
 
-        editor_mode_panels::show_active_mode_panel(
-            ui,
-            &mut state,
-            &current_category_clone,
-            &current_sheet_name_clone,
-            &misc.runtime,
-            &misc.registry,
-            &mut commands,
-            &misc.session_api_key_res,
-            &mut sheet_writers,
-        );
+    // Mode panels are now drawn inline in the top controls (above the delimiter)
 
-        if !(state.current_interaction_mode == SheetInteractionState::AiModeActive && state.ai_mode == AiModeState::Reviewing) {
+    if !(state.current_interaction_mode == SheetInteractionState::AiModeActive && state.ai_mode == AiModeState::Reviewing) {
             editor_sheet_display::show_sheet_table(
                 ui,
                 ctx,
@@ -170,29 +174,27 @@ pub fn generic_sheet_editor_ui(
                 sheet_writers.reorder_column,
                 sheet_writers.cell_update,
                 sheet_writers.open_structure,
+                sheet_writers.add_row,
+                sheet_writers.add_column,
             );
+        } else {
+            // Show review panel when in AI Reviewing state
+            crate::ui::elements::editor::ai_batch_review_ui::draw_ai_batch_review_panel(
+                ui,
+                &mut state,
+                &current_category_clone,
+                &current_sheet_name_clone,
+                &misc.registry,
+                &mut sheet_writers.cell_update,
+                &mut sheet_writers.add_row,
+            );
+            ui.add_space(5.0);
         }
+
+    // (moved to a global bottom panel below this CentralPanel block)
 
         // AI output bottom panel rendered after main content outside this closure
     });
 
-    // Auto-hide logic: if context (category, sheet, structure presence) changed, hide panel
-    let in_structure = !state.virtual_structure_stack.is_empty();
-    let current_sheet_key = state.selected_sheet_name.clone();
-    if let Some(sheet_name) = current_sheet_key.clone() {
-        let current_ctx_tuple = (state.selected_category.clone(), sheet_name.clone(), in_structure);
-        if let Some(last_ctx) = &state.ai_output_panel_last_context {
-            if last_ctx != &current_ctx_tuple {
-                // Different sheet or structure transition: hide panel
-                state.ai_output_panel_visible = false;
-            }
-        }
-        state.ai_output_panel_last_context = Some(current_ctx_tuple);
-    } else {
-        state.ai_output_panel_visible = false;
-        state.ai_output_panel_last_context = None;
-    }
-
-    // Finally draw bottom panel if visible
-    editor_ai_log::show_ai_output_log_bottom(ctx, &mut state);
+    // (panels already drawn above CentralPanel)
 }

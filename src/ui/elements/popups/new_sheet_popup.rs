@@ -2,13 +2,15 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 
-use crate::sheets::events::RequestCreateNewSheet;
+use crate::sheets::events::{RequestCreateNewSheet, RequestInitiateFileUpload};
 use crate::ui::elements::editor::state::EditorWindowState;
 
 pub fn show_new_sheet_popup(
     ctx: &egui::Context,
     state: &mut EditorWindowState,
     create_sheet_writer: &mut EventWriter<RequestCreateNewSheet>,
+    // New: allow uploading JSON from within this popup
+    upload_req_writer: Option<&mut EventWriter<RequestInitiateFileUpload>>,
     // ui_feedback: &UiFeedbackState, // To display error messages from name validation (optional here)
 ) {
     if !state.show_new_sheet_popup {
@@ -19,25 +21,14 @@ pub fn show_new_sheet_popup(
     let mut trigger_create = false;
     let mut cancel_clicked = false;
 
-    // Determine target category string for display
-    let target_category_display = state
-        .new_sheet_target_category
-        .as_deref()
-        .unwrap_or("Root");
-
     egui::Window::new("Create New Sheet")
         .collapsible(false)
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .open(&mut popup_open)
         .show(ctx, |ui| {
-            ui.label(format!(
-                "Enter name for the new sheet in category: '{}'",
-                target_category_display
-            ));
-            ui.separator();
-            ui.horizontal(|ui| {
-                ui.label("Sheet Name:");
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Name:");
                 let response = ui.add(
                     egui::TextEdit::singleline(&mut state.new_sheet_name_input)
                         .desired_width(200.0)
@@ -49,7 +40,9 @@ pub fn show_new_sheet_popup(
                     }
                 }
             });
-            ui.small("Allowed characters: A-Z, a-z, 0-9, space, underscore, hyphen. Cannot be empty.");
+            if state.new_sheet_show_validation_hint {
+                ui.small("Allowed characters: A-Z, a-z, 0-9, space, underscore, hyphen. Cannot be empty.");
+            }
 
 
             // Placeholder for potential error messages from previous validation if implemented directly here
@@ -65,6 +58,13 @@ pub fn show_new_sheet_popup(
                 if ui.button("Cancel").clicked() {
                     cancel_clicked = true;
                 }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui_r| {
+                    if let Some(w) = upload_req_writer {
+                        if ui_r.button("⬆ Upload JSON").on_hover_text("Upload a JSON file (placed in Root category)").clicked() {
+                            w.write(RequestInitiateFileUpload);
+                        }
+                    }
+                });
             });
         });
 
@@ -79,18 +79,19 @@ pub fn show_new_sheet_popup(
                 });
                 state.show_new_sheet_popup = false; // Close on successful request send
                 state.new_sheet_name_input.clear();
+                state.new_sheet_show_validation_hint = false;
             } else {
-                // Optionally, provide immediate feedback here or rely on system feedback
                 warn!("New sheet name '{}' contains invalid characters.", trimmed_name);
-                // Could set a local error string in `state` to display in the popup
+                state.new_sheet_show_validation_hint = true;
             }
         }
     }
 
     if cancel_clicked || !popup_open {
-        state.show_new_sheet_popup = false;
-        state.new_sheet_name_input.clear();
+    state.show_new_sheet_popup = false;
+    state.new_sheet_name_input.clear();
         state.new_sheet_target_category = None; // Clear target category
+    state.new_sheet_show_validation_hint = false;
     }
 }
 
