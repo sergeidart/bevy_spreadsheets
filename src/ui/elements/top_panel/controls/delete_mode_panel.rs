@@ -69,7 +69,8 @@ pub fn show_delete_mode_active_controls<'a, 'w>(
                 }
 
                 // Always exit Delete Mode after a delete action is performed
-                state.reset_interaction_modes_and_selections();
+                    state.reset_interaction_modes_and_selections();
+                    state.show_edit_mode_panel = false;
                 state.force_filter_recalculation = true;
             }
         }

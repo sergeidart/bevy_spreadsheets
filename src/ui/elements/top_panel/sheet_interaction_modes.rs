@@ -22,7 +22,7 @@ pub(super) fn show_sheet_interaction_mode_buttons<'a, 'w>(
             state.reset_interaction_modes_and_selections();
         }
     } else {
-    // Enable AI button always when a sheet is selected (no greying out). Clicking it closes other toyboxes.
+        // Always show 'AI Mode' button when not in AI mode
         let ai_btn = ui.add_enabled(is_sheet_selected, egui::Button::new("✨ AI Mode"))
             .on_hover_text("Enable row selection and AI controls");
         {
