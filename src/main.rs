@@ -4,6 +4,7 @@
 use bevy::{
     log::LogPlugin, prelude::*, window::{PrimaryWindow, WindowPlugin}, winit::{UpdateMode, WinitSettings}
 };
+use winit::window::UserAttentionType;
 use bevy_framepace::Limiter;
 use std::time::Duration;
 
@@ -152,6 +153,9 @@ fn set_window_icon(
                          Ok(winit_icon) => {
                              primary_winit_window.set_window_icon(Some(winit_icon));
                              info!("Successfully set window icon from: {}", icon_path);
+                            // Request user attention on startup so the app signals the OS (taskbar flash / attention request).
+                            // This doesn't guarantee focus (OS may prevent focus stealing), but it brings attention to the app.
+                            primary_winit_window.request_user_attention(Some(UserAttentionType::Critical));
                          }
                          Err(e) => {
                              warn!("Failed to create winit::window::Icon: {:?}", e);
