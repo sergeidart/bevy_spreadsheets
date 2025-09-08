@@ -177,9 +177,29 @@ pub(super) fn show_sheet_table(
                                        (0..grid.len()).collect()
                                    } else {
                                        (0..grid.len()).filter(|row_idx| {
-                                           if let Some(row) = grid.get(*row_idx) { filters.iter().enumerate().all(|(col_idx, filter_opt)| {
-                                               match filter_opt { Some(txt) if !txt.is_empty() => row.get(col_idx).map_or(false, |cell| cell.to_lowercase().contains(&txt.to_lowercase())), _ => true }
-                                           }) } else { false }
+                                           if let Some(row) = grid.get(*row_idx) {
+                                               // AND across columns, OR within a column (terms separated by '|')
+                                               filters.iter().enumerate().all(|(col_idx, filter_opt)| {
+                                                   match filter_opt {
+                                                       Some(txt) if !txt.is_empty() => {
+                                                           row.get(col_idx).map_or(false, |cell| {
+                                                               let cell_lower = cell.to_lowercase();
+                                                               let terms: Vec<&str> = txt
+                                                                   .split('|')
+                                                                   .map(|s| s.trim())
+                                                                   .filter(|s| !s.is_empty())
+                                                                   .collect();
+                                                               if terms.is_empty() { return true; }
+                                                               terms.iter().any(|t| {
+                                                                   let term_lower = t.to_lowercase();
+                                                                   cell_lower.contains(&term_lower)
+                                                               })
+                                                           })
+                                                       }
+                                                       _ => true,
+                                                   }
+                                               })
+                                           } else { false }
                                        }).collect()
                                    };
 
@@ -238,11 +258,35 @@ pub(super) fn show_sheet_table(
                                    let grid = &sheet_ref.grid;
                                    let validators: Vec<Option<ColumnValidator>> = meta_ref.columns.iter().map(|c| c.validator.clone()).collect();
                                    let filters: Vec<Option<String>> = meta_ref.columns.iter().map(|c| c.filter.clone()).collect();
-                                   let filtered_indices: Vec<usize> = if filters.iter().all(|f| f.is_none()) { (0..grid.len()).collect() } else { (0..grid.len()).filter(|row_idx| {
-                                       if let Some(row) = grid.get(*row_idx) { filters.iter().enumerate().all(|(col_idx, filter_opt)| {
-                                           match filter_opt { Some(txt) if !txt.is_empty() => row.get(col_idx).map_or(false, |cell| cell.to_lowercase().contains(&txt.to_lowercase())), _ => true }
-                                       }) } else { false }
-                                   }).collect() };
+                                   let filtered_indices: Vec<usize> = if filters.iter().all(|f| f.is_none()) {
+                                       (0..grid.len()).collect()
+                                   } else {
+                                       (0..grid.len()).filter(|row_idx| {
+                                           if let Some(row) = grid.get(*row_idx) {
+                                               // AND across columns, OR within a column (terms separated by '|')
+                                               filters.iter().enumerate().all(|(col_idx, filter_opt)| {
+                                                   match filter_opt {
+                                                       Some(txt) if !txt.is_empty() => {
+                                                           row.get(col_idx).map_or(false, |cell| {
+                                                               let cell_lower = cell.to_lowercase();
+                                                               let terms: Vec<&str> = txt
+                                                                   .split('|')
+                                                                   .map(|s| s.trim())
+                                                                   .filter(|s| !s.is_empty())
+                                                                   .collect();
+                                                               if terms.is_empty() { return true; }
+                                                               terms.iter().any(|t| {
+                                                                   let term_lower = t.to_lowercase();
+                                                                   cell_lower.contains(&term_lower)
+                                                               })
+                                                           })
+                                                       }
+                                                       _ => true,
+                                                   }
+                                               })
+                                           } else { false }
+                                       }).collect()
+                                   };
                                    let num_cols_local = meta_ref.columns.len();
                                    inner_body.rows(row_height, filtered_indices.len(), |mut row| {
                                        let idx_in_list = row.index();
