@@ -15,6 +15,7 @@ use super::events::{
 };
 use super::systems; 
 use crate::ui::systems::{handle_ai_task_results, handle_ai_batch_results}; 
+use crate::ui::systems::apply_throttled_ai_changes; 
 use crate::ui::systems::forward_events; 
 use crate::ui::systems::apply_pending_structure_key_selection;
 use super::systems::logic::handle_sheet_render_cache_update;
@@ -128,6 +129,7 @@ impl Plugin for SheetsPlugin {
                 apply_pending_structure_key_selection,
                 handle_ai_task_results,
                 handle_ai_batch_results,
+                apply_throttled_ai_changes,
             )
             .chain() 
             .in_set(SheetSystemSet::ProcessAsyncResults)

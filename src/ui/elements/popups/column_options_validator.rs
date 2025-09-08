@@ -204,14 +204,36 @@ pub(super) fn show_validator_section(
                 if existing_is_structure {
                     ui.colored_label(egui::Color32::LIGHT_BLUE, "Structure established");
                     if let Some(meta) = meta_opt {
-                        if let Some(col) = meta.columns.get(state.options_column_target_index) {
-                            state.options_existing_structure_key_parent_column = col.structure_key_parent_column_index;
+                        // Determine authoritative headers and current key index
+                        let (headers, current_key_effective, exclude_idx_opt) = if let Some(parent_link) = &meta.structure_parent {
+                            // In virtual structure view (Str1): choose from THIS level's headers (Str1 fields),
+                            // but read the key from the parent field's stored key for this virtual column (authoritative store)
+                            let headers = meta.columns.iter().map(|c| c.header.clone()).collect::<Vec<_>>();
+                            let current_key = if let Some(parent_sheet) = registry_immut.get_sheet(&parent_link.parent_category, &parent_link.parent_sheet) {
+                                if let Some(parent_meta) = &parent_sheet.metadata {
+                                    parent_meta
+                                        .columns
+                                        .get(parent_link.parent_column_index)
+                                        .and_then(|pcol| pcol.structure_schema.as_ref())
+                                        .and_then(|fields| fields.get(state.options_column_target_index))
+                                        .and_then(|f| f.structure_key_parent_column_index)
+                                } else { None }
+                            } else { None };
+                            (headers, current_key, Some(state.options_column_target_index))
+                        } else {
+                            // Editing on the parent (non-virtual): use this sheet's headers and this column's key index
+                            let headers = meta.columns.iter().map(|c| c.header.clone()).collect::<Vec<_>>();
+                            let current_key = meta.columns.get(state.options_column_target_index).and_then(|c| c.structure_key_parent_column_index);
+                            (headers, current_key, Some(state.options_column_target_index))
+                        };
+
+                        // Sync state only if differs
+                        if state.options_existing_structure_key_parent_column != current_key_effective {
+                            state.options_existing_structure_key_parent_column = current_key_effective;
                         }
                         let mut current_key = state.options_existing_structure_key_parent_column;
                         ui.horizontal(|ui_h| {
                             ui_h.label("Key Column:");
-                            // Always allow picking from the same-level sheet the metadata belongs to
-                            let headers: Vec<String> = meta.columns.iter().map(|c| c.header.clone()).collect();
                             if headers.is_empty() { ui_h.label("<no headers>"); return; }
                             let sel_text = current_key.and_then(|i| headers.get(i)).cloned().unwrap_or_else(|| "(none)".to_string());
                             let combo_id = format!("key_parent_column_selector_internal_{}_{}", state.options_column_target_category.as_deref().unwrap_or(""), state.options_column_target_index);
@@ -244,11 +266,11 @@ pub(super) fn show_validator_section(
                                         if ui_h2.small_button("x").clicked() { filter_text.clear(); ui_h2.memory_mut(|mem| mem.data.insert_temp(filter_key.clone().into(), filter_text.clone())); }
                                     });
                                     let current_filter = filter_text.to_lowercase();
-                    egui::ScrollArea::vertical().max_height(300.0).show(popup_ui, |list_ui| {
+                                    egui::ScrollArea::vertical().max_height(300.0).show(popup_ui, |list_ui| {
                                         if list_ui.selectable_label(current_key.is_none(), "(none)").clicked() { current_key = None; list_ui.memory_mut(|mem| mem.close_popup()); }
                                         for (i, h) in headers.iter().enumerate() {
-                        // Exclude the structure column itself only when the same sheet
-                        if i == state.options_column_target_index { continue; }
+                                            // Exclude the structure column itself (parent structure column when virtual; otherwise this column index)
+                                            if let Some(ex_idx) = exclude_idx_opt { if i == ex_idx { continue; } }
                                             if !current_filter.is_empty() && !h.to_lowercase().contains(&current_filter) { continue; }
                                             if list_ui.selectable_label(current_key == Some(i), h).clicked() { current_key = Some(i); list_ui.memory_mut(|mem| mem.close_popup()); }
                                         }

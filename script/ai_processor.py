@@ -76,38 +76,58 @@ def execute_ai_query(api_key: str, payload_json: str) -> str:  # noqa: D401
                 rows_data = [single_row]
                 legacy_single = True
         column_contexts: List[Any] = payload.get("column_contexts", [])
+        keys_block = payload.get("keys")
+        # keys_block shape: { headers: [str], contexts: [str|None], rows: [[str]] } (optional)
         allow_row_additions: bool = payload.get("allow_row_additions", False)
         orig_n = len(rows_data)
         if orig_n == 0:
             return json.dumps({"success": True, "data": [] if legacy_single else [], "raw_response": "No rows provided"}, ensure_ascii=False)
 
+        # Build core ordering and hints
         ordering = (
             f"There are {orig_n} original rows. Output a JSON array of row arrays. "
             f"First {orig_n} arrays must correspond 1:1 & in order to originals. "
             + ("You may append new rows after originals." if allow_row_additions and not legacy_single else "Do not add extra rows.")
             + " Row length must equal number of column contexts. No markdown fences."
         )
+        row_additions_hint = (
+            f"Row Additions Enabled: The model may add new rows AFTER the first {orig_n} original rows to provide similar item if any applicable here. Each new row must match column count."
+            if allow_row_additions and not legacy_single else ""
+        )
         grounded_search_instruction = (
             "For each row, use Google Search to verify every provided value and update it with the latest reliable data you find. "
             "If a value is missing or clearly outdated, search for it and fill it in. Prefer authoritative, recent sources. "
             "Never invent facts: leave a cell blank if after searching you cannot find a credible value."
         )
-        # Merge user system instruction (if any) with ordering + grounded search enforcement (avoid duplication if user already provided similar text)
-        base_instr = system_instruction + "\n" if system_instruction else ""
-        system_full = base_instr + ordering + "\n" + grounded_search_instruction
+        # Merge user system instruction with ordering + grounded search; append row additions hint if enabled
+        base_instr = (system_instruction + "\n") if system_instruction else ""
+        system_full = base_instr + ordering + "\n" + grounded_search_instruction + ("\n" + row_additions_hint if row_additions_hint else "")
 
+        # Compose user message (put an explicit flag at the top for clarity)
+        user_text = (
+            ("ALLOW_ROW_ADDITIONS: true\n" if allow_row_additions and not legacy_single else "")
+            + "Column Contexts:" + json.dumps(column_contexts, ensure_ascii=False) + "\n"
+            + ("Keys:" + json.dumps(keys_block, ensure_ascii=False) + "\n" if keys_block else "")
+            + "Rows Data:" + json.dumps(rows_data, ensure_ascii=False) + "\n"
+            + ((row_additions_hint + "\n") if row_additions_hint else "")
+            + "Return ONLY JSON."
+        )
+
+        # Build request messages and config; include both an explicit system message and system_instruction
         contents = [
             genai.types.Content(role="model", parts=[genai.types.Part.from_text(text=system_full)]),
-            genai.types.Content(role="user", parts=[genai.types.Part.from_text(text=(
-                "Column Contexts:" + json.dumps(column_contexts, ensure_ascii=False) + "\n" +
-                "Rows Data:" + json.dumps(rows_data, ensure_ascii=False) + "\n" +
-                "Return ONLY JSON."))])
+            genai.types.Content(role="user", parts=[genai.types.Part.from_text(text=user_text)]),
         ]
 
         cfg: Dict[str, Any] = {}
         if payload.get("ai_temperature") is not None:
             cfg["temperature"] = payload["ai_temperature"]
         cfg["tools"] = [Tool(google_search=GoogleSearch())]  # always enable search tool for now
+    # Provide system instruction explicitly to the model (redundant with contents[0] for reliability)
+        cfg["system_instruction"] = genai.types.Content(
+            role="model",
+            parts=[genai.types.Part.from_text(text=system_full)],
+        )
 
         client = genai.Client(api_key=api_key, http_options=HttpOptions())
         response = client.models.generate_content(

@@ -124,115 +124,92 @@ pub(crate) fn show_ai_control_panel(
             struct BatchPythonPayload {
                 ai_model_id: String,
                 general_sheet_rule: Option<String>,
-                // Contexts for ALL columns in rows_data after prefixing keys (keys first, then original non-structure columns)
+                // Contexts for ONLY non-structure columns; order matches rows_data columns
                 column_contexts: Vec<Option<String>>,
-                // Row data with key prefix columns included
+                // Row data for ONLY non-structure columns
                 rows_data: Vec<Vec<String>>,
-                // Number of leading columns that are key/context only (must be preserved untouched by AI)
-                key_prefix_count: usize,
+                // Separate key context: headers + contexts + values per row
+                keys: Option<KeysBlock>,
                 requested_grounding_with_google_search: bool,
                 allow_row_additions: bool,
+                // For visibility in debug payload JSON (model also receives the hint via prompt)
+                row_additions_hint: Option<String>,
+            }
+
+            #[derive(serde::Serialize)]
+            struct KeysBlock {
+                headers: Vec<String>,
+                contexts: Vec<Option<String>>,
+                rows: Vec<Vec<String>>, // aligned to headers; one entry per original row
             }
 
             // Resolve allow_row_additions flag with optimistic UI toggle support
             let mut allow_additions_flag = root_meta.as_ref().map(|m| m.ai_enable_row_generation).unwrap_or(false);
+            let mut allow_additions_source: &str = if allow_additions_flag { "metadata:true" } else { "metadata:false" };
             // Prefer an in-flight pending toggle for this specific root sheet, if any
             if let Some((p_cat, p_sheet, p_val)) = &state.pending_ai_row_generation_toggle {
-                if *p_cat == root_category && *p_sheet == root_sheet { allow_additions_flag = *p_val; }
+                if *p_cat == root_category && *p_sheet == root_sheet { allow_additions_flag = *p_val; allow_additions_source = if *p_val { "pending:true" } else { "pending:false" }; }
             } else if let Some(eff) = state.effective_ai_can_add_rows {
                 // Fallback to UI-cached effective flag (kept in sync in the panel)
-                allow_additions_flag = eff;
+                allow_additions_flag = eff; allow_additions_source = if eff { "state:true" } else { "state:false" };
             }
-            // ---- Build recursive key chain (ancestor keys) ----
+            // ---- Build keys context (ancestor keys only; separate from rows_data) ----
             let mut key_chain_headers: Vec<String> = Vec::new();
             let mut key_chain_contexts: Vec<Option<String>> = Vec::new();
             let mut key_chain_values_per_row: Vec<Vec<String>> = Vec::new();
-            // Reconstruct ancestry by walking up virtual_structure_stack plus root metadata relationships.
-            // The virtual_structure_stack keeps only path down to current sheet (each with parent context). We walk it to collect parent row indices.
-            // For each ancestor level we read the parent sheet's key column value for that parent row.
-            // Determine path contexts (exclude current leaf sheet; gather ancestors in order top->bottom)
-            let mut ancestry: Vec<(Option<String>, String, usize)> = Vec::new();
+            // Build ancestry list (top -> bottom), capturing only ancestors that have an explicitly configured key column
+            let mut ancestors_with_keys: Vec<(Option<String>, String, usize, usize)> = Vec::new(); // (cat, sheet, row_idx, key_col_index)
             for vctx in &state.virtual_structure_stack {
-                ancestry.push((vctx.parent.parent_category.clone(), vctx.parent.parent_sheet.clone(), vctx.parent.parent_row));
-            }
-            // Remove leaf if present (last vctx corresponds to current sheet view, but its parent row belongs to ancestor sheet which we need)
-            // ancestry already only has parents; order is from first entered to last; that's already top->bottom.
-            // Now gather key column header & context per ancestor sheet
-            for (anc_cat, anc_sheet, _row_idx) in &ancestry {
-                if let Some(sheet) = registry.get_sheet(anc_cat, anc_sheet) {
+                let anc_cat = vctx.parent.parent_category.clone();
+                let anc_sheet = vctx.parent.parent_sheet.clone();
+                let anc_row_idx = vctx.parent.parent_row;
+                if let Some(sheet) = registry.get_sheet(&anc_cat, &anc_sheet) {
                     if let Some(meta) = &sheet.metadata {
-                        // Prefer an explicitly selected key column from any structure child on this sheet; else fallback to first non-structure
-                        let key_col_index = meta.columns.iter().enumerate().find_map(|(_idx, c)| {
-                            // If any structure column on this sheet points to a parent key, that is the key for this level
+                        // Include only if a child structure on this ancestor selected a parent key column
+                        if let Some(key_col_index) = meta.columns.iter().enumerate().find_map(|(_idx, c)| {
                             if matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure)) {
                                 c.structure_key_parent_column_index
                             } else { None }
-                        }).unwrap_or_else(|| meta.columns.iter().position(|c| !matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure))).unwrap_or(0));
-                        if let Some(col_def) = meta.columns.get(key_col_index) {
-                            key_chain_headers.push(col_def.header.clone());
-                            key_chain_contexts.push(col_def.ai_context.clone());
+                        }) {
+                            if let Some(col_def) = meta.columns.get(key_col_index) {
+                                key_chain_headers.push(col_def.header.clone());
+                                key_chain_contexts.push(col_def.ai_context.clone());
+                            }
+                            ancestors_with_keys.push((anc_cat, anc_sheet, anc_row_idx, key_col_index));
                         }
                     }
                 }
             }
-            // For current sheet, also include its first non-structure column as local key if in a nested view
-            if !state.virtual_structure_stack.is_empty() {
-                if let Some(sheet) = sheet_data_opt { if let Some(meta) = &sheet.metadata { if let Some(idx) = meta.columns.iter().position(|c| !matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure))) { if let Some(col_def)= meta.columns.get(idx){ key_chain_headers.push(col_def.header.clone()); key_chain_contexts.push(col_def.ai_context.clone()); } } } }
-            }
-            // Build key_chain_rows by extracting values for each selected row from combined ancestry + current sheet
+            // Build key values aligned with headers (only for ancestors that have explicit keys)
             for &row_idx in &original_rows {
                 let mut row_vals: Vec<String> = Vec::new();
-                // Ancestor values: use stored ancestor row indices to fetch value from each ancestor sheet's chosen key column
-                for (anc_cat, anc_sheet, anc_row_idx) in &ancestry {
+                for (anc_cat, anc_sheet, anc_row_idx, key_col_index) in &ancestors_with_keys {
                     if let Some(sheet) = registry.get_sheet(anc_cat, anc_sheet) {
-                        if let Some(meta) = &sheet.metadata {
-                            let key_col_index = meta.columns.iter().enumerate().find_map(|(_idx, c)| {
-                                if matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure)) {
-                                    c.structure_key_parent_column_index
-                                } else { None }
-                            }).unwrap_or_else(|| meta.columns.iter().position(|c| !matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure))).unwrap_or(0));
-                            let val = sheet.grid.get(*anc_row_idx).and_then(|r| r.get(key_col_index)).cloned().unwrap_or_default();
-                            row_vals.push(val);
-                        }
+                        let val = sheet
+                            .grid
+                            .get(*anc_row_idx)
+                            .and_then(|r| r.get(*key_col_index))
+                            .cloned()
+                            .unwrap_or_default();
+                        row_vals.push(val);
                     }
                 }
-                // Current sheet key value for this row
-                if let Some(sheet) = sheet_data_opt { if let Some(meta) = &sheet.metadata {
-                    // Use local explicit key if any child structure selected it; else first non-structure
-                    let idx = meta.columns.iter().enumerate().find_map(|(_i,c)| if matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure)) { c.structure_key_parent_column_index } else { None })
-                        .or_else(|| meta.columns.iter().position(|c| !matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure))))
-                        .unwrap_or(0);
-                    let val = sheet.grid.get(row_idx).and_then(|r| r.get(idx)).cloned().unwrap_or_default(); row_vals.push(val);
-                } }
                 key_chain_values_per_row.push(row_vals);
             }
-
-            let key_prefix_count = if key_chain_headers.is_empty() { 0 } else { key_chain_headers.len() };
-            // Prepend key values to each existing row in rows_data and extend contexts accordingly
-            if key_prefix_count > 0 {
-                // Extend column contexts: keys first
-                let mut new_contexts: Vec<Option<String>> = Vec::with_capacity(key_prefix_count + column_contexts.len());
-                for ctx in &key_chain_contexts { new_contexts.push(ctx.clone()); }
-                new_contexts.extend(column_contexts.into_iter());
-                column_contexts = new_contexts;
-                // Prepend per-row
-                for (i, row) in rows_data.iter_mut().enumerate() {
-                    if let Some(keys) = key_chain_values_per_row.get(i) {
-                        let mut new_row = keys.clone();
-                        new_row.extend(row.drain(..));
-                        *row = new_row;
-                    }
-                }
-            }
+            let keys_block_opt = if key_chain_headers.is_empty() { None } else { Some(KeysBlock { headers: key_chain_headers.clone(), contexts: key_chain_contexts.clone(), rows: key_chain_values_per_row.clone() }) };
 
             let payload = BatchPythonPayload {
                 ai_model_id: model_id,
                 general_sheet_rule: rule,
                 column_contexts: column_contexts.clone(),
                 rows_data: rows_data.clone(),
-                key_prefix_count,
+                keys: keys_block_opt,
                 requested_grounding_with_google_search: grounding,
                 allow_row_additions: allow_additions_flag,
+                row_additions_hint: if allow_additions_flag { Some(format!(
+                    "Row Additions Enabled: The model may add new rows AFTER the first {} original rows to provide similar item if any applicable here. Each new row must match column count.",
+                    original_rows.len()
+                )) } else { None },
             };
             let payload_json = match serde_json::to_string(&payload) { Ok(j) => j, Err(e) => { error!("Failed to serialize batch payload: {}", e); return; } };
             // Show what is being sent in the bottom AI output panel for debugging
@@ -254,10 +231,12 @@ pub(crate) fn show_ai_control_panel(
                     let _ = writeln!(dbg, "--- Included Column Names (payload position, name) ---");
                     let _ = writeln!(dbg, "{:?}", names);
                 }
-                // Show allow additions flag + model id
-                let _ = writeln!(dbg, "Model: {}  AllowRowAdditions:{}  Grounding:{}", payload.ai_model_id, payload.allow_row_additions, grounding);
-                if key_prefix_count > 0 {
-                    let _ = writeln!(dbg, "--- Key Prefix Count --- {}", key_prefix_count);
+                // Show allow additions flag + its source + model id
+                let _ = writeln!(dbg, "Model: {}  AllowRowAdditions:{} ({})  Grounding:{}", payload.ai_model_id, payload.allow_row_additions, allow_additions_source, grounding);
+                if !key_chain_headers.is_empty() {
+                    let _ = writeln!(dbg, "--- Keys (separate context) ---");
+                    let _ = writeln!(dbg, "Headers: {:?}", key_chain_headers);
+                    let _ = writeln!(dbg, "Contexts: {:?}", key_chain_contexts);
                     for (i, keys) in key_chain_values_per_row.iter().enumerate() { let _ = writeln!(dbg, "Row {} Keys: {:?}", original_rows[i], keys); }
                 }
                 if payload.allow_row_additions {
@@ -310,7 +289,8 @@ pub(crate) fn show_ai_control_panel(
                 }).await.unwrap_or_else(|e| Ok((Err(format!("Tokio panic: {}", e)), None)))
                 .unwrap_or_else(|e| (Err(format!("PyO3 error: {}", e)), Some(e.to_string())));
 
-                ctx.run_on_main_thread(move |world_ctx| { world_ctx.world.commands().entity(commands_entity).insert(SendEvent::<AiBatchTaskResult>{ event: AiBatchTaskResult { original_row_indices: original_rows_clone, result, raw_response, included_non_structure_columns: included_cols_clone, key_prefix_count } }); }).await;
+                // No key prefixes sent to AI; keep key_prefix_count=0 for downstream consumers
+                ctx.run_on_main_thread(move |world_ctx| { world_ctx.world.commands().entity(commands_entity).insert(SendEvent::<AiBatchTaskResult>{ event: AiBatchTaskResult { original_row_indices: original_rows_clone, result, raw_response, included_non_structure_columns: included_cols_clone, key_prefix_count: 0 } }); }).await;
             });
         }
 

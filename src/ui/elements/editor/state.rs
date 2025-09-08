@@ -1,7 +1,7 @@
 // src/ui/elements/editor/state.rs
 use crate::sheets::definitions::ColumnDataType;
 use bevy::prelude::Resource;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AiModeState {
@@ -40,6 +40,12 @@ pub enum ToyboxMode {
     #[default]
     Randomizer,
     Summarizer,
+}
+
+#[derive(Debug, Clone)]
+pub enum ThrottledAiAction {
+    UpdateCell { row_index: usize, col_index: usize, value: String },
+    AddRow { initial_values: Vec<(usize, String)> },
 }
 
 #[derive(Debug, Clone, Default)]
@@ -190,6 +196,9 @@ pub struct EditorWindowState {
     // Toybox (container for Random Picker + Summarizer)
     pub show_toybox_menu: bool,
     pub toybox_mode: ToyboxMode,
+
+    // Throttled apply queue for Accept All (row_index, col_index, new_value)
+    pub ai_throttled_apply_queue: VecDeque<ThrottledAiAction>,
 }
 
 impl Default for EditorWindowState {
@@ -282,6 +291,7 @@ impl Default for EditorWindowState {
             last_toybox_button_min_x: 0.0,
             show_toybox_menu: false,
             toybox_mode: ToyboxMode::Randomizer,
+            ai_throttled_apply_queue: VecDeque::new(),
         }
     }
 }

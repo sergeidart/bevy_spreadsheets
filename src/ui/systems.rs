@@ -208,26 +208,46 @@ pub fn apply_pending_structure_key_selection(
     if let Some((cat, sheet, structure_col_index, new_key_opt)) = state.pending_structure_key_apply.take() {
         let mut root_parent_link: Option<crate::sheets::definitions::StructureParentLink> = None;
         let mut changed = false;
-        if let Some(sheet_data) = registry.get_sheet_mut(&cat, &sheet) {
-            if let Some(meta) = &mut sheet_data.metadata {
-                if let Some(col) = meta.columns.get_mut(structure_col_index) {
-                    if col.structure_key_parent_column_index != new_key_opt { changed = true; }
-                    col.structure_key_parent_column_index = new_key_opt;
-                    col.structure_ancestor_key_parent_column_indices = Some(Vec::new());
-                }
-                root_parent_link = meta.structure_parent.clone();
+        let mut is_virtual = false;
+        if let Some(sheet_data) = registry.get_sheet(&cat, &sheet) {
+            if let Some(meta_ro) = &sheet_data.metadata {
+                is_virtual = meta_ro.structure_parent.is_some();
+                root_parent_link = meta_ro.structure_parent.clone();
             }
         }
-        // If this sheet is a virtual sheet (has structure_parent), also mirror the key selection into the parent's structure schema field
-        if let Some(parent_link) = &root_parent_link {
-            if let Some(parent_sheet) = registry.get_sheet_mut(&parent_link.parent_category, &parent_link.parent_sheet) {
-                if let Some(parent_meta) = &mut parent_sheet.metadata {
-                    if let Some(parent_col) = parent_meta.columns.get_mut(parent_link.parent_column_index) {
-                        if let Some(fields) = parent_col.structure_schema.as_mut() {
-                            if let Some(field) = fields.get_mut(structure_col_index) {
-                                field.structure_key_parent_column_index = new_key_opt;
+        if is_virtual {
+            // Edit from virtual sheet: update parent field only; do not modify parent column-level key
+            if let Some(parent_link) = &root_parent_link {
+                if let Some(parent_sheet) = registry.get_sheet_mut(&parent_link.parent_category, &parent_link.parent_sheet) {
+                    if let Some(parent_meta) = &mut parent_sheet.metadata {
+                        if let Some(parent_col) = parent_meta.columns.get_mut(parent_link.parent_column_index) {
+                            if let Some(fields) = parent_col.structure_schema.as_mut() {
+                                if let Some(field) = fields.get_mut(structure_col_index) {
+                                    if field.structure_key_parent_column_index != new_key_opt { changed = true; }
+                                    field.structure_key_parent_column_index = new_key_opt;
+                                }
                             }
                         }
+                        if changed { let meta_clone = parent_meta.clone(); save_single_sheet(registry.as_ref(), &meta_clone); }
+                    }
+                }
+            }
+            // Also mirror the selection into the virtual sheet's ColumnDefinition so UI reflects it immediately
+            if let Some(vsheet) = registry.get_sheet_mut(&cat, &sheet) {
+                if let Some(vmeta) = &mut vsheet.metadata {
+                    if let Some(vcol) = vmeta.columns.get_mut(structure_col_index) {
+                        vcol.structure_key_parent_column_index = new_key_opt;
+                    }
+                }
+            }
+        } else {
+            // Edit from parent sheet: update parent column-level key and clear ancestor (recomputed below)
+            if let Some(sheet_data) = registry.get_sheet_mut(&cat, &sheet) {
+                if let Some(meta) = &mut sheet_data.metadata {
+                    if let Some(col) = meta.columns.get_mut(structure_col_index) {
+                        if col.structure_key_parent_column_index != new_key_opt { changed = true; }
+                        col.structure_key_parent_column_index = new_key_opt;
+                        col.structure_ancestor_key_parent_column_indices = Some(Vec::new());
                     }
                 }
             }
@@ -250,7 +270,7 @@ pub fn apply_pending_structure_key_selection(
             break;
         }
         collected.reverse();
-        if let Some(sheet_data) = registry.get_sheet_mut(&cat, &sheet) {
+        if !is_virtual { if let Some(sheet_data) = registry.get_sheet_mut(&cat, &sheet) {
             if let Some(meta) = &mut sheet_data.metadata {
                 if let Some(col) = meta.columns.get_mut(structure_col_index) {
                     let existing = col.structure_ancestor_key_parent_column_indices.clone().unwrap_or_default();
@@ -258,9 +278,9 @@ pub fn apply_pending_structure_key_selection(
                     col.structure_ancestor_key_parent_column_indices = Some(collected);
                 }
                 let meta_clone_for_save = if changed { Some(meta.clone()) } else { None };
-                if let Some(meta_clone) = meta_clone_for_save { save_single_sheet(registry.as_ref(), &meta_clone); info!("Persisted structure key selection for column {} in '{:?}/{}'", structure_col_index + 1, cat, sheet); }
+                if let Some(meta_clone) = meta_clone_for_save { save_single_sheet(registry.as_ref(), &meta_clone); }
             }
-        }
+        } }
     }
 }
 
@@ -280,11 +300,58 @@ pub fn handle_ai_batch_results(
                 if let Some(raw) = &ev.raw_response { state.ai_raw_output_display = raw.clone(); }
                 // Legacy ai_suggestions map removed
                 let (orig_slice, extra_slice) = rows.split_at(originals);
-                // Record prefix count so review UI can lock those cells
+                // Record prefix count so review UI can lock those cells (keys no longer prefixed; keep 0)
                 state.ai_context_only_prefix_count = ev.key_prefix_count;
-                // (original rows are processed below when building snapshot model)
-                // For new rows, also strip key prefix if present
-                // New rows processed directly into ai_new_row_reviews below
+                // Populate read-only key context (headers + values) for each original row, based on current
+                // virtual ancestry (same logic as send payload "keys" block). This is for display only.
+                state.ai_context_prefix_by_row.clear();
+                if !state.virtual_structure_stack.is_empty() {
+                    // Build ancestor key spec: (cat, sheet, fixed row index, key col index) and headers
+                    let mut key_headers: Vec<String> = Vec::new();
+                    let mut ancestors_with_keys: Vec<(Option<String>, String, usize, usize)> = Vec::new();
+                    for vctx in &state.virtual_structure_stack {
+                        let anc_cat = vctx.parent.parent_category.clone();
+                        let anc_sheet = vctx.parent.parent_sheet.clone();
+                        let anc_row_idx = vctx.parent.parent_row;
+                        if let Some(sheet) = registry.get_sheet(&anc_cat, &anc_sheet) {
+                            if let Some(meta) = &sheet.metadata {
+                                if let Some(key_col_index) = meta
+                                    .columns
+                                    .iter()
+                                    .enumerate()
+                                    .find_map(|(_idx, c)| {
+                                        if matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure)) {
+                                            c.structure_key_parent_column_index
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                {
+                                    if let Some(col_def) = meta.columns.get(key_col_index) {
+                                        key_headers.push(col_def.header.clone());
+                                    }
+                                    ancestors_with_keys.push((anc_cat, anc_sheet, anc_row_idx, key_col_index));
+                                }
+                            }
+                        }
+                    }
+                    if !ancestors_with_keys.is_empty() && !key_headers.is_empty() {
+                        for &row_index in ev.original_row_indices.iter() {
+                            let mut pairs: Vec<(String, String)> = Vec::with_capacity(key_headers.len());
+                            for (idx, (anc_cat, anc_sheet, anc_row_idx, key_col_index)) in ancestors_with_keys.iter().enumerate() {
+                                let header = key_headers.get(idx).cloned().unwrap_or_default();
+                                let val = registry
+                                    .get_sheet(anc_cat, anc_sheet)
+                                    .and_then(|s| s.grid.get(*anc_row_idx))
+                                    .and_then(|r| r.get(*key_col_index))
+                                    .cloned()
+                                    .unwrap_or_default();
+                                pairs.push((header, val));
+                            }
+                            state.ai_context_prefix_by_row.insert(row_index, pairs);
+                        }
+                    }
+                }
 
                 // Build new unified review model (dual snapshots) including structure placeholders
                 state.ai_row_reviews.clear();
@@ -344,5 +411,36 @@ pub fn handle_ai_batch_results(
             }
         }
         break;
+    }
+}
+
+/// Applies at most one queued AI change per frame to avoid contention and match per-row timing.
+pub fn apply_throttled_ai_changes(
+    mut state: ResMut<EditorWindowState>,
+    mut cell_update_writer: EventWriter<crate::sheets::events::UpdateCellEvent>,
+    mut add_row_writer: EventWriter<crate::sheets::events::AddSheetRowRequest>,
+) {
+    if let Some(action) = state.ai_throttled_apply_queue.pop_front() {
+        let (cat, sheet_opt) = state.current_sheet_context();
+        if let Some(sheet) = sheet_opt.clone() {
+            match action {
+                crate::ui::elements::editor::state::ThrottledAiAction::UpdateCell { row_index, col_index, value } => {
+                    cell_update_writer.write(crate::sheets::events::UpdateCellEvent {
+                        category: cat.clone(),
+                        sheet_name: sheet,
+                        row_index,
+                        col_index,
+                        new_value: value,
+                    });
+                }
+                crate::ui::elements::editor::state::ThrottledAiAction::AddRow { initial_values } => {
+                    add_row_writer.write(crate::sheets::events::AddSheetRowRequest {
+                        category: cat.clone(),
+                        sheet_name: sheet,
+                        initial_values: if initial_values.is_empty() { None } else { Some(initial_values) },
+                    });
+                }
+            }
+        }
     }
 }

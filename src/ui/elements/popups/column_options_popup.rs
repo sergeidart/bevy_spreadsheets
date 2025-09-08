@@ -332,7 +332,10 @@ fn initialize_popup_state(state: &mut EditorWindowState, registry: &SheetRegistr
                 state.options_link_target_column_index = None;
                 state.options_basic_type_select = col_def.data_type;
                 // Always refresh existing structure key selection from authoritative metadata
-                let refreshed = if let Some(f) = parent_field_opt.as_ref() { f.structure_key_parent_column_index } else {
+                let refreshed = if let Some(f) = parent_field_opt.as_ref() {
+                    // Use only parent field-level key; do not fall back to column-level
+                    f.structure_key_parent_column_index
+                } else {
                     registry
                         .get_sheet(target_category, target_sheet)
                         .and_then(|s| s.metadata.as_ref())

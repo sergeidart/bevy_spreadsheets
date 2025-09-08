@@ -103,6 +103,26 @@ pub fn show_ai_rule_popup(
                 let mut can_add_rows = state.effective_ai_can_add_rows.unwrap_or(false);
                 if ui_v.checkbox(&mut can_add_rows, "AI can add rows").on_hover_text("Permit the AI to append rows when generating results").changed() {
                     state.effective_ai_can_add_rows = Some(can_add_rows);
+                    // Also stage an in-flight pending toggle for the root sheet so Send panel honors it immediately
+                    if let Some(current_sheet) = &state.selected_sheet_name {
+                        // Resolve root sheet by walking structure_parent chain
+                        let mut root_category = state.selected_category.clone();
+                        let mut root_sheet = current_sheet.clone();
+                        let mut safety = 0;
+                        loop {
+                            safety += 1; if safety > 16 { break; }
+                            let meta_opt = registry.get_sheet(&root_category, &root_sheet).and_then(|s| s.metadata.as_ref());
+                            if let Some(m) = meta_opt {
+                                if let Some(parent) = &m.structure_parent {
+                                    root_category = parent.parent_category.clone();
+                                    root_sheet = parent.parent_sheet.clone();
+                                    continue;
+                                }
+                            }
+                            break;
+                        }
+                        state.pending_ai_row_generation_toggle = Some((root_category, root_sheet, can_add_rows));
+                    }
                 }
                 let mut grounded = state.ai_rule_popup_grounding.unwrap_or(false);
                 if ui_v.checkbox(&mut grounded, "Search").on_hover_text("Enable Google Search grounding for AI responses").changed() {

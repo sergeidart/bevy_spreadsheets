@@ -70,7 +70,6 @@ pub(super) fn draw_inline_ai_review_panel(
                             if ui.button("✅ Accept All Remaining").on_hover_text("Apply AI/original choices for current and all queued rows").clicked() { deferred_action = Some("apply_all_remaining"); }
                             if ui.button("🛑 Decline All Remaining").on_hover_text("Skip every remaining queued suggestion").clicked() { deferred_action = Some("skip_all_remaining"); }
                         }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| { if ui.button("❌ Cancel Review Mode").clicked() { deferred_action = Some("cancel"); } });
                     });
                 }
                 None => { ui.colored_label(Color32::RED, "Original row or metadata missing."); }
@@ -88,56 +87,89 @@ pub(super) fn draw_inline_ai_review_panel(
                     let ai_cell_value = suggestion_buf.get(display_idx).cloned().unwrap_or_default();
                     let value_to_apply = match choice { ReviewChoice::Original => &original_cell_value, ReviewChoice::AI => &ai_cell_value };
                     let current_grid_value = registry.get_sheet(selected_category_clone, active_sheet_name).and_then(|s| s.grid.get(original_row_index)).and_then(|r| r.get(*actual_idx)).cloned().unwrap_or_default();
-                    if *value_to_apply != current_grid_value { cell_update_writer.write(UpdateCellEvent { category: selected_category_clone.clone(), sheet_name: active_sheet_name.to_string(), row_index: original_row_index, col_index: *actual_idx, new_value: value_to_apply.clone() }); }
+                        if *value_to_apply != current_grid_value {
+                            info!(
+                                "ApplyAll(single): row={} col={} val={}",
+                                original_row_index,
+                                *actual_idx,
+                                value_to_apply
+                            );
+                            cell_update_writer.write(UpdateCellEvent { category: selected_category_clone.clone(), sheet_name: active_sheet_name.to_string(), row_index: original_row_index, col_index: *actual_idx, new_value: value_to_apply.clone() });
+                        }
                 }
             }
         }
         advance_review_queue(state);
     }, "apply_all_remaining" => {
-        // Apply current row with user-chosen per-column selections (default AI) then apply AI choices for all remaining queued rows.
-        if let Some((visible_col_indices, original_row, _meta)) = suggestion_indices_and_state {
-            if let Some((_idx, suggestion_buf)) = &state.current_ai_suggestion_edit_buffer {
-                for (display_idx, actual_idx) in visible_col_indices.iter().enumerate() {
-                    let choice = state.ai_review_column_choices.get(display_idx).cloned().unwrap_or(ReviewChoice::AI);
-                    let original_cell_value = original_row.get(*actual_idx).cloned().unwrap_or_default();
-                    let ai_cell_value = suggestion_buf.get(display_idx).cloned().unwrap_or_default();
-                    let value_to_apply = match choice { ReviewChoice::Original => &original_cell_value, ReviewChoice::AI => &ai_cell_value };
-                    let current_grid_value = registry.get_sheet(selected_category_clone, active_sheet_name).and_then(|s| s.grid.get(original_row_index)).and_then(|r| r.get(*actual_idx)).cloned().unwrap_or_default();
-                    if *value_to_apply != current_grid_value {
-                        cell_update_writer.write(UpdateCellEvent { category: selected_category_clone.clone(), sheet_name: active_sheet_name.to_string(), row_index: original_row_index, col_index: *actual_idx, new_value: value_to_apply.clone() });
-                    }
-                }
-            }
-        }
-
-        // Apply remaining rows: assume AI choice for every column (full suggestion application)
-        let start_queue_pos = state.ai_current_review_index.unwrap_or(usize::MAX); // current queue index
-        if start_queue_pos != usize::MAX {
-            let remaining = state.ai_review_queue.clone();
-            // Recompute visible column indices from metadata (ignore hidden columns)
-            let visible_col_indices: Vec<usize> = if let Some(sheet) = registry.get_sheet(selected_category_clone, active_sheet_name) { if let Some(meta) = &sheet.metadata { (0..meta.columns.len()).collect() } else { (0..sheet.grid.first().map(|r| r.len()).unwrap_or(0)).collect() } } else { Vec::new() };
-            for (queue_pos, original_row_idx) in remaining.iter().enumerate() {
-                if queue_pos <= start_queue_pos { continue; }
-                if let Some(suggestion_buf) = state.ai_suggestions.remove(original_row_idx) {
-                    // Fetch original row for comparison
-                    let original_row_opt = registry
-                        .get_sheet(selected_category_clone, active_sheet_name)
-                        .and_then(|s| s.grid.get(*original_row_idx).map(|r| r.clone()));
-                    if let Some(original_row) = original_row_opt {
-                        for (display_idx, actual_idx) in visible_col_indices.iter().enumerate() {
-                            let ai_cell_value = suggestion_buf.get(display_idx).cloned().unwrap_or_default();
-                            let current_grid_value = registry.get_sheet(selected_category_clone, active_sheet_name).and_then(|s| s.grid.get(*original_row_idx)).and_then(|r| r.get(*actual_idx)).cloned().unwrap_or_default();
-                            if ai_cell_value != current_grid_value {
-                                cell_update_writer.write(UpdateCellEvent { category: selected_category_clone.clone(), sheet_name: active_sheet_name.to_string(), row_index: *original_row_idx, col_index: *actual_idx, new_value: ai_cell_value });
-                            }
+        // Helper to apply current row with existing choice selections (same as pressing Apply)
+        let mut apply_current = |state: &mut EditorWindowState| {
+            if let Some((visible_col_indices, original_row, _meta)) = suggestion_indices_and_state.clone() {
+                if let Some((idx, suggestion_buf)) = &state.current_ai_suggestion_edit_buffer {
+                    for (display_idx, actual_idx) in visible_col_indices.iter().enumerate() {
+                        let choice = state.ai_review_column_choices.get(display_idx).cloned().unwrap_or(ReviewChoice::AI);
+                        let original_cell_value = original_row.get(*actual_idx).cloned().unwrap_or_default();
+                        let ai_cell_value = suggestion_buf.get(display_idx).cloned().unwrap_or_default();
+                        let value_to_apply = match choice { ReviewChoice::Original => &original_cell_value, ReviewChoice::AI => &ai_cell_value };
+                        let current_grid_value = registry.get_sheet(selected_category_clone, active_sheet_name).and_then(|s| s.grid.get(*idx)).and_then(|r| r.get(*actual_idx)).cloned().unwrap_or_default();
+                        if *value_to_apply != current_grid_value {
+                            info!("ApplyAll(single): row={} col={} val={}", *idx, *actual_idx, value_to_apply);
+                            cell_update_writer.write(UpdateCellEvent { category: selected_category_clone.clone(), sheet_name: active_sheet_name.to_string(), row_index: *idx, col_index: *actual_idx, new_value: value_to_apply.clone() });
                         }
                     }
                 }
             }
+        };
+        // 1) Apply current row respecting user selections
+        apply_current(state);
+        // 2) For each remaining queued row: setup next, normalize suggestion buffer, set choices to AI for all, apply
+        loop {
+            // Move to next; exit if finished
+            advance_review_queue(state);
+            if state.ai_current_review_index.is_none() { break; }
+            // Build fresh context for newly current row
+            let (visible_col_indices, original_row, num_cols) = if let Some((cur_idx, (cat, sheet))) = state.ai_current_review_index.map(|_| (state.ai_current_review_index.unwrap(), (selected_category_clone.clone(), active_sheet_name.to_string()))) {
+                // Resolve original row index and metadata
+                let orig_row_idx = state.current_ai_suggestion_edit_buffer.as_ref().map(|(ridx, _)| *ridx).unwrap_or(0);
+                let (visible, original, mcols) = if let Some(sheet_ref) = registry.get_sheet(&cat, &sheet) {
+                    let meta_opt = sheet_ref.metadata.as_ref();
+                    let visible: Vec<usize> = if let Some(meta) = meta_opt {
+                        meta.columns.iter().enumerate()
+                            .filter_map(|(i,c)| if matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure)) { None } else { Some(i) })
+                            .collect()
+                    } else { (0..sheet_ref.grid.first().map(|r| r.len()).unwrap_or(0)).collect() };
+                    let orig = sheet_ref.grid.get(orig_row_idx).cloned().unwrap_or_default();
+                    (visible, orig, meta_opt.map(|m| m.columns.len()).unwrap_or(0))
+                } else { (Vec::new(), Vec::new(), 0) };
+                (visible, original, mcols)
+            } else { (Vec::new(), Vec::new(), 0) };
+            // Normalize current suggestion buffer to visible columns length
+            if let Some((_row_idx, suggestion_buf)) = &mut state.current_ai_suggestion_edit_buffer {
+                if suggestion_buf.len() == num_cols && !visible_col_indices.is_empty() {
+                    let mut filtered: Vec<String> = Vec::with_capacity(visible_col_indices.len());
+                    for actual in &visible_col_indices { filtered.push(suggestion_buf.get(*actual).cloned().unwrap_or_default()); }
+                    *suggestion_buf = filtered;
+                } else if suggestion_buf.len() < visible_col_indices.len() {
+                    suggestion_buf.resize(visible_col_indices.len(), String::new());
+                }
+            }
+            // Set choices to AI for all columns
+            state.ai_review_column_choices = vec![ReviewChoice::AI; visible_col_indices.len()];
+            // Apply for this row
+            if let Some((row_idx, suggestion_buf)) = &state.current_ai_suggestion_edit_buffer {
+                for (display_idx, actual_idx) in visible_col_indices.iter().enumerate() {
+                    let ai_cell_value = suggestion_buf.get(display_idx).cloned().unwrap_or_default();
+                    let current_grid_value = registry.get_sheet(selected_category_clone, active_sheet_name).and_then(|s| s.grid.get(*row_idx)).and_then(|r| r.get(*actual_idx)).cloned().unwrap_or_default();
+                    if ai_cell_value != current_grid_value {
+                        info!("ApplyAll(single-next): row={} col={} val={}", *row_idx, *actual_idx, ai_cell_value);
+                        cell_update_writer.write(UpdateCellEvent { category: selected_category_clone.clone(), sheet_name: active_sheet_name.to_string(), row_index: *row_idx, col_index: *actual_idx, new_value: ai_cell_value });
+                    }
+                }
+            }
+            // Loop continues to advance further
         }
-        exit_review_mode(state);
+        // After loop, we're out of review mode
     }, "skip" => advance_review_queue(state), "skip_all_remaining" => {
         // Simply exit review mode without applying current or remaining
         exit_review_mode(state);
-    }, "cancel" => exit_review_mode(state), _ => {} } }
+    }, _ => {} } }
 }

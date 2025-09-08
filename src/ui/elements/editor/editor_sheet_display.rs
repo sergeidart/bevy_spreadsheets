@@ -88,12 +88,11 @@ pub(super) fn show_sheet_table(
                                 if let (Some(parent_meta), Some(parent_row)) = (&parent_sheet.metadata, parent_sheet.grid.get(vctx.parent.parent_row)) {
                                     if let Some(struct_col_def) = parent_meta.columns.get(vctx.parent.parent_col) {
                                         // Prefer parent-selected key; fallback to first non-structure
-                                        let key_col_idx = struct_col_def.structure_key_parent_column_index
-                                            .or_else(|| parent_meta.columns.iter().position(|c| !matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure))))
-                                            .unwrap_or(0);
-                                        if let Some(key_col_def) = parent_meta.columns.get(key_col_idx) {
-                                            let value = parent_row.get(key_col_idx).cloned().unwrap_or_default();
-                                            ancestor_key_columns.push((key_col_def.header.clone(), value));
+                                        if let Some(key_col_idx) = struct_col_def.structure_key_parent_column_index {
+                                            if let Some(key_col_def) = parent_meta.columns.get(key_col_idx) {
+                                                let value = parent_row.get(key_col_idx).cloned().unwrap_or_default();
+                                                ancestor_key_columns.push((key_col_def.header.clone(), value));
+                                            }
                                         }
                                     }
                                 }
