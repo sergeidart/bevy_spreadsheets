@@ -10,6 +10,7 @@ use crate::{
 };
 use bevy::prelude::*;
 use std::any;
+use std::collections::HashMap;
 
 use crate::ui::elements::editor::state::{RowReview, NewRowReview, ReviewChoice}; // retained for batch result construction
 
@@ -385,16 +386,57 @@ pub fn handle_ai_batch_results(
                     state.ai_row_reviews.push(RowReview { row_index, original: original_snapshot, ai: ai_snapshot, choices, non_structure_columns: included.clone() });
                 }
                 // New rows: strip key prefix (if any) then map included indices
+                // Precompute map from normalized first included column values across the entire active sheet (strip CR/LF, trim, lowercase)
+                let mut first_col_value_to_row: HashMap<String, usize> = HashMap::new();
+                if let Some(first_col_actual) = included.first() {
+                    let normalize = |s: &str| s.replace(['\r','\n'], "").trim().to_lowercase();
+                    if let Some(sheet_name) = &sheet_ctx { if let Some(sheet_ref) = registry.get_sheet(&cat_ctx, sheet_name) {
+                        for (row_idx, row) in sheet_ref.grid.iter().enumerate() {
+                            if let Some(val) = row.get(*first_col_actual) {
+                                let norm = normalize(val);
+                                if !norm.is_empty() { first_col_value_to_row.entry(norm).or_insert(row_idx); }
+                            }
+                        }
+                    } }
+                }
+
                 for new_row_full in extra_slice.iter() {
                     let new_row = if ev.key_prefix_count > 0 && new_row_full.len() >= ev.key_prefix_count {
                         &new_row_full[ev.key_prefix_count..]
                     } else { new_row_full };
                     let mut ai_snapshot: Vec<String> = Vec::with_capacity(included.len());
-                    for (logical_i, _actual_col) in included.iter().enumerate() {
-                        ai_snapshot.push(new_row.get(logical_i).cloned().unwrap_or_default());
+                    for (logical_i, _actual_col) in included.iter().enumerate() { ai_snapshot.push(new_row.get(logical_i).cloned().unwrap_or_default()); }
+
+                    // Detect duplicate by first column value
+                    let mut duplicate_match_row: Option<usize> = None;
+                    let mut original_for_merge: Option<Vec<String>> = None;
+                    let mut choices: Option<Vec<ReviewChoice>> = None;
+                    let mut merge_selected = false;
+                    let mut merge_decided = false;
+                    if let Some(first_val) = ai_snapshot.get(0) {
+                        let normalized_first = first_val.replace(['\r','\n'], "").trim().to_lowercase();
+                        if let Some(matched_row_index) = first_col_value_to_row.get(&normalized_first) {
+                            duplicate_match_row = Some(*matched_row_index);
+                            // Build original snapshot from registry for the matched row
+                            if let Some(sheet_name) = &sheet_ctx {
+                                if let Some(sheet_ref) = registry.get_sheet(&cat_ctx, sheet_name) {
+                                    if let Some(existing_row) = sheet_ref.grid.get(*matched_row_index) {
+                                        let mut orig_vec: Vec<String> = Vec::with_capacity(included.len());
+                                        for actual_col in &included { orig_vec.push(existing_row.get(*actual_col).cloned().unwrap_or_default()); }
+                                        original_for_merge = Some(orig_vec.clone());
+                                        // Default choices: prefer AI where different
+                                        let ch: Vec<ReviewChoice> = orig_vec.iter().zip(ai_snapshot.iter()).map(|(o,a)| if o != a { ReviewChoice::AI } else { ReviewChoice::Original }).collect();
+                                        choices = Some(ch);
+                                        merge_selected = true; // default to Merge when duplicate detected
+                                    }
+                                }
+                            }
+                        }
                     }
-                    state.ai_new_row_reviews.push(NewRowReview { ai: ai_snapshot, non_structure_columns: included.clone(), accept: true });
+                    state.ai_new_row_reviews.push(NewRowReview { ai: ai_snapshot, non_structure_columns: included.clone(), accept: true, duplicate_match_row, original_for_merge, choices, merge_selected, merge_decided });
                 }
+                // Precompute undecided merge flag once
+                state.ai_batch_has_undecided_merge = state.ai_new_row_reviews.iter().any(|nr| nr.duplicate_match_row.is_some() && !nr.merge_decided);
                 state.ai_batch_review_active = true;
                 state.ai_mode = AiModeState::ResultsReady;
                 info!("Processed AI batch result: {} originals, {} new rows", originals, state.ai_new_row_reviews.len());

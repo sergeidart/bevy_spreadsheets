@@ -225,6 +225,8 @@ pub struct EditorWindowState {
 
     // Throttled apply queue for Accept All (row_index, col_index, new_value)
     pub ai_throttled_apply_queue: VecDeque<ThrottledAiAction>,
+    // Cached flag: true if there are duplicate new rows needing a Merge/Separate decision
+    pub ai_batch_has_undecided_merge: bool,
 }
 
 impl Default for EditorWindowState {
@@ -325,6 +327,7 @@ impl Default for EditorWindowState {
             toybox_mode: ToyboxMode::Randomizer,
             fps_setting: FpsSetting::default(),
             ai_throttled_apply_queue: VecDeque::new(),
+            ai_batch_has_undecided_merge: false,
         }
     }
 }
@@ -352,6 +355,17 @@ pub struct NewRowReview {
     pub ai: Vec<String>,
     pub non_structure_columns: Vec<usize>,
     pub accept: bool,
+    // If Some(row_index) then this new row's first column matches an existing row's first column
+    // allowing user to choose between merging into that row or adding a separate row.
+    pub duplicate_match_row: Option<usize>,
+    // Snapshot of the matched original row's values for the same non_structure_columns (only if duplicate_match_row is Some)
+    pub original_for_merge: Option<Vec<String>>,
+    // Per-column review choices (only meaningful when merging). Mirrors RowReview. Length == non_structure_columns.len()
+    pub choices: Option<Vec<ReviewChoice>>,
+    // Whether the user currently has the Merge option selected (pre-decision). Defaults true if duplicate_match_row present.
+    pub merge_selected: bool,
+    // Whether the user clicked Decide (once decided Accept/Cancel replace Decide and toggle is hidden)
+    pub merge_decided: bool,
 }
 
 #[derive(Debug, Clone)]
