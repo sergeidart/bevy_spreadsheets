@@ -7,6 +7,8 @@ use crate::SessionApiKey;
 use crate::sheets::resources::SheetRegistry;
 // Removed: use bevy::prelude::ResMut;
 use whoami;
+use crate::settings::io::{save_settings_to_file, load_settings_from_file};
+use crate::settings::AppSettings;
 use crate::visual_copier::resources::VisualCopierManager;
 use bevy::prelude::EventWriter;
 use crate::visual_copier::events::{PickFolderRequest, QueueTopPanelCopyEvent, ReverseTopPanelFoldersEvent, VisualCopierStateChanged};
@@ -29,8 +31,8 @@ pub fn show_settings_popup(
 ) {
 // --- END MODIFIED ---
     if state.show_settings_popup {
-        // Only check keyring when popup is first opened
-        let popup_just_opened = state.show_settings_popup && !state.was_settings_popup_open;
+    // Only check keyring when popup is first opened
+    let popup_just_opened = state.show_settings_popup && !state.was_settings_popup_open;
         if popup_just_opened {
             let username = whoami::username();
             info!("[DEBUG] (Popup just opened) Checking key status for username: {username}");
@@ -52,6 +54,10 @@ pub fn show_settings_popup(
                 session_api_key.0 = None;
                 api_key_status.status = "No Key Set".to_string();
             }
+                // Also load persisted AppSettings into the UI state (best-effort)
+                if let Ok(loaded) = load_settings_from_file::<AppSettings>() {
+                    state.fps_setting = loaded.fps_setting;
+                }
         }
     }
 
@@ -133,6 +139,31 @@ pub fn show_settings_popup(
                 });
             });
             ui.separator();
+                    ui.heading("Performance");
+                    ui.horizontal_wrapped(|ui_h| {
+                        ui_h.label("Frame rate:");
+                        // Dropdown selector for FPS
+                        let mut fps_choice = state.fps_setting;
+                        egui::ComboBox::from_label("")
+                            .selected_text(match fps_choice {
+                                crate::ui::elements::editor::state::FpsSetting::Thirty => "30",
+                                crate::ui::elements::editor::state::FpsSetting::Sixty => "60",
+                                crate::ui::elements::editor::state::FpsSetting::ScreenHz => "Screen Hz (Auto)",
+                            })
+                            .show_ui(ui_h, |ui_cb| {
+                                ui_cb.selectable_value(&mut fps_choice, crate::ui::elements::editor::state::FpsSetting::Thirty, "30");
+                                ui_cb.selectable_value(&mut fps_choice, crate::ui::elements::editor::state::FpsSetting::Sixty, "60");
+                                ui_cb.selectable_value(&mut fps_choice, crate::ui::elements::editor::state::FpsSetting::ScreenHz, "Screen Hz (Auto)");
+                            });
+                        if fps_choice != state.fps_setting {
+                            state.fps_setting = fps_choice;
+                            // Persist the new choice
+                            let settings_to_save = AppSettings { fps_setting: state.fps_setting };
+                            if let Err(e) = save_settings_to_file(&settings_to_save) {
+                                info!("Failed to save AppSettings: {}", e);
+                            }
+                        }
+                    });
             ui.heading("Quick Copy");
             // Row 1: FROM
             ui.horizontal_wrapped(|ui_h| {

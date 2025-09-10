@@ -6,6 +6,7 @@ use bevy::{
 };
 use winit::window::UserAttentionType;
 use bevy_framepace::Limiter;
+use crate::ui::elements::editor::state::{EditorWindowState, FpsSetting};
 use std::time::Duration;
 
 use image::ImageFormat as CrateImageFormat;
@@ -14,6 +15,7 @@ use winit::window::Icon as WinitIcon;
 use bevy_egui::EguiPlugin;
 use bevy_tokio_tasks::TokioTasksPlugin;
 use dotenvy::dotenv;
+mod settings;
 
 
 mod sheets;
@@ -91,6 +93,7 @@ fn main() {
         .add_systems(Startup, (
             initialize_api_key_status_startup,
             set_window_icon,
+            load_app_settings_startup,
         ))
         .add_systems(Update, fps_limit)
         .run();
@@ -99,7 +102,49 @@ fn main() {
 
 fn fps_limit(
     mut settings: ResMut<bevy_framepace::FramepaceSettings>,
-) {settings.limiter = Limiter::from_framerate(60.0);}
+    state: Res<EditorWindowState>,
+    primary_window_query: Query<Entity, With<PrimaryWindow>>,
+    windows: NonSend<bevy::winit::WinitWindows>,
+) {
+    match state.fps_setting {
+        FpsSetting::Thirty => settings.limiter = Limiter::from_framerate(30.0),
+        FpsSetting::Sixty => settings.limiter = Limiter::from_framerate(60.0),
+        FpsSetting::ScreenHz => {
+            // Try to read monitor refresh rate from the primary winit window; fall back to no limiter (0.0) which lets the OS/compositor decide.
+            let mut applied = false;
+            if let Ok(primary_entity) = primary_window_query.single() {
+                if let Some(winit_window) = windows.get_window(primary_entity) {
+                    if let Some(monitor) = winit_window.current_monitor() {
+                        // Try to get the refresh rate from the monitor's video modes (best-effort)
+                        if let Some(video_mode) = monitor.video_modes().next() {
+                            // video_mode.refresh_rate_millihertz() returns millihertz (1/1000 Hz)
+                            let refresh_mhz = video_mode.refresh_rate_millihertz();
+                            if refresh_mhz > 0 {
+                                let refresh_hz = (refresh_mhz as f64) / 1000.0;
+                                settings.limiter = Limiter::from_framerate(refresh_hz);
+                                applied = true;
+                            }
+                        }
+                    }
+                }
+            }
+            if !applied {
+                // No reliable screen Hz found; disable explicit limiting (let run at max / V-sync)
+                settings.limiter = Limiter::from_framerate(0.0);
+            }
+        }
+    }
+}
+
+fn load_app_settings_startup(mut state: ResMut<EditorWindowState>) {
+    // Best-effort: Load persisted AppSettings and populate UI state
+    if let Ok(loaded) = settings::io::load_settings_from_file::<settings::AppSettings>() {
+        state.fps_setting = loaded.fps_setting;
+        info!("Loaded app settings: fps_setting={:?}", state.fps_setting);
+    } else {
+        info!("No persisted app settings found; using defaults.");
+    }
+}
 
 // Functions initialize_api_key_status_startup and set_window_icon remain the same
 fn initialize_api_key_status_startup(

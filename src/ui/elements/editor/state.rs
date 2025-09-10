@@ -1,6 +1,7 @@
 // src/ui/elements/editor/state.rs
 use crate::sheets::definitions::ColumnDataType;
 use bevy::prelude::Resource;
+use serde::{Serialize, Deserialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -40,6 +41,17 @@ pub enum ToyboxMode {
     #[default]
     Randomizer,
     Summarizer,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FpsSetting {
+    Thirty,
+    Sixty,
+    ScreenHz, // Auto
+}
+
+impl Default for FpsSetting {
+    fn default() -> Self { FpsSetting::Sixty }
 }
 
 #[derive(Debug, Clone)]
@@ -208,6 +220,8 @@ pub struct EditorWindowState {
     // Toybox (container for Random Picker + Summarizer)
     pub show_toybox_menu: bool,
     pub toybox_mode: ToyboxMode,
+    // App-wide FPS setting controlled from Settings popup
+    pub fps_setting: FpsSetting,
 
     // Throttled apply queue for Accept All (row_index, col_index, new_value)
     pub ai_throttled_apply_queue: VecDeque<ThrottledAiAction>,
@@ -309,6 +323,7 @@ impl Default for EditorWindowState {
             last_toybox_button_min_x: 0.0,
             show_toybox_menu: false,
             toybox_mode: ToyboxMode::Randomizer,
+            fps_setting: FpsSetting::default(),
             ai_throttled_apply_queue: VecDeque::new(),
         }
     }
