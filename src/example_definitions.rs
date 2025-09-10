@@ -1,10 +1,7 @@
 // src/example_definitions.rs
 use crate::sheets::definitions::{
     ColumnDataType, ColumnDefinition, SheetMetadata,
-    // --- MODIFIED: Import new default function for model ID ---
     default_ai_model_id,
-    // --- END MODIFIED ---
-    default_temperature, default_top_k, default_top_p, // Keep these
 };
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Default)]
@@ -56,10 +53,10 @@ pub fn create_example_items_metadata() -> SheetMetadata {
         columns,
         ai_general_rule: None,
         // --- MODIFIED: Initialize new AI model ID field and keep existing params ---
-        ai_model_id: default_ai_model_id(),
-        ai_temperature: default_temperature(),
-        ai_top_k: default_top_k(),
-        ai_top_p: default_top_p(),
+    ai_model_id: default_ai_model_id(),
+    ai_temperature: None,
+    ai_top_k: None,
+    ai_top_p: None,
         requested_grounding_with_google_search: Default::default(),
     ai_enable_row_generation: false,
     random_picker: None,
@@ -101,10 +98,10 @@ pub fn create_simple_config_metadata() -> SheetMetadata {
         columns,
         ai_general_rule: None,
         // --- MODIFIED: Initialize new AI model ID field and keep existing params ---
-        ai_model_id: default_ai_model_id(),
-        ai_temperature: default_temperature(),
-        ai_top_k: default_top_k(),
-        ai_top_p: default_top_p(),
+    ai_model_id: default_ai_model_id(),
+    ai_temperature: None,
+    ai_top_k: None,
+    ai_top_p: None,
         requested_grounding_with_google_search: Default::default(),
     ai_enable_row_generation: false,
     random_picker: None,

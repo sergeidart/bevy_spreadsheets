@@ -73,9 +73,10 @@ pub fn save_single_sheet(registry: &SheetRegistry, metadata_to_save: &SheetMetad
                 Ok(file) => {
                     let writer = BufWriter::new(file);
                     // Serialize the *provided* metadata_to_save, which might have corrections
-                    match serde_json::to_writer_pretty(writer, metadata_to_save) {
+            match serde_json::to_writer_pretty(writer, metadata_to_save) {
                         Ok(_) => {
                             info!("Successfully saved metadata for sheet '{:?}/{}' to '{}'.", category, sheet_name, meta_path.display());
+                if let Some(rp) = &metadata_to_save.random_picker { trace!("Save: RandomPicker mode={:?} weights={} exps={} mults={} summarizers={}", rp.mode, rp.weight_columns.len(), rp.weight_exponents.len(), rp.weight_multipliers.len(), rp.summarizer_columns.len()); }
                             // Metadata saved successfully
                         }
                         Err(e) => {

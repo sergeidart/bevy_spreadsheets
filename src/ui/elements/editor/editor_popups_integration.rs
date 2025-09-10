@@ -5,6 +5,7 @@ use crate::ui::elements::popups::{
     show_delete_confirm_popup, show_rename_popup, show_settings_popup,
     show_new_sheet_popup, show_validator_confirm_popup,
     show_ai_rule_popup,
+    show_random_picker_popup,
 };
 use crate::ui::elements::editor::state::EditorWindowState;
 use super::main_editor::SheetEventWriters; // Assuming SheetEventWriters is made public or moved
@@ -40,4 +41,6 @@ pub(super) fn display_active_popups(
     // AI Rule (per-sheet AI Context) popup is now accessed from AI Mode via 'AI Context' button
     show_ai_rule_popup(ctx, state, registry);
     show_new_sheet_popup(ctx, state, &mut sheet_writers.create_sheet, Some(&mut sheet_writers.upload_req));
+    // Random Picker popup (opened by gear button in the top panel)
+    show_random_picker_popup(ctx, state, registry);
 }

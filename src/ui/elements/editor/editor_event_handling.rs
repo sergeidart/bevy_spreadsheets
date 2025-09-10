@@ -77,6 +77,45 @@ pub(super) fn process_editor_events_and_state(
                         state.random_complex_result_col = rp.complex_result_col_index.min(num_cols.saturating_sub(1));
                         state.random_complex_weight_col = rp.weight_col_index.filter(|i| *i < num_cols);
                         state.random_complex_second_weight_col = rp.second_weight_col_index.filter(|i| *i < num_cols);
+                        // Restore dynamic weight columns list if available, otherwise fallback to legacy fields
+                        state.random_picker_weight_columns.clear();
+                        state.random_picker_weight_exponents.clear();
+                        state.random_picker_weight_multipliers.clear();
+                        if !rp.weight_columns.is_empty() {
+                            // push only valid indices
+                            for &ci in rp.weight_columns.iter() { if ci < num_cols { state.random_picker_weight_columns.push(Some(ci)); } }
+                            let expected = state.random_picker_weight_columns.len();
+                            // restore exponents or default to 1.0 for missing entries
+                            if rp.weight_exponents.len() == expected {
+                                state.random_picker_weight_exponents.extend_from_slice(&rp.weight_exponents[..expected]);
+                            } else {
+                                state.random_picker_weight_exponents.resize(expected, 1.0);
+                            }
+                            // restore multipliers or default to 1.0 for missing entries
+                            if rp.weight_multipliers.len() == expected {
+                                state.random_picker_weight_multipliers.extend_from_slice(&rp.weight_multipliers[..expected]);
+                            } else {
+                                state.random_picker_weight_multipliers.resize(expected, 1.0);
+                            }
+                        } else {
+                            // legacy fallback: use legacy two-weight fields if present
+                            if let Some(a) = rp.weight_col_index.filter(|i| *i < num_cols) { state.random_picker_weight_columns.push(Some(a)); }
+                            if let Some(b) = rp.second_weight_col_index.filter(|i| *i < num_cols) { state.random_picker_weight_columns.push(Some(b)); }
+                            let expected = state.random_picker_weight_columns.len();
+                            state.random_picker_weight_exponents.resize(expected, 1.0);
+                            state.random_picker_weight_multipliers.resize(expected, 1.0);
+                        }
+                        // ensure there is always at least one slot to allow quick UI addition
+                        if state.random_picker_weight_columns.is_empty() { state.random_picker_weight_columns.push(None); state.random_picker_weight_exponents.push(1.0); state.random_picker_weight_multipliers.push(1.0); }
+                        // Restore summarizer columns list
+                        state.summarizer_selected_columns.clear();
+                        if !rp.summarizer_columns.is_empty() {
+                            for &ci in rp.summarizer_columns.iter() { if ci < num_cols { state.summarizer_selected_columns.push(Some(ci)); } }
+                        } else if let Some(first) = Some(rp.simple_result_col_index).filter(|_| true) {
+                            // default to single column if none stored
+                            state.summarizer_selected_columns.push(Some(first));
+                        }
+                        if state.summarizer_selected_columns.is_empty() { state.summarizer_selected_columns.push(None); }
                     } else {
                         // Default: Simple with first column
                         state.random_picker_mode_is_complex = false;
@@ -94,6 +133,9 @@ pub(super) fn process_editor_events_and_state(
 
     // Initialize Random Picker UI from metadata when flagged (e.g., on startup UI pass)
     if state.random_picker_needs_init {
+        // Attempt to initialize only if registry has metadata for the selected sheet.
+        // If metadata isn't loaded yet (startup race), leave the flag set so we retry next frame.
+        let mut initialized = false;
         if let Some(sheet_name) = &state.selected_sheet_name {
             if let Some(sheet) = registry.get_sheet(&state.selected_category, sheet_name) {
                 if let Some(meta) = &sheet.metadata {
@@ -104,6 +146,35 @@ pub(super) fn process_editor_events_and_state(
                         state.random_complex_result_col = rp.complex_result_col_index.min(num_cols.saturating_sub(1));
                         state.random_complex_weight_col = rp.weight_col_index.filter(|i| *i < num_cols);
                         state.random_complex_second_weight_col = rp.second_weight_col_index.filter(|i| *i < num_cols);
+                        // Restore dynamic weight columns + vectors (was previously missing in this init path)
+                        state.random_picker_weight_columns.clear();
+                        state.random_picker_weight_exponents.clear();
+                        state.random_picker_weight_multipliers.clear();
+                        if !rp.weight_columns.is_empty() {
+                            for &ci in rp.weight_columns.iter() { if ci < num_cols { state.random_picker_weight_columns.push(Some(ci)); } }
+                            let expected = state.random_picker_weight_columns.len();
+                            if rp.weight_exponents.len() == expected { state.random_picker_weight_exponents.extend_from_slice(&rp.weight_exponents[..expected]); }
+                            else { state.random_picker_weight_exponents.resize(expected, 1.0); }
+                            if rp.weight_multipliers.len() == expected { state.random_picker_weight_multipliers.extend_from_slice(&rp.weight_multipliers[..expected]); }
+                            else { state.random_picker_weight_multipliers.resize(expected, 1.0); }
+                        } else {
+                            // fallback to legacy two-column fields
+                            if let Some(a) = rp.weight_col_index.filter(|i| *i < num_cols) { state.random_picker_weight_columns.push(Some(a)); }
+                            if let Some(b) = rp.second_weight_col_index.filter(|i| *i < num_cols) { state.random_picker_weight_columns.push(Some(b)); }
+                            let expected = state.random_picker_weight_columns.len();
+                            state.random_picker_weight_exponents.resize(expected, 1.0);
+                            state.random_picker_weight_multipliers.resize(expected, 1.0);
+                        }
+                        if state.random_picker_weight_columns.is_empty() { state.random_picker_weight_columns.push(None); state.random_picker_weight_exponents.push(1.0); state.random_picker_weight_multipliers.push(1.0); }
+                        // Summarizer columns restore
+                        state.summarizer_selected_columns.clear();
+                        if !rp.summarizer_columns.is_empty() {
+                            for &ci in rp.summarizer_columns.iter() { if ci < num_cols { state.summarizer_selected_columns.push(Some(ci)); } }
+                        } else if let Some(first) = Some(rp.simple_result_col_index).filter(|_| true) {
+                            state.summarizer_selected_columns.push(Some(first));
+                        }
+                        if state.summarizer_selected_columns.is_empty() { state.summarizer_selected_columns.push(None); }
+                        debug!("Random Picker (init) restored: weights={}, summarizers={} for '{:?}/{}'", state.random_picker_weight_columns.iter().filter(|o| o.is_some()).count(), state.summarizer_selected_columns.iter().filter(|o| o.is_some()).count(), state.selected_category, sheet_name);
                     } else {
                         // Default: Simple with first column
                         state.random_picker_mode_is_complex = false;
@@ -111,11 +182,32 @@ pub(super) fn process_editor_events_and_state(
                         state.random_complex_result_col = 0.min(num_cols.saturating_sub(1));
                         state.random_complex_weight_col = None;
                         state.random_complex_second_weight_col = None;
+                        // Ensure baseline vectors
+                        state.random_picker_weight_columns.clear();
+                        state.random_picker_weight_exponents.clear();
+                        state.random_picker_weight_multipliers.clear();
+                        state.random_picker_weight_columns.push(None);
+                        state.random_picker_weight_exponents.push(1.0);
+                        state.random_picker_weight_multipliers.push(1.0);
+                        state.summarizer_selected_columns.clear();
+                        state.summarizer_selected_columns.push(Some(state.random_simple_result_col));
                     }
                     state.random_picker_last_value.clear();
+                    initialized = true;
+                    debug!("Random Picker initialized from metadata for '{:?}/{}'.", state.selected_category, sheet_name);
+                } else {
+                    trace!("Random Picker init deferred: metadata not yet present for '{:?}/{}'.", state.selected_category, sheet_name);
                 }
+            } else {
+                trace!("Random Picker init deferred: sheet not found in registry for '{:?}/{}'.", state.selected_category, sheet_name);
             }
+        } else {
+            // No sheet selected -> nothing to initialize; clear the flag.
+            initialized = true;
         }
-        state.random_picker_needs_init = false;
+
+        if initialized {
+            state.random_picker_needs_init = false;
+        }
     }
 }

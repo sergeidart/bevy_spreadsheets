@@ -153,7 +153,15 @@ pub struct EditorWindowState {
     pub random_complex_result_col: usize,
     pub random_complex_weight_col: Option<usize>,
     pub random_complex_second_weight_col: Option<usize>,
+    // Dynamic list of optional weight columns for the Random Picker UI (auto-expand/contract)
+    pub random_picker_weight_columns: Vec<Option<usize>>,
+    // Parallel vector storing per-weight-column exponents. Length matches the number of Some(..) entries in random_picker_weight_columns
+    pub random_picker_weight_exponents: Vec<f64>,
+    // Parallel vector storing per-weight-column multipliers (applied before exponentiation)
+    pub random_picker_weight_multipliers: Vec<f64>,
     pub random_picker_last_value: String,
+    // Transient copy status shown after user clicks to copy the value
+    pub random_picker_copy_status: String,
     // Ensure RP UI initializes once per selection (also on app startup)
     pub random_picker_needs_init: bool,
 
@@ -161,6 +169,10 @@ pub struct EditorWindowState {
     pub show_summarizer_panel: bool,
     pub summarizer_selected_col: usize,
     pub summarizer_last_result: String, // Prefixed with Sum:/Count:
+    // Transient copy status for summarizer result
+    pub summarizer_copy_status: String,
+    // Multiple selected columns for Summarizer when edited in the shared popup
+    pub summarizer_selected_columns: Vec<Option<usize>>,
 
     // Confirmation dialogs
     pub pending_validator_change_requires_confirmation: bool,
@@ -268,11 +280,17 @@ impl Default for EditorWindowState {
             random_complex_result_col: 0,
             random_complex_weight_col: None,
             random_complex_second_weight_col: None,
+            random_picker_weight_columns: vec![None],
+            random_picker_weight_exponents: vec![1.0],
+            random_picker_weight_multipliers: vec![1.0],
             random_picker_last_value: String::new(),
+            random_picker_copy_status: String::new(),
             random_picker_needs_init: true,
             show_summarizer_panel: false,
             summarizer_selected_col: 0,
             summarizer_last_result: String::new(),
+            summarizer_copy_status: String::new(),
+            summarizer_selected_columns: vec![None],
             pending_validator_change_requires_confirmation: false,
             pending_validator_new_validator_summary: None,
             pending_validator_target_is_structure: false,

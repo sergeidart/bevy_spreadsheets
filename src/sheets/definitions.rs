@@ -115,18 +115,32 @@ impl Default for RandomPickerMode {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct RandomPickerSettings {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_simple_mode")]
     pub mode: RandomPickerMode,
     /// Used when mode == Simple
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
     pub simple_result_col_index: usize,
     /// Used when mode == Complex
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
     pub complex_result_col_index: usize,
-    #[serde(default)]
+    // Legacy single-weight fields retained for backward compatibility. Don't serialize when None.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub weight_col_index: Option<usize>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub second_weight_col_index: Option<usize>,
+    /// New: support arbitrary weight columns (stored as indices)
+    #[serde(default)]
+    pub weight_columns: Vec<usize>,
+    /// Per-weight-column exponent/power applied to that column's numeric value before combining.
+    /// Default is 1.0 for each weight column (no change).
+    #[serde(default)]
+    pub weight_exponents: Vec<f64>,
+    /// Per-weight-column linear multiplier applied before exponentiation. Default 1.0.
+    #[serde(default)]
+    pub weight_multipliers: Vec<f64>,
+    /// New: support multiple summarizer columns
+    #[serde(default)]
+    pub summarizer_columns: Vec<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -233,10 +247,14 @@ pub fn default_ai_model_id() -> String {
     "gemini-2.5-pro-preview-06-05".to_string() // Default model
 }
 
-// Default functions for existing AI parameters
-pub fn default_temperature() -> Option<f32> { Some(0.9) }
-pub fn default_top_k() -> Option<i32> { Some(1) }
-pub fn default_top_p() -> Option<f32> { Some(1.0) }
+// Helper functions for skip_serializing_if
+fn is_zero_usize(v: &usize) -> bool { *v == 0 }
+fn is_simple_mode(m: &RandomPickerMode) -> bool { matches!(m, RandomPickerMode::Simple) }
+
+// Deprecated AI sampling parameters (kept for backward compatibility on load only)
+pub fn default_temperature() -> Option<f32> { None }
+pub fn default_top_k() -> Option<i32> { None }
+pub fn default_top_p() -> Option<f32> { None }
 
 // --- CORRECTED: Definition of the default function for grounding ---
 /// Default function for `requested_grounding_with_Google Search` field in `SheetMetadata`.
@@ -257,11 +275,11 @@ pub struct SheetMetadata {
     pub ai_general_rule: Option<String>,
     #[serde(default = "default_ai_model_id")]
     pub ai_model_id: String,
-    #[serde(default = "default_temperature")]
+    #[serde(default = "default_temperature", skip_serializing_if = "Option::is_none")]
     pub ai_temperature: Option<f32>,
-    #[serde(default = "default_top_k")]
+    #[serde(default = "default_top_k", skip_serializing_if = "Option::is_none")]
     pub ai_top_k: Option<i32>,
-    #[serde(default = "default_top_p")]
+    #[serde(default = "default_top_p", skip_serializing_if = "Option::is_none")]
     pub ai_top_p: Option<f32>,
 
     // Use the defined default function for serde
@@ -366,7 +384,7 @@ impl<'de> Deserialize<'de> for SheetMetadata {
                 columns: cur.columns,
                 ai_general_rule: cur.ai_general_rule,
                 ai_model_id: cur.ai_model_id,
-                ai_temperature: cur.ai_temperature,
+                ai_temperature: cur.ai_temperature, // retained for backward compatibility
                 ai_top_k: cur.ai_top_k,
                 ai_top_p: cur.ai_top_p,
                 requested_grounding_with_google_search: cur.requested_grounding_with_google_search,
@@ -374,6 +392,10 @@ impl<'de> Deserialize<'de> for SheetMetadata {
                 random_picker: cur.random_picker,
                 structure_parent: cur.structure_parent,
             };
+            // Auto-migrate deprecated AI sampling params if they equal legacy defaults
+            if matches!(meta.ai_temperature, Some(t) if (t - 0.9).abs() < f32::EPSILON || (t - 1.0).abs() < f32::EPSILON) { meta.ai_temperature = None; }
+            if matches!(meta.ai_top_k, Some(k) if k == 1) { meta.ai_top_k = None; }
+            if matches!(meta.ai_top_p, Some(p) if (p - 0.95).abs() < f32::EPSILON || (p - 1.0).abs() < f32::EPSILON) { meta.ai_top_p = None; }
             // Migrate legacy map + inline legacy schemas
             let mut legacy_map = cur.structures_meta;
             for (idx, col) in meta.columns.iter_mut().enumerate() {
@@ -434,14 +456,17 @@ impl<'de> Deserialize<'de> for SheetMetadata {
             columns,
             ai_general_rule: legacy.ai_general_rule,
             ai_model_id: legacy.ai_model_id.unwrap_or_else(|| default_ai_model_id()),
-            ai_temperature: legacy.ai_temperature.or_else(default_temperature),
-            ai_top_k: legacy.ai_top_k.or_else(default_top_k),
-            ai_top_p: legacy.ai_top_p.or_else(default_top_p),
+            ai_temperature: legacy.ai_temperature,
+            ai_top_k: legacy.ai_top_k,
+            ai_top_p: legacy.ai_top_p,
             requested_grounding_with_google_search: legacy.requested_grounding_with_google_search.or_else(default_grounding_with_google_search),
             ai_enable_row_generation: false,
             random_picker: legacy.random_picker,
             structure_parent: None,
         };
+        if matches!(meta.ai_temperature, Some(t) if (t - 0.9).abs() < f32::EPSILON || (t - 1.0).abs() < f32::EPSILON) { meta.ai_temperature = None; }
+        if matches!(meta.ai_top_k, Some(k) if k == 1) { meta.ai_top_k = None; }
+        if matches!(meta.ai_top_p, Some(p) if (p - 0.95).abs() < f32::EPSILON || (p - 1.0).abs() < f32::EPSILON) { meta.ai_top_p = None; }
         meta.ensure_column_consistency();
         info!("Loaded legacy metadata for sheet '{}': {} columns", meta.sheet_name, meta.columns.len());
         Ok(meta)
@@ -503,9 +528,9 @@ impl SheetMetadata {
             columns,
             ai_general_rule: None,
             ai_model_id: default_ai_model_id(),
-            ai_temperature: default_temperature(),
-            ai_top_k: default_top_k(),
-            ai_top_p: default_top_p(),
+            ai_temperature: None,
+            ai_top_k: None,
+            ai_top_p: None,
             // Call the defined function for initialization
             requested_grounding_with_google_search: default_grounding_with_google_search(),
             ai_enable_row_generation: false,

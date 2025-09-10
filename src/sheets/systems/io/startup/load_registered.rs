@@ -154,6 +154,20 @@ fn load_and_update_single_sheet_entry(
                                 info!("Corrected column consistency for loaded metadata of '{:?}/{}'.", category, sheet_name);
                                 needs_save_after_correction = true;
                             }
+                            if let Some(rp) = &loaded_meta.random_picker {
+                                trace!(
+                                    "Startup Load: RandomPicker for '{:?}/{}' -> mode={:?} weights={} exps={} mults={} summarizers={}",
+                                    category,
+                                    sheet_name,
+                                    rp.mode,
+                                    rp.weight_columns.len(),
+                                    rp.weight_exponents.len(),
+                                    rp.weight_multipliers.len(),
+                                    rp.summarizer_columns.len()
+                                );
+                            } else {
+                                trace!("Startup Load: No RandomPicker for '{:?}/{}'", category, sheet_name);
+                            }
                             final_grid_filename = Some(loaded_meta.data_filename.clone());
                             loaded_metadata_opt = Some(loaded_meta);
                         }
