@@ -144,6 +144,8 @@ pub struct AiBatchTaskResult {
     pub raw_response: Option<String>,
     pub included_non_structure_columns: Vec<usize>,
     pub key_prefix_count: usize, // number of leading key/context columns prefixed to each row in result
+    // NEW: Indicates this batch was initiated from a prompt with zero selected rows
+    pub prompt_only: bool,
 }
 
 #[derive(Event, Debug, Clone)]

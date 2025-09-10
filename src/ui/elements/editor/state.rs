@@ -227,6 +227,11 @@ pub struct EditorWindowState {
     pub ai_throttled_apply_queue: VecDeque<ThrottledAiAction>,
     // Cached flag: true if there are duplicate new rows needing a Merge/Separate decision
     pub ai_batch_has_undecided_merge: bool,
+    // NEW: Prompt popup for zero-row AI request
+    pub show_ai_prompt_popup: bool,
+    pub ai_prompt_input: String,
+    // Marker that last AI batch send was prompt-only (no original rows) so we treat incoming rows specially
+    pub last_ai_prompt_only: bool,
 }
 
 impl Default for EditorWindowState {
@@ -328,6 +333,9 @@ impl Default for EditorWindowState {
             fps_setting: FpsSetting::default(),
             ai_throttled_apply_queue: VecDeque::new(),
             ai_batch_has_undecided_merge: false,
+            show_ai_prompt_popup: false,
+            ai_prompt_input: String::new(),
+            last_ai_prompt_only: false,
         }
     }
 }

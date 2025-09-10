@@ -42,18 +42,19 @@ from google.genai.types import (
 # ---------------------------------------------------------------------------
 
 def execute_ai_query(api_key: str, payload_json: str) -> str:  # noqa: D401
-    """Execute (single or batch) prompt enforcing flat row protocol.
+    """Execute batch / single / prompt-only AI query.
 
-    Returns JSON: {success: bool, data|error, raw_response}.
-    For legacy single-row payloads (row_data only) returns data = list[str].
-    For batch (rows_data) returns data = list[list[str]].
+    Returns JSON with shape:
+      { success: bool, data: list[list[str]]|list[str], raw_response: str, error?: str }
     """
+
     def make_err(msg: str, raw: str | None = None) -> str:
         return json.dumps({"success": False, "error": msg, "raw_response": raw or msg}, ensure_ascii=False)
 
     try:
+        # --- API Key fallback (keyring) ---
         if not api_key:
-            try:
+            try:  # best-effort keyring lookup
                 import keyring  # type: ignore
                 api_key = keyring.get_password("GoogleGeminiAPI", os.getlogin()) or ""
             except ImportError:
@@ -61,6 +62,7 @@ def execute_ai_query(api_key: str, payload_json: str) -> str:  # noqa: D401
             if not api_key:
                 return make_err("API key missing")
 
+        # --- Parse payload ---
         try:
             payload: Dict[str, Any] = json.loads(payload_json)
         except Exception as e:  # pragma: no cover
@@ -75,58 +77,62 @@ def execute_ai_query(api_key: str, payload_json: str) -> str:  # noqa: D401
             if single_row:
                 rows_data = [single_row]
                 legacy_single = True
+        user_prompt: Optional[str] = payload.get("user_prompt")
         column_contexts: List[Any] = payload.get("column_contexts", [])
         keys_block = payload.get("keys")
-        # keys_block shape: { headers: [str], contexts: [str|None], rows: [[str]] } (optional)
         allow_row_additions: bool = payload.get("allow_row_additions", False)
         orig_n = len(rows_data)
-        if orig_n == 0:
+        prompt_only_mode = bool(orig_n == 0 and not legacy_single and isinstance(user_prompt, str) and user_prompt.strip())
+        if orig_n == 0 and not prompt_only_mode:
             return json.dumps({"success": True, "data": [] if legacy_single else [], "raw_response": "No rows provided"}, ensure_ascii=False)
 
-        # Build core ordering and hints
-        ordering = (
-            f"There are {orig_n} original rows. Output a JSON array of row arrays. "
-            f"First {orig_n} arrays must correspond 1:1 & in order to originals. "
-            + ("You may append new rows after originals." if allow_row_additions and not legacy_single else "Do not add extra rows.")
-            + " Row length must equal number of column contexts. No markdown fences."
-        )
+        # --- Instruction assembly ---
+        if prompt_only_mode:
+            ordering = (
+                "Prompt-only generation request. There are 0 original rows. "
+                "Output a JSON array of row arrays derived from the prompt + column contexts. "
+                "Generate distinct, high-quality rows (avoid duplicates). "
+                "You may output between 1 and 25 rows. Row length must equal number of column contexts. No markdown fences."
+            )
+        else:
+            ordering = (
+                f"There are {orig_n} original rows. Output a JSON array of row arrays. "
+                f"First {orig_n} arrays must correspond 1:1 & in order to originals. "
+                + ("You may append new rows after originals." if allow_row_additions and not legacy_single else "Do not add extra rows.")
+                + " Row length must equal number of column contexts. No markdown fences."
+            )
         row_additions_hint = (
             f"Row Additions Enabled: The model may add new rows AFTER the first {orig_n} original rows to provide similar item if any applicable here. Each new row must match column count."
-            if allow_row_additions and not legacy_single else ""
+            if allow_row_additions and not legacy_single and not prompt_only_mode else ""
         )
         grounded_search_instruction = (
             "For each row, use Google Search to verify every provided value and update it with the latest reliable data you find. "
             "If a value is missing or clearly outdated, search for it and fill it in. Prefer authoritative, recent sources. "
             "Never invent facts: leave a cell blank if after searching you cannot find a credible value."
         )
-        # Merge user system instruction with ordering + grounded search; append row additions hint if enabled
         base_instr = (system_instruction + "\n") if system_instruction else ""
         system_full = base_instr + ordering + "\n" + grounded_search_instruction + ("\n" + row_additions_hint if row_additions_hint else "")
 
-        # Compose user message (put an explicit flag at the top for clarity)
         user_text = (
-            ("ALLOW_ROW_ADDITIONS: true\n" if allow_row_additions and not legacy_single else "")
+            ("ALLOW_ROW_ADDITIONS: true\n" if ((allow_row_additions and not legacy_single) or prompt_only_mode) else "")
+            + (f"USER_PROMPT: {user_prompt.strip()}\n" if prompt_only_mode else "")
             + "Column Contexts:" + json.dumps(column_contexts, ensure_ascii=False) + "\n"
             + ("Keys:" + json.dumps(keys_block, ensure_ascii=False) + "\n" if keys_block else "")
-            + "Rows Data:" + json.dumps(rows_data, ensure_ascii=False) + "\n"
-            + ((row_additions_hint + "\n") if row_additions_hint else "")
+            + ("Rows Data:" + json.dumps(rows_data, ensure_ascii=False) + "\n" if not prompt_only_mode else "")
+            + (row_additions_hint + "\n" if row_additions_hint and not prompt_only_mode else "")
             + "Return ONLY JSON."
         )
 
-        # Build request messages and config; include both an explicit system message and system_instruction
         contents = [
             genai.types.Content(role="model", parts=[genai.types.Part.from_text(text=system_full)]),
             genai.types.Content(role="user", parts=[genai.types.Part.from_text(text=user_text)]),
         ]
-
         cfg: Dict[str, Any] = {}
         if payload.get("ai_temperature") is not None:
             cfg["temperature"] = payload["ai_temperature"]
-        cfg["tools"] = [Tool(google_search=GoogleSearch())]  # always enable search tool for now
-    # Provide system instruction explicitly to the model (redundant with contents[0] for reliability)
+        cfg["tools"] = [Tool(google_search=GoogleSearch())]
         cfg["system_instruction"] = genai.types.Content(
-            role="model",
-            parts=[genai.types.Part.from_text(text=system_full)],
+            role="model", parts=[genai.types.Part.from_text(text=system_full)]
         )
 
         client = genai.Client(api_key=api_key, http_options=HttpOptions())
@@ -143,7 +149,7 @@ def execute_ai_query(api_key: str, payload_json: str) -> str:  # noqa: D401
         if raw_text.endswith("```"):
             raw_text = raw_text[:-3].strip()
 
-        # ---------------- Parsing & Repair Pipeline -----------------
+        # --- Parse & repair ---
         original_raw = raw_text
         extracted = extract_first_json(raw_text)
         repair_notes: List[str] = []
@@ -157,29 +163,23 @@ def execute_ai_query(api_key: str, payload_json: str) -> str:  # noqa: D401
         parsed, err = attempt_parse(extracted)
         if parsed is None:
             candidate = extracted
-            # Remove leading junk before first '[' or '{'
             m = re.search(r'[\[{].*', candidate, re.DOTALL)
             if m:
                 candidate = m.group(0)
-            # Strip trailing code fences / stray backticks
             candidate = candidate.strip('` \n\t')
-            # Insert missing comma between touching arrays/objects: '][', '}{', ']{', '}[', etc.
             candidate_comma_fix = re.sub(r'(\]|\})(\[|\{)', r'\1,\2', candidate)
             if candidate_comma_fix != candidate:
                 repair_notes.append('Inserted missing commas between adjacent top-level elements')
                 candidate = candidate_comma_fix
-            # Replace single quotes with double if it looks like JSON-ish but not valid
             if candidate.count('"') == 0 and candidate.count("'") > 0:
                 repair_notes.append('Replaced single quotes with double quotes')
                 candidate = re.sub(r"'", '"', candidate)
-            # Remove trailing commas before ] or }
             def remove_trailing_commas(s: str) -> str:
                 return re.sub(r',\s*([\]}])', r'\1', s)
             new_candidate = remove_trailing_commas(candidate)
             if new_candidate != candidate:
                 repair_notes.append('Removed trailing commas')
                 candidate = new_candidate
-            # If wrapped in an object with key rows|data|output|result extract list
             obj_match = re.match(r'^\{.*\}$', candidate, re.DOTALL)
             if obj_match:
                 try:
@@ -194,9 +194,8 @@ def execute_ai_query(api_key: str, payload_json: str) -> str:  # noqa: D401
             if parsed is None:
                 parsed, err2 = attempt_parse(candidate)
                 if parsed is None and err2:
-                    # CSV fallback: detect if looks like rows of comma separated items without brackets
                     lines = [l.strip() for l in original_raw.splitlines() if l.strip()]
-                    if lines and all(("," in l) for l in lines[: min(5, len(lines))]):
+                    if lines and all(("," in l) for l in lines[:min(5, len(lines))]):
                         parsed = [[c.strip() for c in re.split(r',(?=(?:[^"]*"[^"]*")*[^"]*$)', l)] for l in lines]
                         repair_notes.append('Parsed as CSV fallback')
                     else:
@@ -204,13 +203,11 @@ def execute_ai_query(api_key: str, payload_json: str) -> str:  # noqa: D401
                 else:
                     if err:
                         repair_notes.append(f'Primary parse error: {err}')
-        # ---------------- End Repair Pipeline --------------------
 
         if not isinstance(parsed, list):
             return make_err("Top-level JSON must be an array", original_raw)
 
         if parsed and all(not isinstance(el, list) for el in parsed):
-            # Model returned a single row directly
             parsed_rows = [parsed]
         else:
             parsed_rows = []
@@ -220,9 +217,9 @@ def execute_ai_query(api_key: str, payload_json: str) -> str:  # noqa: D401
                 else:
                     return make_err(f"Non-array row element: {r}", response.text)
 
-        if len(parsed_rows) < orig_n:
+        if not prompt_only_mode and len(parsed_rows) < orig_n:
             return make_err(f"Returned {len(parsed_rows)} rows but {orig_n} required", response.text)
-        if (legacy_single or not allow_row_additions) and len(parsed_rows) > orig_n:
+        if not prompt_only_mode and (legacy_single or not allow_row_additions) and len(parsed_rows) > orig_n:
             parsed_rows = parsed_rows[:orig_n]
 
         expected_len = len(column_contexts)
@@ -236,7 +233,7 @@ def execute_ai_query(api_key: str, payload_json: str) -> str:  # noqa: D401
                     cells = cells[:expected_len]
             norm_rows.append(cells)
 
-        payload_out = {
+        payload_out: Dict[str, Any] = {
             "success": True,
             "raw_response": original_raw + (f"\n[Repairs: {'; '.join(repair_notes)}]" if repair_notes else "")
         }

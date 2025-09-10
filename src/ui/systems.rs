@@ -297,10 +297,10 @@ pub fn handle_ai_batch_results(
         match &ev.result {
             Ok(rows) => {
                 let originals = ev.original_row_indices.len();
-                if rows.len() < originals { feedback_writer.write(SheetOperationFeedback { message: format!("AI batch result malformed: returned {} rows but expected at least {}", rows.len(), originals), is_error: true }); continue; }
+                if originals > 0 && rows.len() < originals { feedback_writer.write(SheetOperationFeedback { message: format!("AI batch result malformed: returned {} rows but expected at least {}", rows.len(), originals), is_error: true }); continue; }
                 if let Some(raw) = &ev.raw_response { state.ai_raw_output_display = raw.clone(); }
                 // Legacy ai_suggestions map removed
-                let (orig_slice, extra_slice) = rows.split_at(originals);
+                let (orig_slice, extra_slice) = if originals == 0 { (&[][..], &rows[..]) } else { rows.split_at(originals) };
                 // Record prefix count so review UI can lock those cells (keys no longer prefixed; keep 0)
                 state.ai_context_only_prefix_count = ev.key_prefix_count;
                 // Populate read-only key context (headers + values) for each original row, based on current
@@ -439,7 +439,8 @@ pub fn handle_ai_batch_results(
                 state.ai_batch_has_undecided_merge = state.ai_new_row_reviews.iter().any(|nr| nr.duplicate_match_row.is_some() && !nr.merge_decided);
                 state.ai_batch_review_active = true;
                 state.ai_mode = AiModeState::ResultsReady;
-                info!("Processed AI batch result: {} originals, {} new rows", originals, state.ai_new_row_reviews.len());
+                if ev.prompt_only { state.last_ai_prompt_only = true; }
+                info!("Processed AI batch result: {} originals, {} new rows (prompt_only={})", originals, state.ai_new_row_reviews.len(), ev.prompt_only);
             }
             Err(err) => {
                 if let Some(raw) = &ev.raw_response {

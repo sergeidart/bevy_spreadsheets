@@ -238,7 +238,15 @@ pub(super) fn draw_ai_batch_review_panel(
                         }
                         RowBlock::DupOrig(idx) => {
                             if let Some(nr) = state.ai_new_row_reviews.get_mut(*idx) {
-                                row.col(|ui| { let merge_clicked = ui.radio(nr.merge_selected, "Merge").clicked(); if merge_clicked { nr.merge_selected = true; } finish_cell(ui); });
+                                row.col(|ui| {
+                                    if !nr.merge_decided {
+                                        let merge_clicked = ui.radio(nr.merge_selected, "Merge").clicked();
+                                        if merge_clicked { nr.merge_selected = true; }
+                                    } else {
+                                        if ui.button("Accept").clicked() { new_accept.push(*idx); }
+                                    }
+                                    finish_cell(ui);
+                                });
                                 for _ in &ancestor_key_columns { row.col(|ui| { ui.add_space(0.0); finish_cell(ui); }); }
                                 if let Some(orig_vec) = nr.original_for_merge.as_ref() {
                                     for actual_col in &union_cols { row.col(|ui| {
@@ -256,7 +264,15 @@ pub(super) fn draw_ai_batch_review_panel(
                         }
                         RowBlock::DupAi(idx) => {
                             if let Some(nr) = state.ai_new_row_reviews.get_mut(*idx) {
-                                row.col(|ui| { let sep_clicked = ui.radio(!nr.merge_selected, "Separate").clicked(); if sep_clicked { nr.merge_selected = false; } finish_cell(ui); });
+                                row.col(|ui| {
+                                    if !nr.merge_decided {
+                                        let sep_clicked = ui.radio(!nr.merge_selected, "Separate").clicked();
+                                        if sep_clicked { nr.merge_selected = false; }
+                                    } else {
+                                        if ui.button("Cancel").clicked() { new_cancel.push(*idx); }
+                                    }
+                                    finish_cell(ui);
+                                });
                                 for _ in &ancestor_key_columns { row.col(|ui| { ui.add_space(0.0); finish_cell(ui); }); }
                                 for actual_col in &union_cols { row.col(|ui| {
                                     if let Some(pos) = nr.non_structure_columns.iter().position(|c| c == actual_col) {
@@ -272,8 +288,9 @@ pub(super) fn draw_ai_batch_review_panel(
                                     if !nr.merge_decided {
                                         if ui.add(egui::Button::new(RichText::new("Decide").color(Color32::WHITE)).fill(Color32::from_rgb(150,90,20))).on_hover_text("Confirm Merge or Separate").clicked() { nr.merge_decided = true; }
                                     } else {
-                                        if ui.button("Accept").clicked() { new_accept.push(*idx); }
-                                        if ui.button("Cancel").clicked() { new_cancel.push(*idx); }
+                                        // After decision Accept/Cancel are moved to the first two rows; show status only.
+                                        if nr.merge_selected { ui.label(RichText::new("Merge decided").color(Color32::from_rgb(180,180,240))); }
+                                        else { ui.label(RichText::new("Separate decided").color(Color32::from_rgb(180,180,240))); }
                                     }
                                     finish_cell(ui);
                                 });
