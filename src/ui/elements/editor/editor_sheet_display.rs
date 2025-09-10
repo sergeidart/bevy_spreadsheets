@@ -128,7 +128,7 @@ pub(super) fn show_sheet_table(
                             table_builder = table_builder.column(Column::initial(26.0).at_least(26.0).resizable(false));
 
                             // Build prefix (read-only key) columns next (if any)
-                            for _ in 0..prefix_count { table_builder = table_builder.column(Column::initial(110.0).at_least(60.0).resizable(false).clip(true)); }
+                            for _ in 0..prefix_count { table_builder = table_builder.column(Column::initial(110.0).at_least(60.0).resizable(true).clip(true)); }
                             const DEFAULT_COL_WIDTH: f32 = 120.0; // width field deprecated
                             for _i in 0..num_cols {
                                 let col = Column::initial(DEFAULT_COL_WIDTH).at_least(40.0).resizable(true).clip(true);

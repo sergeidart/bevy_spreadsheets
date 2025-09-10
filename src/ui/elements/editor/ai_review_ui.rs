@@ -24,10 +24,11 @@ pub(super) fn draw_inline_ai_review_panel(
     // Prepare derived data outside UI closures to avoid multiple mutable borrows.
     let context_prefix_opt = state.ai_context_prefix_by_row.get(&original_row_index).cloned();
     let suggestion_indices_and_state = if let (Some(original_row), Some(metadata), Some((_idx, _suggestion_buf))) = (original_data_cloned.as_ref(), metadata_opt, state.current_ai_suggestion_edit_buffer.as_ref()) {
-        // Determine visible columns
+        // Determine visible columns (non-Structure) and also capture context-prefix (key) headers if present
         let visible: Vec<usize> = metadata.columns.iter().enumerate()
             .filter_map(|(i,c)| if matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure)) { None } else { Some(i) })
             .collect();
+        let context_prefix = context_prefix_opt.as_ref().cloned().unwrap_or_default();
         Some((visible, original_row.clone(), metadata.clone()))
     } else { None };
 
@@ -53,12 +54,30 @@ pub(super) fn draw_inline_ai_review_panel(
                         .resizable(true)
                         .cell_layout(egui::Layout::left_to_right(Align::Center))
                         .min_scrolled_height(0.0);
+                    // First add prefix/context columns (if any) so they are resizable like normal columns
+                    for _ in 0..context_prefix.len() { table_builder = table_builder.column(Column::initial(110.0).at_least(40.0).resizable(true).clip(true)); }
                     for _ in 0..num_cols { table_builder = table_builder.column(Column::initial(120.0).at_least(60.0).resizable(true).clip(true)); }
-                    table_builder.header(20.0, |mut header| { for (_display_idx, actual_idx) in visible_col_indices.iter().enumerate() { header.col(|ui| { let col_header = metadata.columns.get(*actual_idx).map_or_else(|| format!("Col {}", actual_idx+1), |c| c.header.clone()); ui.strong(col_header); }); } })
+                    table_builder.header(20.0, |mut header| {
+                        // Render context-prefix headers first
+                        for (hdr, _val) in &context_prefix { header.col(|ui| { ui.strong(hdr); }); }
+                        for (_display_idx, actual_idx) in visible_col_indices.iter().enumerate() { header.col(|ui| { let col_header = metadata.columns.get(*actual_idx).map_or_else(|| format!("Col {}", actual_idx+1), |c| c.header.clone()); ui.strong(col_header); }); }
+                    })
                         .body(|mut body| {
-                        body.row(row_height, |mut row| { for (display_idx, actual_idx) in visible_col_indices.iter().enumerate() { row.col(|ui| { let original_value = original_row.get(*actual_idx).cloned().unwrap_or_default(); let current_choice = state.ai_review_column_choices[display_idx]; let is_different = original_value != current_suggestion_mut.get(display_idx).cloned().unwrap_or_default(); let display_text = if is_different && current_choice == ReviewChoice::AI { RichText::new(&original_value).strikethrough() } else { RichText::new(&original_value) }; ui.label(display_text).on_hover_text("Original Value"); }); } });
-                        body.row(row_height, |mut row| { for (display_idx, actual_idx) in visible_col_indices.iter().enumerate() { row.col(|ui| { let original_value = original_row.get(*actual_idx).cloned().unwrap_or_default(); let ai_value_mut = current_suggestion_mut.get_mut(display_idx).expect("Suggestion vec exists"); let is_different = original_value != *ai_value_mut; ui.add(egui::TextEdit::singleline(ai_value_mut).desired_width(f32::INFINITY).text_color_opt(if is_different { Some(Color32::LIGHT_YELLOW) } else { None })); }); } });
-                        body.row(row_height, |mut row| { for display_idx in 0..num_cols { row.col(|ui| { ui.horizontal_centered(|ui| { let mut choice = state.ai_review_column_choices[display_idx]; if ui.radio_value(&mut choice, ReviewChoice::Original, "Original").clicked() { state.ai_review_column_choices[display_idx] = ReviewChoice::Original; } if ui.radio_value(&mut choice, ReviewChoice::AI, "AI").clicked() { state.ai_review_column_choices[display_idx] = ReviewChoice::AI; } }); }); } });
+                        body.row(row_height, |mut row| {
+                            // context values (read-only)
+                            for (_hdr, val) in &context_prefix { row.col(|ui| { ui.label(val); }); }
+                            for (display_idx, actual_idx) in visible_col_indices.iter().enumerate() { row.col(|ui| { let original_value = original_row.get(*actual_idx).cloned().unwrap_or_default(); let current_choice = state.ai_review_column_choices[display_idx]; let is_different = original_value != current_suggestion_mut.get(display_idx).cloned().unwrap_or_default(); let display_text = if is_different && current_choice == ReviewChoice::AI { RichText::new(&original_value).strikethrough() } else { RichText::new(&original_value) }; ui.label(display_text).on_hover_text("Original Value"); }); }
+                        });
+                        body.row(row_height, |mut row| {
+                            // empty cells under context prefix for AI edit row
+                            for _ in 0..context_prefix.len() { row.col(|ui| { ui.label(" "); }); }
+                            for (display_idx, actual_idx) in visible_col_indices.iter().enumerate() { row.col(|ui| { let original_value = original_row.get(*actual_idx).cloned().unwrap_or_default(); let ai_value_mut = current_suggestion_mut.get_mut(display_idx).expect("Suggestion vec exists"); let is_different = original_value != *ai_value_mut; ui.add(egui::TextEdit::singleline(ai_value_mut).desired_width(f32::INFINITY).text_color_opt(if is_different { Some(Color32::LIGHT_YELLOW) } else { None })); }); }
+                        });
+                        body.row(row_height, |mut row| {
+                            // context prefix has no choice controls
+                            for _ in 0..context_prefix.len() { row.col(|ui| { ui.label(" "); }); }
+                            for display_idx in 0..num_cols { row.col(|ui| { ui.horizontal_centered(|ui| { let mut choice = state.ai_review_column_choices[display_idx]; if ui.radio_value(&mut choice, ReviewChoice::Original, "Original").clicked() { state.ai_review_column_choices[display_idx] = ReviewChoice::Original; } if ui.radio_value(&mut choice, ReviewChoice::AI, "AI").clicked() { state.ai_review_column_choices[display_idx] = ReviewChoice::AI; } }); }); }
+                        });
                         });
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
