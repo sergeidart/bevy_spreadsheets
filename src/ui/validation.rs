@@ -12,6 +12,14 @@ use crate::sheets::{
 use crate::ui::elements::editor::state::EditorWindowState;
 use crate::ui::widgets::linked_column_cache::{self, CacheResult};
 
+/// Normalizes a string for linked-column comparisons:
+/// - removes carriage returns and newlines
+/// - lowercases
+/// Note: intentionally does not trim spaces to preserve intentional spacing differences.
+pub(crate) fn normalize_for_link_cmp(s: &str) -> String {
+    s.replace(['\r', '\n'], "").to_lowercase()
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub(crate) enum ValidationState {
     #[default]
@@ -76,8 +84,11 @@ pub(crate) fn validate_linked_cell<'a>(
         registry,
         state, // Pass mutable state for cache population
     ) {
-        CacheResult::Success(allowed_values) => {
-            if allowed_values.contains(current_cell_string) {
+        CacheResult::Success { raw: allowed_values, normalized } => {
+            // Compare using normalized strings (case-insensitive, ignoring CR/LF)
+            let needle = normalize_for_link_cmp(current_cell_string);
+            let exists = normalized.contains(&needle);
+            if exists {
                 (ValidationState::Valid, Some(allowed_values)) // Valid and exists in target
             } else {
                 (ValidationState::Invalid, Some(allowed_values)) // Invalid (not in target set)

@@ -12,6 +12,7 @@ use crate::sheets::resources::SheetRegistry;
 // use super::linked_column_cache::{self, CacheResult};
 // Import the specific function needed from the visualization module
 use super::linked_column_visualization::add_linked_text_edit;
+use crate::ui::validation::normalize_for_link_cmp;
 
 /// Main handler function for the linked column editor widget.
 /// Orchestrates TextEdit drawing, popup management, validation, and value commitment.
@@ -108,20 +109,20 @@ pub fn handle_linked_column_edit(
                                     // --- MODIFIED: Fallback clone from &str ---
                                     .unwrap_or_else(|| current_value.to_string())
                             });
-                            let input_lower = current_input.to_lowercase();
+                            let input_norm = normalize_for_link_cmp(&current_input);
 
                             // Filter & collect suggestions based on current input, then sort deterministically (case-insensitive)
                             let mut suggestions: Vec<&String> = allowed_values
                                 .iter()
-                                .filter(|v| v.to_lowercase().contains(&input_lower))
+                                .filter(|v| normalize_for_link_cmp(v).contains(&input_norm))
                                 .collect();
-                            suggestions.sort_unstable_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+                            suggestions.sort_unstable_by(|a, b| normalize_for_link_cmp(a).cmp(&normalize_for_link_cmp(b)));
                             // Limit number displayed after sorting for stability across frames
                             let mut any_suggestions = false;
                             for suggestion in suggestions.into_iter().take(50) { // raise cap a bit; UI scrolls anyway
                                 any_suggestions = true;
-                                // Highlight if current input exactly matches suggestion
-                                let is_selected = current_input == *suggestion;
+                                // Highlight if current input exactly matches suggestion (normalized)
+                                let is_selected = normalize_for_link_cmp(&current_input) == normalize_for_link_cmp(suggestion);
                                 let response = list_ui.selectable_label(is_selected, suggestion);
 
                                 // Handle click on suggestion

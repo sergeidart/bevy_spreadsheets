@@ -10,7 +10,7 @@ use crate::sheets::{
     events::OpenStructureViewEvent,
 };
 use crate::ui::elements::editor::state::EditorWindowState;
-use crate::ui::validation::ValidationState; // Keep for enum access
+use crate::ui::validation::{ValidationState, normalize_for_link_cmp}; // Keep for enum access
 use crate::ui::widgets::handle_linked_column_edit;
 use crate::ui::widgets::linked_column_cache::{self, CacheResult};
 // Option widgets removed
@@ -59,14 +59,16 @@ pub fn edit_cell_widget(
 
     // Prefetch allowed values for linked columns once (and reuse below)
     let mut prefetch_allowed_values: Option<&HashSet<String>> = None;
+    let mut prefetch_allowed_values_norm: Option<&HashSet<String>> = None;
     if let Some(ColumnValidator::Linked { target_sheet_name, target_column_index }) = validator_opt {
-        if let CacheResult::Success(values) = linked_column_cache::get_or_populate_linked_options(
+        if let CacheResult::Success { raw: values, normalized } = linked_column_cache::get_or_populate_linked_options(
             target_sheet_name,
             *target_column_index,
             registry,
             state,
         ) {
             prefetch_allowed_values = Some(values);
+            prefetch_allowed_values_norm = Some(normalized);
         }
     }
 
@@ -76,19 +78,19 @@ pub fn edit_cell_widget(
     let (frame_id, frame_rect) = ui.allocate_space(desired_size);
 
     // Determine an effective validation state: prefer the up-to-date cached linked set when present
-    let effective_validation_state = if let Some(values) = prefetch_allowed_values {
+    let effective_validation_state = if let (Some(_), Some(values_norm)) = (prefetch_allowed_values, prefetch_allowed_values_norm) {
         if current_display_text.is_empty() {
             ValidationState::Empty
-        } else if values.contains(current_display_text) {
-            ValidationState::Valid
         } else {
-            ValidationState::Invalid
+            let needle = normalize_for_link_cmp(current_display_text);
+            let exists = values_norm.contains(&needle);
+            if exists { ValidationState::Valid } else { ValidationState::Invalid }
         }
     } else {
         cell_validation_state
     };
 
-    let mut bg_color = match effective_validation_state {
+    let bg_color = match effective_validation_state {
         ValidationState::Empty => Color32::TRANSPARENT,
         ValidationState::Valid => Color32::from_gray(40),
         ValidationState::Invalid => Color32::from_rgba_unmultiplied(80, 20, 20, 180),
@@ -127,12 +129,12 @@ pub fn edit_cell_widget(
                             target_column_index,
                         }) => {
                             // Use prefetch if available; provide stable empty backing otherwise
-                            let mut empty_backing: Option<HashSet<String>> = None;
+                                let empty_backing_local; // defined on the stack and lives through this block
                             let allowed_values: &HashSet<String> = if let Some(values) = prefetch_allowed_values {
                                 values
                             } else {
-                                empty_backing = Some(HashSet::new());
-                                empty_backing.as_ref().unwrap()
+                                empty_backing_local = HashSet::new();
+                                &empty_backing_local
                             };
                             temp_new_value = handle_linked_column_edit(
                                 centered_widget_ui,
@@ -198,14 +200,14 @@ pub fn edit_cell_widget(
                                             // Determine first row representation depending on format
                                             let mut parts: Vec<String> = Vec::new();
                                             if rows.iter().all(|e| e.is_string()) { // single-row new format
-                                                for (i,v) in rows.iter().enumerate().take(6) {
+                                                    for (_i,v) in rows.iter().enumerate().take(6) {
                                                     let s = v.as_str().unwrap_or("");
                                                     let mut val_c = s.to_string(); if val_c.chars().count()>24 { val_c = val_c.chars().take(24).collect::<String>() + "…"; }
                                                     parts.push(val_c);
                                                 }
                                             } else if rows.iter().all(|e| e.is_array()) { // multi-row new format
                                                 if let Some(first_arr) = rows.get(0).and_then(|v| v.as_array()) {
-                                                    for (i,v) in first_arr.iter().enumerate().take(6) {
+                                                    for (_i,v) in first_arr.iter().enumerate().take(6) {
                                                         let s = v.as_str().unwrap_or("");
                                                         let mut val_c = s.to_string(); if val_c.chars().count()>24 { val_c = val_c.chars().take(24).collect::<String>() + "…"; }
                                                         parts.push(val_c);

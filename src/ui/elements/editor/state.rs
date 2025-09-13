@@ -103,6 +103,8 @@ pub struct EditorWindowState {
     // NEW: Structure selection chain (always at least length 1 with possibly None meaning no selection yet)
     pub options_structure_source_columns: Vec<Option<usize>>,
     pub linked_column_cache: HashMap<(String, usize), HashSet<String>>,
+    // Normalized (lowercased, CR/LF removed) mirror of linked_column_cache for O(1) membership
+    pub linked_column_cache_normalized: HashMap<(String, usize), HashSet<String>>,
 
     // NEW: State for New Sheet Popup
     pub show_new_sheet_popup: bool,
@@ -263,6 +265,7 @@ impl Default for EditorWindowState {
             options_link_target_column_index: None,
             options_structure_source_columns: vec![None],
             linked_column_cache: HashMap::new(),
+            linked_column_cache_normalized: HashMap::new(),
             show_new_sheet_popup: false,
             new_sheet_name_input: String::new(),
             new_sheet_target_category: None,

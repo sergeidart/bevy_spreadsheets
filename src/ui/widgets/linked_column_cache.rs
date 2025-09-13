@@ -1,13 +1,17 @@
 // src/ui/widgets/linked_column_cache.rs
 use crate::sheets::resources::SheetRegistry;
 use crate::ui::elements::editor::state::EditorWindowState;
+use crate::ui::validation::normalize_for_link_cmp;
 use bevy::prelude::*;
 use std::collections::HashSet;
 
 /// Represents the result of trying to get or populate the cache.
 pub(crate) enum CacheResult<'a> {
-    /// Successfully retrieved or populated cache, contains reference to allowed values.
-    Success(&'a HashSet<String>),
+    /// Successfully retrieved or populated cache, contains references to allowed values.
+    Success {
+        raw: &'a HashSet<String>,
+        normalized: &'a HashSet<String>,
+    },
     /// An error occurred during cache population (e.g., target not found).
     Error(()),
 }
@@ -60,10 +64,16 @@ pub(crate) fn get_or_populate_linked_options<'a>(
                         .filter(|cell| !cell.is_empty()) // Don't include empty strings as valid options
                         .cloned()
                         .collect();
+                    // Build normalized mirror set for fast membership checks
+                    let normalized_values: HashSet<String> = unique_values
+                        .iter()
+                        .map(|v| normalize_for_link_cmp(v))
+                        .collect();
 
+                    state.linked_column_cache.insert(cache_key.clone(), unique_values);
                     state
-                        .linked_column_cache
-                        .insert(cache_key.clone(), unique_values); // Insert the HashSet
+                        .linked_column_cache_normalized
+                        .insert(cache_key.clone(), normalized_values);
                     trace!(
                         "Cached linked options for ({}, {})",
                         target_sheet_name,
@@ -96,6 +106,10 @@ pub(crate) fn get_or_populate_linked_options<'a>(
                 .linked_column_cache
                 .entry(cache_key.clone()) // Use entry API
                 .or_insert_with(HashSet::new);
+            state
+                .linked_column_cache_normalized
+                .entry(cache_key.clone())
+                .or_insert_with(HashSet::new);
             return CacheResult::Error(()); // Return the error
         }
     }
@@ -103,8 +117,11 @@ pub(crate) fn get_or_populate_linked_options<'a>(
     // --- Retrieve from cache ---
     // We use get again here, as the entry might have been inserted above.
     // The unwrap should be safe because we ensured the key exists or returned Error.
-    if let Some(values) = state.linked_column_cache.get(&cache_key) {
-        CacheResult::Success(values)
+    if let (Some(raw), Some(normalized)) = (
+        state.linked_column_cache.get(&cache_key),
+        state.linked_column_cache_normalized.get(&cache_key),
+    ) {
+        CacheResult::Success { raw, normalized }
     } else {
         // This case should be unreachable due to the logic above.
         error!(

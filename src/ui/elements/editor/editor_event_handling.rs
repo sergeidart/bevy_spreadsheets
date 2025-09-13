@@ -21,10 +21,13 @@ pub(super) fn process_editor_events_and_state(
     for event in sheet_data_modified_events.read() {
         // Any data modification may affect linked-column allowed values for this sheet.
         // Remove only the entries whose target_sheet_name matches the modified sheet to keep performance.
-        if !state.linked_column_cache.is_empty() {
+        if !state.linked_column_cache.is_empty() || !state.linked_column_cache_normalized.is_empty() {
             let before = state.linked_column_cache.len();
             state
                 .linked_column_cache
+                .retain(|(target_sheet, _col_idx), _| target_sheet != &event.sheet_name);
+            state
+                .linked_column_cache_normalized
                 .retain(|(target_sheet, _col_idx), _| target_sheet != &event.sheet_name);
             let after = state.linked_column_cache.len();
             if before != after {
