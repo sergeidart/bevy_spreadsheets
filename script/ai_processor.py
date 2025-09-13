@@ -80,6 +80,50 @@ def execute_ai_query(api_key: str, payload_json: str) -> str:  # noqa: D401
         user_prompt: Optional[str] = payload.get("user_prompt")
         column_contexts: List[Any] = payload.get("column_contexts", [])
         keys_block = payload.get("keys")
+        # Build a single key payload. Prefer an explicit `payload["key"]` if callers
+        # already use it. Otherwise attempt to normalize legacy `keys` which may
+        # contain headers/contexts/rows. Do NOT send the raw legacy block (with
+        # headers/rows) — that caused the model to merge key rows into the table.
+        key_payload: Optional[Dict[str, Any]] = None
+
+        # 1) If caller provided explicit 'key', and it's already in normalized form,
+        #    use it directly.
+        if "key" in payload:
+            kp = payload.get("key")
+            if isinstance(kp, dict) and ("Context" in kp or "Key" in kp):
+                # Keep only Context and Key fields to be safe
+                key_payload = {k: kp.get(k) for k in ("Context", "Key") if kp.get(k) is not None}
+
+        # 2) Otherwise try to normalize legacy 'keys' block to single key dict.
+        if key_payload is None and keys_block and isinstance(keys_block, dict):
+            # If keys_block already looks normalized, convert to minimal form.
+            if "Context" in keys_block or "Key" in keys_block:
+                key_payload = {k: keys_block.get(k) for k in ("Context", "Key") if keys_block.get(k) is not None}
+            else:
+                try:
+                    headers = keys_block.get("headers") or []
+                    contexts = keys_block.get("contexts") or []
+                    rows = keys_block.get("rows") or []
+                    # Prefer first context and first header and first row value
+                    ctx = contexts[0] if contexts and isinstance(contexts, list) else None
+                    header = headers[0] if headers and isinstance(headers, list) else None
+                    first_row_val = None
+                    if rows and isinstance(rows, list) and rows[0]:
+                        # rows may be list of lists; flatten first cell
+                        r0 = rows[0]
+                        if isinstance(r0, list) and r0:
+                            first_row_val = r0[0]
+                        elif not isinstance(r0, list):
+                            first_row_val = r0
+                    # If we have either a context and a key value, build normalized key
+                    if ctx is not None and (first_row_val is not None or header is not None):
+                        # Choose value preferring first_row_val then header
+                        key_val = first_row_val if first_row_val is not None else header
+                        key_payload = {"Context": ctx, "Key": key_val}
+                except Exception:
+                    # On any error, prefer to omit key_payload rather than send
+                    # the entire legacy block which may contain multiple rows.
+                    key_payload = None
         allow_row_additions: bool = payload.get("allow_row_additions", False)
         orig_n = len(rows_data)
         prompt_only_mode = bool(orig_n == 0 and not legacy_single and isinstance(user_prompt, str) and user_prompt.strip())
@@ -113,11 +157,14 @@ def execute_ai_query(api_key: str, payload_json: str) -> str:  # noqa: D401
         base_instr = (system_instruction + "\n") if system_instruction else ""
         system_full = base_instr + ordering + "\n" + grounded_search_instruction + ("\n" + row_additions_hint if row_additions_hint else "")
 
+    # key_payload was constructed above (either from payload['key'] or normalized)
+    # If still None, do not send the legacy keys block to avoid confusion.
+
         user_text = (
             ("ALLOW_ROW_ADDITIONS: true\n" if ((allow_row_additions and not legacy_single) or prompt_only_mode) else "")
             + (f"USER_PROMPT: {user_prompt.strip()}\n" if prompt_only_mode else "")
             + "Column Contexts:" + json.dumps(column_contexts, ensure_ascii=False) + "\n"
-            + ("Keys:" + json.dumps(keys_block, ensure_ascii=False) + "\n" if keys_block else "")
+            + ("Key:" + json.dumps(key_payload, ensure_ascii=False) + "\n" if key_payload else "")
             + ("Rows Data:" + json.dumps(rows_data, ensure_ascii=False) + "\n" if not prompt_only_mode else "")
             + (row_additions_hint + "\n" if row_additions_hint and not prompt_only_mode else "")
             + "Return ONLY JSON."

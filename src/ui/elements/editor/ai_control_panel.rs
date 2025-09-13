@@ -136,8 +136,9 @@ pub(crate) fn show_ai_control_panel(
                 column_contexts: Vec<Option<String>>,
                 // Row data for ONLY non-structure columns
                 rows_data: Vec<Vec<String>>,
-                // Separate key context: headers + contexts + values per row
-                keys: Option<KeysBlock>,
+                // Normalized single key object (Context + Key). We prefer a single
+                // key instead of the legacy headers/rows block which confused the AI.
+                key: Option<KeyPayload>,
                 requested_grounding_with_google_search: bool,
                 allow_row_additions: bool,
                 // For visibility in debug payload JSON (model also receives the hint via prompt)
@@ -145,10 +146,11 @@ pub(crate) fn show_ai_control_panel(
             }
 
             #[derive(serde::Serialize)]
-            struct KeysBlock {
-                headers: Vec<String>,
-                contexts: Vec<Option<String>>,
-                rows: Vec<Vec<String>>, // aligned to headers; one entry per original row
+            struct KeyPayload {
+                #[serde(rename = "Context")]
+                context: String,
+                #[serde(rename = "Key")]
+                key: String,
             }
 
             // Resolve allow_row_additions flag with optimistic UI toggle support
@@ -204,14 +206,21 @@ pub(crate) fn show_ai_control_panel(
                 }
                 key_chain_values_per_row.push(row_vals);
             }
-            let keys_block_opt = if key_chain_headers.is_empty() { None } else { Some(KeysBlock { headers: key_chain_headers.clone(), contexts: key_chain_contexts.clone(), rows: key_chain_values_per_row.clone() }) };
+            // Normalize keys to a single object: prefer first context and first value.
+            let key_payload_opt = if key_chain_headers.is_empty() || key_chain_contexts.is_empty() || key_chain_values_per_row.is_empty() {
+                None
+            } else {
+                let ctx = key_chain_contexts.get(0).and_then(|c| c.clone()).unwrap_or_default();
+                let key_val = key_chain_values_per_row.get(0).and_then(|r| r.get(0).cloned()).unwrap_or_else(|| key_chain_headers.get(0).cloned().unwrap_or_default());
+                Some(KeyPayload { context: ctx, key: key_val })
+            };
 
             let payload = BatchPythonPayload {
                 ai_model_id: model_id,
                 general_sheet_rule: rule,
                 column_contexts: column_contexts.clone(),
                 rows_data: rows_data.clone(),
-                keys: keys_block_opt,
+                key: key_payload_opt,
                 requested_grounding_with_google_search: grounding,
                 allow_row_additions: allow_additions_flag,
                 row_additions_hint: if allow_additions_flag { Some(format!(
