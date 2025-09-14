@@ -63,7 +63,15 @@ pub fn sheet_table_header(
                     };
 
                     let can_open_options = state.current_interaction_mode == SheetInteractionState::Idle;
-                    let header_button = egui::Button::new(&display_text).fill(egui::Color32::TRANSPARENT);
+                    
+                    // Determine header background color based on selection state
+                    let header_bg_color = if state.selected_columns_for_deletion.contains(&c_idx) {
+                        Color32::from_rgba_unmultiplied(120, 20, 20, 150) // Red background for deletion
+                    } else {
+                        Color32::TRANSPARENT
+                    };
+                    
+                    let header_button = egui::Button::new(&display_text).fill(header_bg_color);
                     let header_button_response = ui_h.add_enabled(can_open_options, header_button);
 
                     if header_button_response.clicked() && can_open_options {

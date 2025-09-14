@@ -9,7 +9,7 @@ use crate::sheets::{
     resources::{SheetRegistry, SheetRenderCache},
     events::OpenStructureViewEvent,
 };
-use crate::ui::elements::editor::state::EditorWindowState;
+use crate::ui::elements::editor::state::{EditorWindowState, SheetInteractionState};
 use crate::ui::validation::{ValidationState, normalize_for_link_cmp}; // Keep for enum access
 use crate::ui::widgets::handle_linked_column_edit;
 use crate::ui::widgets::linked_column_cache::{self, CacheResult};
@@ -37,6 +37,11 @@ pub fn edit_cell_widget(
     // NEW: event writer for structure navigation
     structure_open_events: &mut EventWriter<OpenStructureViewEvent>,
 ) -> Option<String> { // Return type remains Option<String> for committed changes
+
+    // --- 0. Read selection states first before any mutable borrows ---
+    let is_column_selected_for_deletion = state.selected_columns_for_deletion.contains(&col_index);
+    let is_row_selected = state.ai_selected_rows.contains(&row_index);
+    let current_interaction_mode = state.current_interaction_mode;
 
     // --- 1. Read Pre-calculated RenderableCellData ---
     let render_cell_data_opt = render_cache.get_cell_data(category, sheet_name, row_index, col_index);
@@ -90,10 +95,42 @@ pub fn edit_cell_widget(
         cell_validation_state
     };
 
-    let bg_color = match effective_validation_state {
-        ValidationState::Empty => Color32::TRANSPARENT,
-        ValidationState::Valid => Color32::from_gray(40),
-        ValidationState::Invalid => Color32::from_rgba_unmultiplied(80, 20, 20, 180),
+    // Determine selection-based coloring first, then fall back to validation colors
+    let bg_color = {
+        // Check for deletion selection (columns or rows)
+        if is_column_selected_for_deletion {
+            Color32::from_rgba_unmultiplied(120, 20, 20, 200) // Red background for column deletion
+        }
+        else if is_row_selected && current_interaction_mode == SheetInteractionState::DeleteModeActive {
+            Color32::from_rgba_unmultiplied(120, 20, 20, 200) // Red background for row deletion
+        }
+        // Check for AI selection (rows only) - excluding structure columns
+        else if is_row_selected && current_interaction_mode == SheetInteractionState::AiModeActive {
+            // Check if this is a structure column - if so, don't apply AI selection coloring
+            let is_structure_column = validator_opt
+                .as_ref()
+                .map(|v| matches!(v, crate::sheets::definitions::ColumnValidator::Structure))
+                .unwrap_or(false);
+            
+            if is_structure_column {
+                // Fall back to validation colors for structure columns
+                match effective_validation_state {
+                    ValidationState::Empty => Color32::TRANSPARENT,
+                    ValidationState::Valid => Color32::from_gray(40),
+                    ValidationState::Invalid => Color32::from_rgba_unmultiplied(80, 20, 20, 180),
+                }
+            } else {
+                Color32::from_rgba_unmultiplied(20, 60, 120, 200) // Blue background for AI selection
+            }
+        }
+        // Fall back to validation-based colors
+        else {
+            match effective_validation_state {
+                ValidationState::Empty => Color32::TRANSPARENT,
+                ValidationState::Valid => Color32::from_gray(40),
+                ValidationState::Invalid => Color32::from_rgba_unmultiplied(80, 20, 20, 180),
+            }
+        }
     };
 
     let frame = egui::Frame::NONE
