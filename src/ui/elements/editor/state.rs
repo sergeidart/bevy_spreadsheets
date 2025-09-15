@@ -67,6 +67,7 @@ pub struct ColumnDragState {
 
 
 #[derive(Resource)]
+#[allow(dead_code)]
 pub struct EditorWindowState {
     pub selected_category: Option<String>,
     pub selected_sheet_name: Option<String>,
@@ -111,6 +112,13 @@ pub struct EditorWindowState {
     pub new_sheet_name_input: String, // Re-using new_name_input is an option, but separate is cleaner
     pub new_sheet_target_category: Option<String>,
     pub new_sheet_show_validation_hint: bool,
+
+    // Category management UI state
+    pub show_new_category_popup: bool,
+    pub new_category_name_input: String,
+    pub show_delete_category_confirm_popup: bool,
+    pub delete_category_name: Option<String>,
+    pub show_delete_category_double_confirm_popup: bool,
 
 
     // AI Mode specific state
@@ -157,6 +165,8 @@ pub struct EditorWindowState {
     pub current_interaction_mode: SheetInteractionState,
     pub selected_columns_for_deletion: HashSet<usize>,
     pub column_drag_state: ColumnDragState,
+    // Drag-and-drop of sheets between categories
+    pub dragged_sheet: Option<(Option<String>, String)>,
 
     
 
@@ -270,6 +280,11 @@ impl Default for EditorWindowState {
             new_sheet_name_input: String::new(),
             new_sheet_target_category: None,
             new_sheet_show_validation_hint: false,
+            show_new_category_popup: false,
+            new_category_name_input: String::new(),
+            show_delete_category_confirm_popup: false,
+            delete_category_name: None,
+            show_delete_category_double_confirm_popup: false,
             ai_mode: AiModeState::Idle,
             ai_selected_rows: HashSet::new(),
             ai_batch_review_active: false,
@@ -297,6 +312,7 @@ impl Default for EditorWindowState {
             current_interaction_mode: SheetInteractionState::Idle,
             selected_columns_for_deletion: HashSet::new(),
             column_drag_state: ColumnDragState::default(),
+            dragged_sheet: None,
             
             show_random_picker_panel: false,
             random_picker_mode_is_complex: false,
@@ -344,6 +360,7 @@ impl Default for EditorWindowState {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct StructureParentContext {
     pub parent_category: Option<String>,
     pub parent_sheet: String,
@@ -362,6 +379,7 @@ pub struct RowReview {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct NewRowReview {
     pub ai: Vec<String>,
     pub non_structure_columns: Vec<usize>,
@@ -385,6 +403,7 @@ pub struct VirtualStructureContext {
     pub parent: StructureParentContext,
 }
 
+#[allow(dead_code)]
 impl EditorWindowState {
     // Returns the currently active sheet context considering virtual structure navigation.
     // If inside a virtual structure view, returns that virtual sheet name and its parent category.

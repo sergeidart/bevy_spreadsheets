@@ -120,6 +120,8 @@ impl SheetRenderCache {
 #[derive(Resource, Default, Debug)]
 pub struct SheetRegistry {
     categorized_sheets: BTreeMap<Option<String>, HashMap<String, SheetGridData>>,
+    // Tracks categories that exist even if they currently have no sheets
+    explicit_categories: BTreeMap<String, ()>,
 }
 
 // --- SheetRegistry impl (remains the same) ---
@@ -199,7 +201,11 @@ impl SheetRegistry {
 
      /// Returns a sorted list of category names (including None for root).
      pub fn get_categories(&self) -> Vec<Option<String>> {
-         self.categorized_sheets.keys().cloned().collect()
+         // Merge keys from categorized_sheets with explicit empty categories
+         let mut set: BTreeMap<Option<String>, ()> = BTreeMap::new();
+         for k in self.categorized_sheets.keys() { set.insert(k.clone(), ()); }
+         for (k, _) in self.explicit_categories.iter() { set.insert(Some(k.clone()), ()); }
+         set.keys().cloned().collect()
      }
 
      /// Returns a sorted list of sheet names within a specific category.
@@ -327,5 +333,70 @@ impl SheetRegistry {
         } else {
             Err(format!("Category '{:?}' not found for deletion.", category))
         }
+    }
+
+    /// Create a category (folder) if it doesn't already exist.
+    /// If category currently has sheets, it's already implicitly created. This function ensures
+    /// the category appears even when empty.
+    pub fn create_category(&mut self, name: String) -> Result<(), String> {
+        let trimmed = name.trim();
+        if trimmed.is_empty() { return Err("Category name cannot be empty".to_string()); }
+        if self.categorized_sheets.contains_key(&Some(trimmed.to_string())) || self.explicit_categories.contains_key(trimmed) {
+            return Err(format!("Category '{}' already exists.", trimmed));
+        }
+        self.explicit_categories.insert(trimmed.to_string(), ());
+        Ok(())
+    }
+
+    /// Delete a category (folder) and all its sheets.
+    /// Removes both data and explicit flag. Returns the list of deleted sheet names.
+    pub fn delete_category(&mut self, name: &str) -> Result<Vec<String>, String> {
+        let key = Some(name.to_string());
+        let mut deleted: Vec<String> = Vec::new();
+        if let Some(map) = self.categorized_sheets.remove(&key) {
+            deleted.extend(map.keys().cloned());
+        }
+        // Remove explicit flag too
+        self.explicit_categories.remove(name);
+        if deleted.is_empty() {
+            // If nothing was deleted and explicit flag removed, category might not have existed
+            if !self.explicit_categories.contains_key(name) {
+                // Still accept as success if it existed as empty
+                // Check whether it existed implicitly earlier (no longer, because removed)
+                // Return Ok even if no sheets were present
+                return Ok(deleted);
+            }
+        }
+        Ok(deleted)
+    }
+    
+    /// Rename a category (folder) in the registry. Updates all sheets' metadata and moves map.
+    pub fn rename_category(&mut self, old_name: &str, new_name: &str) -> Result<(), String> {
+        let old_key = Some(old_name.to_string());
+        let new_key = Some(new_name.to_string());
+        if old_name == new_name { return Ok(()); }
+        if new_name.trim().is_empty() { return Err("New category name cannot be empty".to_string()); }
+        if self.categorized_sheets.contains_key(&new_key) || self.explicit_categories.contains_key(new_name) {
+            return Err(format!("Category '{}' already exists.", new_name));
+        }
+        // Move explicit flag if present
+        let had_explicit = self.explicit_categories.remove(old_name).is_some();
+        if let Some(mut map) = self.categorized_sheets.remove(&old_key) {
+            // Update metadata category for all sheets
+            for (_name, data) in map.iter_mut() {
+                if let Some(meta) = &mut data.metadata {
+                    meta.category = Some(new_name.to_string());
+                }
+            }
+            // Insert under new key
+            self.categorized_sheets.insert(new_key, map);
+        } else if !had_explicit {
+            return Err(format!("Category '{}' not found.", old_name));
+        }
+        // Re-add explicit for new category if it was explicit-only or remains empty
+        if had_explicit {
+            self.explicit_categories.insert(new_name.to_string(), ());
+        }
+        Ok(())
     }
 }

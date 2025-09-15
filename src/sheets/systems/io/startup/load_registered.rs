@@ -13,7 +13,7 @@ use crate::sheets::{
 };
 use bevy::prelude::*;
 use std::path::Path;
-use serde_json::{Value, Map};
+// use serde_json::Value; // not needed
 
 pub fn load_data_for_registered_sheets(
     mut registry: ResMut<SheetRegistry>,
@@ -288,41 +288,9 @@ fn load_and_update_single_sheet_entry(
     (needs_save_after_correction, load_successful)
 }
 
-/// Reconcile structure column metadata & normalize structure cell JSON representations.
-/// Returns true if any modifications were applied that should trigger a save.
+// Reconcile structure column metadata & normalize structure cell JSON representations.
+// Returns true if any modifications were applied that should trigger a save.
 // Legacy reconciliation function removed (structures_meta obsolete)
 
-/// Derive a simple schema from existing cell values in a column.
-fn derive_schema_from_cells(grid: &Vec<Vec<String>>, col_index: usize) -> Option<Vec<StructureFieldDefinition>> {
-    for row in grid.iter() {
-        if row.len() <= col_index { continue; }
-        let cell = row[col_index].trim();
-        if cell.is_empty() { continue; }
-        if let Ok(val) = serde_json::from_str::<Value>(cell) {
-            let mut headers: Vec<String> = Vec::new();
-            match val {
-                Value::Array(arr) => {
-                    if let Some(Value::Object(first_obj)) = arr.first() { headers = first_obj.keys().cloned().collect(); }
-                }
-                Value::Object(obj) => { headers = obj.keys().cloned().collect(); }
-                _ => {}
-            }
-            if headers.is_empty() { continue; }
-            headers.sort();
-            let fields: Vec<StructureFieldDefinition> = headers.into_iter().map(|h| StructureFieldDefinition {
-                header: h,
-                validator: Some(ColumnValidator::Basic(ColumnDataType::String)),
-                data_type: ColumnDataType::String,
-                filter: None,
-                ai_context: None,
-                width: Some(140.0),
-                structure_schema: None,
-                structure_column_order: None,
-                structure_key_parent_column_index: None,
-                structure_ancestor_key_parent_column_indices: None,
-            }).collect();
-            if !fields.is_empty() { return Some(fields); }
-        }
-    }
-    None
-}
+// Derive a simple schema from existing cell values in a column.
+// Removed unused helper derive_schema_from_cells

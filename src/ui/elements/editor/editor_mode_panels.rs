@@ -12,6 +12,7 @@ use crate::SessionApiKey;
 
 
 #[allow(clippy::too_many_arguments)]
+#[allow(dead_code)]
 pub(super) fn show_active_mode_panel(
     ui: &mut egui::Ui,
     state: &mut EditorWindowState,

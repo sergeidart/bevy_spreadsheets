@@ -13,12 +13,14 @@ use bevy_egui::egui;
 use egui_extras::{TableBody, TableRow};
 use std::hash::{Hash, Hasher};
 
+#[allow(dead_code)]
 fn calculate_filters_hash(filters: &Vec<Option<String>>) -> u64 {
     let mut s = std::collections::hash_map::DefaultHasher::new();
     filters.hash(&mut s);
     s.finish()
 }
 
+#[allow(dead_code)]
 fn get_filtered_row_indices_internal(
     grid: &Vec<Vec<String>>,
     metadata: &SheetMetadata,
@@ -62,6 +64,7 @@ fn get_filtered_row_indices_internal(
 
 
 #[allow(clippy::too_many_arguments)]
+#[allow(dead_code)]
 pub fn sheet_table_body(
     mut body: TableBody,
     row_height: f32,

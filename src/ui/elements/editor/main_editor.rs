@@ -12,6 +12,7 @@ use crate::sheets::{
         RequestUpdateColumnName, RequestUpdateColumnValidator, UpdateCellEvent, RequestDeleteRows,
         RequestSheetRevalidation, SheetDataModifiedInRegistryEvent, RequestDeleteColumns,
         RequestAddColumn, RequestReorderColumn, RequestCreateNewSheet, CloseStructureViewEvent,
+        RequestCreateCategory, RequestDeleteCategory,
     },
     resources::{SheetRegistry, SheetRenderCache},
 };
@@ -41,6 +42,7 @@ pub struct SheetEventWriters<'w> {
     pub add_column: EventWriter<'w, RequestAddColumn>,
     pub create_sheet: EventWriter<'w, RequestCreateNewSheet>,
     pub rename_sheet: EventWriter<'w, RequestRenameSheet>,
+    pub rename_category: EventWriter<'w, crate::sheets::events::RequestRenameCategory>,
     pub delete_sheet: EventWriter<'w, RequestDeleteSheet>,
     pub upload_req: EventWriter<'w, RequestInitiateFileUpload>,
     pub column_rename: EventWriter<'w, RequestUpdateColumnName>,
@@ -51,6 +53,10 @@ pub struct SheetEventWriters<'w> {
     pub reorder_column: EventWriter<'w, RequestReorderColumn>,
     pub revalidate: EventWriter<'w, RequestSheetRevalidation>,
     pub open_structure: EventWriter<'w, crate::sheets::events::OpenStructureViewEvent>,
+    // Category management
+    pub create_category: EventWriter<'w, RequestCreateCategory>,
+    pub delete_category: EventWriter<'w, RequestDeleteCategory>,
+    pub move_sheet_to_category: EventWriter<'w, crate::sheets::events::RequestMoveSheetToCategory>,
 }
 
 // Quick Copy controls moved into Settings popup; no dedicated top-row event writers required here.
@@ -127,8 +133,9 @@ pub fn generic_sheet_editor_ui(
             ui_b,
             &mut state,
             &*misc.registry,
-            crate::ui::elements::top_panel::sheet_management_bar::SheetManagementEventWriters {
+            &mut crate::ui::elements::top_panel::sheet_management_bar::SheetManagementEventWriters {
                 close_structure_writer: None,
+                move_sheet_to_category: &mut sheet_writers.move_sheet_to_category,
             },
         );
     });

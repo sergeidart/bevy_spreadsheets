@@ -191,7 +191,7 @@ pub(crate) fn show_ai_control_panel(
                 }
             }
             // Build key values aligned with headers (only for ancestors that have explicit keys)
-            for &row_idx in &original_rows {
+            for &_row_idx in &original_rows {
                 let mut row_vals: Vec<String> = Vec::new();
                 for (anc_cat, anc_sheet, anc_row_idx, key_col_index) in &ancestors_with_keys {
                     if let Some(sheet) = registry.get_sheet(anc_cat, anc_sheet) {
@@ -378,7 +378,7 @@ pub(crate) fn show_ai_control_panel(
             let effective_sheet_name = if let Some(vctx) = state.virtual_structure_stack.last() { vctx.virtual_sheet_name.clone() } else { selected_sheet_name_clone.clone().unwrap_or_default() };
             let sheet_data_opt = registry.get_sheet(&task_category, &effective_sheet_name);
             let metadata_opt_ref = sheet_data_opt.and_then(|d| d.metadata.as_ref());
-            let (root_category, root_sheet, root_meta) = {
+            let (_root_category, _root_sheet, root_meta) = {
                 let mut root_category = selected_category_clone.clone();
                 let mut root_sheet = effective_sheet_name.clone();
                 let mut safety = 0;

@@ -197,12 +197,12 @@ fn generate_structure_preview(raw: &str) -> String {
         match val {
             serde_json::Value::Array(arr) => {
                 if arr.iter().all(|v| v.is_string()) { // single row new format
-                    let mut vals: Vec<&str> = arr.iter().map(|v| v.as_str().unwrap_or("")).filter(|s| !s.trim().is_empty()).collect();
+                    let vals: Vec<&str> = arr.iter().map(|v| v.as_str().unwrap_or("")).filter(|s| !s.trim().is_empty()).collect();
                     out = vals.join(" | ");
                 } else if arr.iter().all(|v| v.is_array()) { // multi-row new format
                     multi_rows = true;
                     if let Some(first) = arr.first().and_then(|v| v.as_array()) {
-                        let mut vals: Vec<&str> = first.iter().map(|v| v.as_str().unwrap_or("")).filter(|s| !s.trim().is_empty()).collect();
+                        let vals: Vec<&str> = first.iter().map(|v| v.as_str().unwrap_or("")).filter(|s| !s.trim().is_empty()).collect();
                         out = vals.join(" | ");
                     }
                 } else if arr.iter().all(|v| v.is_object()) { // legacy multi-row objects

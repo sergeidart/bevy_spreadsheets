@@ -34,6 +34,46 @@ pub fn scan_filesystem_for_unregistered_sheets(
     // ADDED: Track successfully registered sheets for validation
     let mut sheets_registered_in_scan = Vec::new();
 
+    // --- Also collect empty category directories so they appear even without sheets ---
+    let mut empty_dirs: Vec<String> = Vec::new();
+    for entry_result in WalkDir::new(&base_path)
+        .min_depth(1)
+        .max_depth(2)
+        .into_iter()
+        .filter_map(Result::ok)
+    {
+        let entry = entry_result;
+        if entry.depth() == 1 && entry.file_type().is_dir() {
+            let dir_path = entry.path();
+            // consider it a category dir if it has no files with .json inside
+            let mut has_any_json = false;
+            if let Ok(mut rd) = std::fs::read_dir(dir_path) {
+                while let Some(Ok(child)) = rd.next() {
+                    if child.file_type().map(|ft| ft.is_file()).unwrap_or(false) {
+                        if child.path().extension().map_or(false, |ext| ext.eq_ignore_ascii_case("json")) {
+                            has_any_json = true; break;
+                        }
+                    }
+                }
+            }
+            if !has_any_json {
+                if let Some(name_os) = dir_path.file_name() {
+                    let name = name_os.to_string_lossy().to_string();
+                    // Registrar: push if valid category name and not already implicitly present
+                    if registry.get_sheet_names_in_category(&Some(name.clone())).is_empty() {
+                        empty_dirs.push(name);
+                    }
+                }
+            }
+        }
+    }
+
+    // Register explicit empty categories so they show up
+    for cat_name in empty_dirs {
+        // Use registry API which avoids duplicates
+        let _ = registry.create_category(cat_name);
+    }
+
     // --- (Finding potential grid files remains the same) ---
     for entry_result in WalkDir::new(&base_path)
         .min_depth(1)

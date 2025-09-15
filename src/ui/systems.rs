@@ -412,7 +412,7 @@ pub fn handle_ai_batch_results(
                     let mut original_for_merge: Option<Vec<String>> = None;
                     let mut choices: Option<Vec<ReviewChoice>> = None;
                     let mut merge_selected = false;
-                    let mut merge_decided = false;
+                    let merge_decided = false;
                     if let Some(first_val) = ai_snapshot.get(0) {
                         let normalized_first = first_val.replace(['\r','\n'], "").trim().to_lowercase();
                         if let Some(matched_row_index) = first_col_value_to_row.get(&normalized_first) {

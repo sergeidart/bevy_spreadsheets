@@ -27,6 +27,7 @@ fn fixed_button_width(ui: &egui::Ui, chars: usize) -> f32 {
 pub struct SheetManagementEventWriters<'a, 'w> {
     #[allow(dead_code)]
     pub close_structure_writer: Option<&'a mut EventWriter<'w, CloseStructureViewEvent>>,
+    pub move_sheet_to_category: &'a mut EventWriter<'w, crate::sheets::events::RequestMoveSheetToCategory>,
 }
 
 /// Wrapper that draws both rows: category row and sheet controls row.
@@ -34,20 +35,21 @@ pub fn show_sheet_management_controls<'a, 'w>(
     ui: &mut egui::Ui,
     state: &mut EditorWindowState,
     registry: &SheetRegistry,
-    event_writers: SheetManagementEventWriters<'a, 'w>,
+    event_writers: &mut SheetManagementEventWriters<'a, 'w>,
 ) {
     ui.vertical(|ui_v| {
-        show_category_picker(ui_v, state, registry);
+        show_category_picker(ui_v, state, registry, event_writers);
         ui_v.add_space(4.0);
-        show_sheet_controls(ui_v, state, registry, event_writers);
+    show_sheet_controls(ui_v, state, registry, event_writers);
     });
 }
 
 /// First bottom row: Category dropdown only
-pub fn show_category_picker(
+pub fn show_category_picker<'a, 'w>(
     ui: &mut egui::Ui,
     state: &mut EditorWindowState,
     registry: &SheetRegistry,
+    event_writers: &mut SheetManagementEventWriters<'a, 'w>,
 ) {
     // Category dropdown row: [Category button] [scrollable category tabs...]
     // Ensure this row does not expand vertically beyond a single line height
@@ -63,6 +65,7 @@ pub fn show_category_picker(
     let selected_category_text_owned: String = selected_category_full.chars().take(MAX_LABEL_CHARS).collect();
     let previous_selected_category = state.selected_category.clone();
 
+    let mut drop_consumed = false;
     ui.allocate_ui_with_layout(row_size, egui::Layout::left_to_right(egui::Align::Min), |row| {
         // Left side: category selector and tabs
         // Prepare popup ids and filter keys
@@ -78,7 +81,7 @@ pub fn show_category_picker(
         let category_popup_id = egui::Id::new(category_combo_id.clone());
         if category_button.clicked() {
             row.ctx().memory_mut(|mem| mem.open_popup(category_popup_id));
-    }
+        }
         egui::containers::popup::popup_below_widget(
             row,
             category_popup_id,
@@ -86,6 +89,7 @@ pub fn show_category_picker(
             egui::containers::popup::PopupCloseBehavior::CloseOnClickOutside,
             |popup_ui| {
                 // Filter row and entries
+                let primary_released_popup = popup_ui.ctx().input(|i| i.pointer.primary_released());
                 let mut filter_text = popup_ui
                     .memory(|mem| mem.data.get_temp::<String>(category_filter_key.clone().into()).unwrap_or_default());
                 let char_w = 8.0_f32;
@@ -120,13 +124,50 @@ pub fn show_category_picker(
                 });
 
                 let is_selected_root = state.selected_category.is_none();
+                let pointer_pos_popup = popup_ui.ctx().input(|i| i.pointer.hover_pos());
                 let current_filter = filter_text.clone();
                 let root_match = "--root--".to_string();
                 if current_filter.is_empty() || root_match.contains(&current_filter.to_lowercase()) || "root (uncategorized)".contains(&current_filter.to_lowercase()) {
-                    if popup_ui
-                        .selectable_label(is_selected_root, "--Root--")
-                        .clicked()
-                    {
+                    let root_resp = popup_ui.selectable_label(is_selected_root, "--Root--");
+                    if let Some((from_cat, ref sheet_name)) = state.dragged_sheet.as_ref() {
+                        if let Some(pos) = pointer_pos_popup {
+                            if root_resp.rect.contains(pos) {
+                                let droppable = from_cat.is_some() && registry.get_sheet(&None, sheet_name).is_none();
+                                let (fill, stroke, cursor) = if droppable {
+                                    (egui::Color32::from_rgba_premultiplied(60, 200, 60, 40), egui::Stroke::new(3.0, egui::Color32::from_rgb(60, 200, 60)), None)
+                                } else {
+                                    (egui::Color32::from_rgba_premultiplied(200, 60, 60, 40), egui::Stroke::new(3.0, egui::Color32::from_rgb(200, 60, 60)), Some(egui::CursorIcon::NotAllowed))
+                                };
+                                if let Some(icon) = cursor { popup_ui.output_mut(|o| o.cursor_icon = icon); }
+                                let painter = popup_ui.ctx().debug_painter();
+                                painter.rect(root_resp.rect, egui::CornerRadius::same(4), fill, stroke, egui::StrokeKind::Outside);
+                            }
+                        }
+                    }
+                    // Drop detection consistent with column DnD: on primary release while hovered
+                    if primary_released_popup {
+                        if let Some(pos) = pointer_pos_popup {
+                            if root_resp.rect.contains(pos) {
+                                if let Some((from_cat, sheet)) = state.dragged_sheet.take() {
+                                    // Only drop if valid: destination root differs and no name conflict
+                                    if from_cat != None && registry.get_sheet(&None, &sheet).is_none() {
+                                        event_writers.move_sheet_to_category.write(crate::sheets::events::RequestMoveSheetToCategory { from_category: from_cat, sheet_name: sheet.clone(), to_category: None });
+                                        state.selected_category = None;
+                                        state.selected_sheet_name = Some(sheet);
+                                        state.reset_interaction_modes_and_selections();
+                                        state.force_filter_recalculation = true;
+                                        popup_ui.memory_mut(|mem| mem.close_popup());
+                                        drop_consumed = true;
+                                        popup_ui.ctx().set_dragged_id(egui::Id::NULL);
+                                    } else {
+                                        // Invalid drop: restore drag state to None without moving
+                                        popup_ui.ctx().set_dragged_id(egui::Id::NULL);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if root_resp.clicked() {
                         if !is_selected_root {
                             state.selected_category = None;
                             state.selected_sheet_name = None;
@@ -144,7 +185,47 @@ pub fn show_category_picker(
                         }
                         let is_selected_cat = state.selected_category.as_deref() == Some(cat_name.as_str());
                         let display_name: String = cat_name.chars().take(MAX_LABEL_CHARS).collect();
-                        if popup_ui.selectable_label(is_selected_cat, display_name).on_hover_text(cat_name).clicked() {
+                        let cat_resp = popup_ui.selectable_label(is_selected_cat, display_name).on_hover_text(cat_name);
+                        if let Some((from_cat, ref sheet_name)) = state.dragged_sheet.as_ref() {
+                            if let Some(pos) = pointer_pos_popup {
+                                if cat_resp.rect.contains(pos) {
+                                    let to_cat = Some(cat_name.clone());
+                                    let droppable = from_cat != &to_cat && registry.get_sheet(&to_cat, sheet_name).is_none();
+                                    let (fill, stroke, cursor) = if droppable {
+                                        (egui::Color32::from_rgba_premultiplied(60, 200, 60, 40), egui::Stroke::new(3.0, egui::Color32::from_rgb(60, 200, 60)), None)
+                                    } else {
+                                        (egui::Color32::from_rgba_premultiplied(200, 60, 60, 40), egui::Stroke::new(3.0, egui::Color32::from_rgb(200, 60, 60)), Some(egui::CursorIcon::NotAllowed))
+                                    };
+                                    if let Some(icon) = cursor { popup_ui.output_mut(|o| o.cursor_icon = icon); }
+                                    let painter = popup_ui.ctx().debug_painter();
+                                    painter.rect(cat_resp.rect, egui::CornerRadius::same(4), fill, stroke, egui::StrokeKind::Outside);
+                                }
+                            }
+                        }
+                        // Drop detection onto category item inside popup
+                        if primary_released_popup {
+                            if let Some(pos) = pointer_pos_popup {
+                                if cat_resp.rect.contains(pos) {
+                                    if let Some((from_cat, sheet)) = state.dragged_sheet.take() {
+                                        let to_cat = Some(cat_name.clone());
+                                        if from_cat != to_cat && registry.get_sheet(&to_cat, &sheet).is_none() {
+                                            event_writers.move_sheet_to_category.write(crate::sheets::events::RequestMoveSheetToCategory { from_category: from_cat, sheet_name: sheet.clone(), to_category: to_cat.clone() });
+                                            state.selected_category = to_cat;
+                                            state.selected_sheet_name = Some(sheet);
+                                            state.reset_interaction_modes_and_selections();
+                                            state.force_filter_recalculation = true;
+                                            popup_ui.memory_mut(|mem| mem.close_popup());
+                                            drop_consumed = true;
+                                            popup_ui.ctx().set_dragged_id(egui::Id::NULL);
+                                            continue;
+                                        } else {
+                                            popup_ui.ctx().set_dragged_id(egui::Id::NULL);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if cat_resp.clicked() {
                             if !is_selected_cat {
                                 state.selected_category = Some(cat_name.clone());
                                 state.selected_sheet_name = None;
@@ -158,11 +239,40 @@ pub fn show_category_picker(
             },
         );
 
-        // Toggle expand/shrink button just to the right of the picker
-        row.add_space(6.0);
+    // Rename Category (icon-only) button
+        let has_selected_category = state.selected_category.is_some();
+        if row
+            .add_enabled(has_selected_category, egui::Button::new("✏"))
+            .on_hover_text("Rename category")
+            .clicked()
+        {
+            // Open a generic rename popup state; reuse sheet rename style or a new category rename popup
+            state.rename_target_category = state.selected_category.clone();
+            state.rename_target_sheet.clear();
+            state.new_name_input = state.rename_target_category.clone().unwrap_or_default();
+            // We'll reuse the rename popup but interpret as category when sheet is empty
+            state.show_rename_popup = true;
+        }
+
+        // Delete Category (icon-only) button
+        if row
+            .add_enabled(has_selected_category, egui::Button::new("🗑"))
+            .on_hover_text("Delete current category and all its sheets (double confirmation)")
+            .clicked()
+        {
+            state.delete_category_name = state.selected_category.clone();
+            state.show_delete_category_confirm_popup = true; // first step
+        }
+
+        // Hide / Extend button
+    row.add_space(6.0);
         let expanded = state.category_picker_expanded;
         let toggle_label = if expanded { "<" } else { ">" };
-        if row.button(toggle_label).on_hover_text(if expanded { "Shrink category row" } else { "Expand category row" }).clicked() {
+        if row
+            .button(toggle_label)
+            .on_hover_text(if expanded { "Shrink category row" } else { "Expand category row" })
+            .clicked()
+        {
             state.category_picker_expanded = !expanded;
         }
 
@@ -182,10 +292,48 @@ pub fn show_category_picker(
                         .max_height(line_h + 6.0)
                         .min_scrolled_height(0.0)
                         .show(inner, |tabs_ui| {
-                    tabs_ui.horizontal(|ui_th| {
+                    let primary_released_tabs = tabs_ui.ctx().input(|i| i.pointer.primary_released());
+                    let pointer_pos_tabs = tabs_ui.ctx().input(|i| i.pointer.hover_pos());
+                    tabs_ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui_th| {
                         // Root first
                         let is_root = state.selected_category.is_none();
                         let root_resp = ui_th.selectable_label(is_root, "--Root--");
+                        // Visual highlight for drop target when dragging and hovered
+                        if let Some((from_cat, ref sheet_name)) = state.dragged_sheet.as_ref() {
+                            if let Some(pos) = pointer_pos_tabs {
+                                if root_resp.rect.contains(pos) {
+                                    let droppable = from_cat.is_some() && registry.get_sheet(&None, sheet_name).is_none();
+                                    let (fill, stroke, cursor) = if droppable {
+                                        (egui::Color32::from_rgba_premultiplied(60, 200, 60, 40), egui::Stroke::new(3.0, egui::Color32::from_rgb(60, 200, 60)), None)
+                                    } else {
+                                        (egui::Color32::from_rgba_premultiplied(200, 60, 60, 40), egui::Stroke::new(3.0, egui::Color32::from_rgb(200, 60, 60)), Some(egui::CursorIcon::NotAllowed))
+                                    };
+                                    if let Some(icon) = cursor { ui_th.output_mut(|o| o.cursor_icon = icon); }
+                                    let painter = ui_th.ctx().debug_painter();
+                                    painter.rect(root_resp.rect, egui::CornerRadius::same(4), fill, stroke, egui::StrokeKind::Outside);
+                                }
+                            }
+                        }
+                        // Drop detection for root tab: on primary release while hovered
+                        if primary_released_tabs {
+                            if let Some(pos) = pointer_pos_tabs {
+                                if root_resp.rect.contains(pos) {
+                                    if let Some((from_cat, sheet)) = state.dragged_sheet.take() {
+                                        if from_cat != None && registry.get_sheet(&None, &sheet).is_none() {
+                                            event_writers.move_sheet_to_category.write(crate::sheets::events::RequestMoveSheetToCategory { from_category: from_cat, sheet_name: sheet.clone(), to_category: None });
+                                            state.selected_category = None;
+                                            state.selected_sheet_name = Some(sheet);
+                                            state.reset_interaction_modes_and_selections();
+                                            state.force_filter_recalculation = true;
+                                            drop_consumed = true;
+                                            ui_th.ctx().set_dragged_id(egui::Id::NULL);
+                                        } else {
+                                            ui_th.ctx().set_dragged_id(egui::Id::NULL);
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         if root_resp.clicked() && !is_root {
                             state.selected_category = None;
                             state.selected_sheet_name = None;
@@ -197,6 +345,44 @@ pub fn show_category_picker(
                                 let is_sel = state.selected_category.as_deref() == Some(cat.as_str());
                                 let disp: String = cat.chars().take(MAX_LABEL_CHARS).collect();
                                 let resp = ui_th.selectable_label(is_sel, disp).on_hover_text(cat);
+                                // Visual highlight for drop target when dragging and hovered
+                                if let Some((from_cat, ref sheet_name)) = state.dragged_sheet.as_ref() {
+                                    if let Some(pos) = pointer_pos_tabs {
+                                        if resp.rect.contains(pos) {
+                                            let to_cat = Some(cat.clone());
+                                            let droppable = from_cat != &to_cat && registry.get_sheet(&to_cat, sheet_name).is_none();
+                                            let (fill, stroke, cursor) = if droppable {
+                                                (egui::Color32::from_rgba_premultiplied(60, 200, 60, 40), egui::Stroke::new(3.0, egui::Color32::from_rgb(60, 200, 60)), None)
+                                            } else {
+                                                (egui::Color32::from_rgba_premultiplied(200, 60, 60, 40), egui::Stroke::new(3.0, egui::Color32::from_rgb(200, 60, 60)), Some(egui::CursorIcon::NotAllowed))
+                                            };
+                                            if let Some(icon) = cursor { ui_th.output_mut(|o| o.cursor_icon = icon); }
+                                            let painter = ui_th.ctx().debug_painter();
+                                            painter.rect(resp.rect, egui::CornerRadius::same(4), fill, stroke, egui::StrokeKind::Outside);
+                                        }
+                                    }
+                                }
+                                // Drop detection for category tab: on primary release while hovered
+                                if primary_released_tabs {
+                                    if let Some(pos) = pointer_pos_tabs {
+                                        if resp.rect.contains(pos) {
+                                            if let Some((from_cat, sheet)) = state.dragged_sheet.take() {
+                                                let to_cat = Some(cat.clone());
+                                                if from_cat != to_cat && registry.get_sheet(&to_cat, &sheet).is_none() {
+                                                    event_writers.move_sheet_to_category.write(crate::sheets::events::RequestMoveSheetToCategory { from_category: from_cat, sheet_name: sheet.clone(), to_category: to_cat.clone() });
+                                                    state.selected_category = to_cat;
+                                                    state.selected_sheet_name = Some(sheet);
+                                                    state.reset_interaction_modes_and_selections();
+                                                    state.force_filter_recalculation = true;
+                                                    drop_consumed = true;
+                                                    ui_th.ctx().set_dragged_id(egui::Id::NULL);
+                                                } else {
+                                                    ui_th.ctx().set_dragged_id(egui::Id::NULL);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                                 if resp.clicked() && !is_sel {
                                     state.selected_category = Some(cat.clone());
                                     state.selected_sheet_name = None;
@@ -210,15 +396,34 @@ pub fn show_category_picker(
                 },
             );
         }
-        // Rightmost: place the log button on the far right with a small right padding
+        // + Category button rightmost, left from Log
         row.with_layout(egui::Layout::right_to_left(egui::Align::Center), |r| {
             r.add_space(12.0);
             let label = if state.ai_output_panel_visible { "Close" } else { "Log" };
-            if r.button(label).on_hover_text("Open/close the Log panel").clicked() {
+            if r
+                .button(label)
+                .on_hover_text("Open/close the Log panel")
+                .clicked()
+            {
                 state.ai_output_panel_visible = !state.ai_output_panel_visible;
+            }
+            // Place + Category left of Log
+            if r
+                .button("📁+ Category")
+                .on_hover_text("Create a new category (folder)")
+                .clicked()
+            {
+                state.show_new_category_popup = true;
+                state.new_category_name_input.clear();
             }
         });
     });
+    // If the primary button was released but no drop target consumed it, clear the drag state
+    let released_primary = ui.input(|i| i.pointer.primary_released());
+    if released_primary && state.dragged_sheet.is_some() && !drop_consumed {
+        state.dragged_sheet = None;
+        ui.ctx().set_dragged_id(egui::Id::NULL);
+    }
     if state.selected_category != previous_selected_category {
         if state.selected_sheet_name.is_none() {
             state.reset_interaction_modes_and_selections();
@@ -233,13 +438,15 @@ pub fn show_sheet_controls<'a, 'w>(
     ui: &mut egui::Ui,
     state: &mut EditorWindowState,
     registry: &SheetRegistry,
-    _event_writers: SheetManagementEventWriters<'a, 'w>,
+    _event_writers: &mut SheetManagementEventWriters<'a, 'w>,
 ) {
     // Compute sheets in current category
     let sheets_in_category = registry.get_sheet_names_in_category(&state.selected_category);
 
     // Layout row with rightmost Add button
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui_r| {
+    let line_h = ui.text_style_height(&egui::TextStyle::Body) + ui.style().spacing.item_spacing.y;
+    let row_size = egui::Vec2::new(ui.available_width(), line_h + 6.0);
+    ui.allocate_ui_with_layout(row_size, egui::Layout::right_to_left(egui::Align::Min), |ui_r| {
         // Rightmost: Add button
         ui_r.add_space(12.0); // right padding
         if ui_r
@@ -419,7 +626,32 @@ pub fn show_sheet_controls<'a, 'w>(
                         ui_tabs.horizontal(|ui_th| {
                             for name in sheets_in_category.iter() {
                                 let is_sel = state.selected_sheet_name.as_deref() == Some(name.as_str());
-                                let resp = ui_th.selectable_label(is_sel, name).on_hover_text(name);
+                                let resp = ui_th
+                                    .selectable_label(is_sel, name)
+                                    .on_hover_text(name);
+                                // Start dragging using interact pattern (consistent with column DnD)
+                                let dnd_id_source = egui::Id::new("sheet_dnd_context").with(&state.selected_category);
+                                let item_id = dnd_id_source.with(name);
+                                let interact = resp.interact(egui::Sense::drag());
+                                if interact.drag_started_by(egui::PointerButton::Primary) {
+                                    state.dragged_sheet = Some((state.selected_category.clone(), name.clone()));
+                                    ui_th.output_mut(|o| o.cursor_icon = egui::CursorIcon::Grabbing);
+                                    ui_th.ctx().set_dragged_id(item_id);
+                                }
+                                // Drag preview overlay near cursor (like columns)
+                                if ui_th.ctx().is_being_dragged(item_id) {
+                                    egui::Area::new(item_id.with("drag_preview"))
+                                        .order(egui::Order::Tooltip)
+                                        .interactable(false)
+                                        .current_pos(ui_th.ctx().input(|i| i.pointer.hover_pos().unwrap_or(resp.rect.center())))
+                                        .movable(false)
+                                        .show(ui_th.ctx(), |ui_preview| {
+                                            let frame = egui::Frame::popup(ui_preview.style());
+                                            frame.show(ui_preview, |fui| {
+                                                fui.label(format!("Moving: {}", name));
+                                            });
+                                        });
+                                }
                                 if resp.clicked() && !is_sel {
                                     state.selected_sheet_name = Some(name.clone());
                                     state.reset_interaction_modes_and_selections();

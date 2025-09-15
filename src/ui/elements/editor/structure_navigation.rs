@@ -62,7 +62,7 @@ pub fn handle_open_structure_view(
                                                 for inner in arr.iter() {
                                                     if let serde_json::Value::Array(inner_vals) = inner {
                                                         let mut row_vals: Vec<String> = Vec::with_capacity(headers.len());
-                                                        for (i, h) in headers.iter().enumerate() {
+                                                        for (i, _h) in headers.iter().enumerate() {
                                                             let val = inner_vals.get(i).cloned().unwrap_or(serde_json::Value::String(String::new()));
                                                             row_vals.push(match val { serde_json::Value::String(s) => s, other => other.to_string() });
                                                         }
@@ -72,7 +72,7 @@ pub fn handle_open_structure_view(
                                             } else if arr.iter().all(|v| v.is_string()) {
                                                 // New single-row positional format: [..]
                                                 let mut row_vals: Vec<String> = Vec::with_capacity(headers.len());
-                                                for (i, h) in headers.iter().enumerate() {
+                                                for (i, _h) in headers.iter().enumerate() {
                                                     let val = arr.get(i).cloned().unwrap_or(serde_json::Value::String(String::new()));
                                                     row_vals.push(match val { serde_json::Value::String(s) => s, other => other.to_string() });
                                                 }

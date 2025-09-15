@@ -53,5 +53,5 @@ pub use load::{
 };
 // Save systems (from save.rs)
 pub use save::{
-    handle_delete_sheet_file_request, handle_rename_sheet_file_request
+    handle_delete_sheet_file_request, handle_rename_sheet_file_request, handle_create_category_directory_request, handle_rename_category_directory_request
 };

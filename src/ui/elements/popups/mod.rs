@@ -11,6 +11,7 @@ pub mod rename_popup;
 pub mod settings_popup; 
 pub mod ai_rule_popup;
 pub mod ai_prompt_popup;
+pub mod category_popups;
 
 // Declare the refactored modules for column options
 mod column_options_ui;
@@ -27,5 +28,6 @@ pub use new_sheet_popup::show_new_sheet_popup;
 pub use rename_popup::show_rename_popup;
 pub use settings_popup::show_settings_popup; 
 pub use ai_rule_popup::show_ai_rule_popup;
-pub use ai_prompt_popup::show_ai_prompt_popup;
+// Note: show_ai_prompt_popup is invoked from AI control panel directly
 pub use random_picker_popup::show_random_picker_popup;
+pub use category_popups::{show_new_category_popup, show_delete_category_confirm_popups};

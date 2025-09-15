@@ -92,7 +92,7 @@ pub(super) fn draw_ai_batch_review_panel(
     let mut blocks: Vec<RowBlock> = Vec::new();
     let mut group_start_indices: HashSet<usize> = HashSet::new();
     // helper closure to push a group of blocks and record its first index
-    let mut push_group = |mut new_blocks: Vec<RowBlock>, blocks: &mut Vec<RowBlock>, group_start_indices: &mut HashSet<usize>| {
+    let push_group = |mut new_blocks: Vec<RowBlock>, blocks: &mut Vec<RowBlock>, group_start_indices: &mut HashSet<usize>| {
         if new_blocks.is_empty() { return; }
         // Insert a separator before every group except the first.
         if !blocks.is_empty() { blocks.push(RowBlock::Separator); }
@@ -116,7 +116,7 @@ pub(super) fn draw_ai_batch_review_panel(
     let mut existing_cancel: Vec<usize> = Vec::new();
     let mut new_accept: Vec<usize> = Vec::new();
     let mut new_cancel: Vec<usize> = Vec::new();
-    let mut pending_updates: Vec<(usize, usize, String)> = Vec::new(); // (row_index, col_index, new_value)
+    let _pending_updates: Vec<(usize, usize, String)> = Vec::new(); // (row_index, col_index, new_value)
 
     const CONTROL_COL_INITIAL: f32 = 160.0;
     egui::ScrollArea::both().id_salt("ai_batch_review_table_scroll_snapshots").auto_shrink([false,false]).show(ui, |ui| {
@@ -315,7 +315,7 @@ pub(super) fn draw_ai_batch_review_panel(
                                 }); }
                             }
                         }
-                        _ => {}
+                        // no other variants
                     }
                 });
             }

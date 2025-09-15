@@ -12,6 +12,8 @@ use super::events::{
     RequestDeleteColumns, RequestAddColumn, RequestReorderColumn,
     // NEW: Import RequestCreateNewSheet
     RequestCreateNewSheet, RequestToggleAiRowGeneration,
+    // Category events
+    RequestCreateCategory, RequestDeleteCategory, RequestCreateCategoryDirectory, RequestRenameCategory, RequestRenameCategoryDirectory, RequestMoveSheetToCategory,
 };
 use super::systems; 
 use crate::ui::systems::{handle_ai_task_results, handle_ai_batch_results}; 
@@ -72,7 +74,14 @@ impl Plugin for SheetsPlugin {
             .add_event::<AiBatchTaskResult>()
             .add_event::<SheetDataModifiedInRegistryEvent>()
             .add_event::<RequestSheetRevalidation>()
-            .add_event::<RequestToggleAiRowGeneration>();
+            .add_event::<RequestToggleAiRowGeneration>()
+            .add_event::<RequestMoveSheetToCategory>();
+        // Category management events
+        app.add_event::<RequestCreateCategory>()
+            .add_event::<RequestDeleteCategory>()
+            .add_event::<RequestCreateCategoryDirectory>()
+            .add_event::<RequestRenameCategory>()
+            .add_event::<RequestRenameCategoryDirectory>();
 
         app.add_systems(
             Startup,
@@ -110,7 +119,12 @@ impl Plugin for SheetsPlugin {
                 systems::logic::handle_reorder_column_request,
                 // NEW: Add system for creating sheets
                 systems::logic::handle_create_new_sheet_request,
+                // Category create/delete
+                systems::logic::handle_create_category_request,
+                systems::logic::handle_delete_category_request,
+                systems::logic::handle_rename_category_request,
                 systems::logic::handle_delete_rows_request,
+                systems::logic::handle_move_sheet_to_category_request,
                 systems::logic::handle_delete_columns_request,
                 systems::logic::handle_update_column_name,
                 systems::logic::handle_update_column_validator,
@@ -150,6 +164,8 @@ impl Plugin for SheetsPlugin {
             (
                 systems::io::handle_delete_sheet_file_request,
                 systems::io::handle_rename_sheet_file_request,
+                systems::io::handle_create_category_directory_request,
+                systems::io::handle_rename_category_directory_request,
             )
                 .in_set(SheetSystemSet::FileOperations),
         );

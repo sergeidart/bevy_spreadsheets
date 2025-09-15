@@ -6,6 +6,7 @@ use crate::sheets::events::{RequestUpdateColumnValidator, SheetOperationFeedback
 use crate::sheets::definitions::ColumnValidator;
 
 // Build positional vector for a structure row according to ordered headers
+#[allow(dead_code)]
 fn build_structure_positional_row(row: &Vec<String>, _headers: &[String], source_indices: &[usize]) -> Vec<String> {
     let mut out: Vec<String> = Vec::with_capacity(source_indices.len());
     for src_idx in source_indices.iter() { out.push(row.get(*src_idx).cloned().unwrap_or_default()); }

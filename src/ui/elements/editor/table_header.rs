@@ -42,7 +42,7 @@ pub fn sheet_table_header(
 
             let (_id, mut response) = ui.allocate_at_least(ui.available_size_before_wrap(), Sense::click_and_drag());
             
-            ui.allocate_ui_at_rect(response.rect, |header_content_ui| {
+            ui.allocate_new_ui(egui::UiBuilder::new().max_rect(response.rect), |header_content_ui| {
                 header_content_ui.horizontal(|ui_h| {
                     if matches!(state.current_interaction_mode, SheetInteractionState::DeleteModeActive) {
                         let mut is_selected_for_delete = state.selected_columns_for_deletion.contains(&c_idx);

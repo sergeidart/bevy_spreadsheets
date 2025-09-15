@@ -139,7 +139,7 @@ pub fn edit_cell_widget(
 
     // --- 3. Draw the Frame and Widget Logic Inside ---
     let inner_response = ui
-        .allocate_ui_at_rect(frame_rect, |frame_ui| {
+        .allocate_new_ui(egui::UiBuilder::new().max_rect(frame_rect), |frame_ui| {
             frame.show(frame_ui, |widget_ui| {
                 let mut response_opt: Option<Response> = None;
                 let mut temp_new_value: Option<String> = None;

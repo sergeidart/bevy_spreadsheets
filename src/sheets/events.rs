@@ -67,6 +67,14 @@ pub struct RequestRenameSheetFile {
     pub new_relative_path: PathBuf,
 }
 
+// Move a sheet between categories (or to/from root)
+#[derive(Event, Debug, Clone)]
+pub struct RequestMoveSheetToCategory {
+    pub from_category: Option<String>,
+    pub sheet_name: String,
+    pub to_category: Option<String>,
+}
+
 #[derive(Event, Debug, Clone)]
 pub struct SheetOperationFeedback {
     pub message: String,
@@ -178,3 +186,33 @@ pub struct OpenStructureViewEvent {
 
 #[derive(Event, Debug, Clone)]
 pub struct CloseStructureViewEvent;
+
+// --- Category (Folder) management events ---
+#[derive(Event, Debug, Clone)]
+pub struct RequestCreateCategory {
+    pub name: String,
+}
+
+#[derive(Event, Debug, Clone)]
+pub struct RequestDeleteCategory {
+    pub name: String,
+}
+
+// --- IO: Create directory for category on disk ---
+#[derive(Event, Debug, Clone)]
+pub struct RequestCreateCategoryDirectory {
+    pub name: String,
+}
+
+// --- Category rename events ---
+#[derive(Event, Debug, Clone)]
+pub struct RequestRenameCategory {
+    pub old_name: String,
+    pub new_name: String,
+}
+
+#[derive(Event, Debug, Clone)]
+pub struct RequestRenameCategoryDirectory {
+    pub old_name: String,
+    pub new_name: String,
+}
