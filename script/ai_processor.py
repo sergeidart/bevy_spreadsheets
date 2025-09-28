@@ -79,6 +79,7 @@ def execute_ai_query(api_key: str, payload_json: str) -> str:  # noqa: D401
                 legacy_single = True
         user_prompt: Optional[str] = payload.get("user_prompt")
         column_contexts: List[Any] = payload.get("column_contexts", [])
+        column_data_types: List[Any] = payload.get("column_data_types", [])
         keys_block = payload.get("keys")
         # Build a single key payload. Prefer an explicit `payload["key"]` if callers
         # already use it. Otherwise attempt to normalize legacy `keys` which may
@@ -146,7 +147,7 @@ def execute_ai_query(api_key: str, payload_json: str) -> str:  # noqa: D401
                 + " Row length must equal number of column contexts. No markdown fences."
             )
         row_additions_hint = (
-            f"Row Additions Enabled: The model may add new rows AFTER the first {orig_n} original rows to provide similar item if any applicable here. Each new row must match column count."
+            f"Add Rows Enabled: The model may add new rows AFTER the first {orig_n} original rows to provide similar item if any applicable here. Each new row must match column count."
             if allow_row_additions and not legacy_single and not prompt_only_mode else ""
         )
         grounded_search_instruction = (
@@ -157,13 +158,14 @@ def execute_ai_query(api_key: str, payload_json: str) -> str:  # noqa: D401
         base_instr = (system_instruction + "\n") if system_instruction else ""
         system_full = base_instr + ordering + "\n" + grounded_search_instruction + ("\n" + row_additions_hint if row_additions_hint else "")
 
-    # key_payload was constructed above (either from payload['key'] or normalized)
-    # If still None, do not send the legacy keys block to avoid confusion.
+        # key_payload was constructed above (either from payload['key'] or normalized)
+        # If still None, do not send the legacy keys block to avoid confusion.
 
         user_text = (
             ("ALLOW_ROW_ADDITIONS: true\n" if ((allow_row_additions and not legacy_single) or prompt_only_mode) else "")
             + (f"USER_PROMPT: {user_prompt.strip()}\n" if prompt_only_mode else "")
             + "Column Contexts:" + json.dumps(column_contexts, ensure_ascii=False) + "\n"
+            + "Column Types:" + json.dumps(column_data_types, ensure_ascii=False) + "\n"
             + ("Key:" + json.dumps(key_payload, ensure_ascii=False) + "\n" if key_payload else "")
             + ("Rows Data:" + json.dumps(rows_data, ensure_ascii=False) + "\n" if not prompt_only_mode else "")
             + (row_additions_hint + "\n" if row_additions_hint and not prompt_only_mode else "")

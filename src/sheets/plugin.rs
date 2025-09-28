@@ -27,6 +27,7 @@ use super::events::{
     RequestReorderColumn,
     RequestSheetRevalidation,
     RequestToggleAiRowGeneration,
+    RequestUpdateAiSendSchema,
     RequestUpdateColumnName,
     RequestUpdateColumnValidator,
     SheetDataModifiedInRegistryEvent,
@@ -95,6 +96,7 @@ impl Plugin for SheetsPlugin {
             .add_event::<SheetDataModifiedInRegistryEvent>()
             .add_event::<RequestSheetRevalidation>()
             .add_event::<RequestToggleAiRowGeneration>()
+            .add_event::<RequestUpdateAiSendSchema>()
             .add_event::<RequestMoveSheetToCategory>();
         // Category management events
         app.add_event::<RequestCreateCategory>()
@@ -133,6 +135,7 @@ impl Plugin for SheetsPlugin {
                 systems::logic::handle_delete_request,
                 systems::logic::handle_add_row_request,
                 systems::logic::handle_toggle_ai_row_generation,
+                systems::logic::handle_update_ai_send_schema,
                 systems::logic::handle_add_column_request,
                 systems::logic::handle_reorder_column_request,
                 // NEW: Add system for creating sheets

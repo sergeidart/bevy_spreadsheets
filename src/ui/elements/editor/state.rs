@@ -1,8 +1,9 @@
 // src/ui/elements/editor/state.rs
-use crate::sheets::definitions::ColumnDataType;
+use crate::sheets::definitions::{ColumnDataType, ColumnValidator};
 use bevy::prelude::Resource;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AiModeState {
@@ -41,6 +42,13 @@ pub enum ToyboxMode {
     #[default]
     Randomizer,
     Summarizer,
+}
+
+#[derive(Clone, Debug)]
+pub struct FilteredRowsCacheEntry {
+    pub rows: Arc<Vec<usize>>,
+    pub filters_hash: u64,
+    pub total_rows: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -110,9 +118,9 @@ pub struct EditorWindowState {
     pub options_link_target_column_index: Option<usize>,
     // NEW: Structure selection chain (always at least length 1 with possibly None meaning no selection yet)
     pub options_structure_source_columns: Vec<Option<usize>>,
-    pub linked_column_cache: HashMap<(String, usize), HashSet<String>>,
+    pub linked_column_cache: HashMap<(String, usize), Arc<HashSet<String>>>,
     // Normalized (lowercased, CR/LF removed) mirror of linked_column_cache for O(1) membership
-    pub linked_column_cache_normalized: HashMap<(String, usize), HashSet<String>>,
+    pub linked_column_cache_normalized: HashMap<(String, usize), Arc<HashSet<String>>>,
 
     // NEW: State for New Sheet Popup
     pub show_new_sheet_popup: bool,
@@ -158,7 +166,7 @@ pub struct EditorWindowState {
     pub ai_rule_popup_grounding: Option<bool>,
 
     // Table rendering helpers
-    pub filtered_row_indices_cache: HashMap<(Option<String>, String, u64), Vec<usize>>,
+    pub filtered_row_indices_cache: HashMap<(Option<String>, String), FilteredRowsCacheEntry>,
     pub force_filter_recalculation: bool,
     pub request_scroll_to_new_row: bool,
     pub scroll_to_row_index: Option<usize>,
@@ -243,6 +251,12 @@ pub struct EditorWindowState {
     pub ai_prompt_input: String,
     // Marker that last AI batch send was prompt-only (no original rows) so we treat incoming rows specially
     pub last_ai_prompt_only: bool,
+    pub ai_cached_included_columns: Vec<bool>,
+    pub ai_cached_included_columns_category: Option<String>,
+    pub ai_cached_included_columns_sheet: Option<String>,
+    pub ai_cached_included_columns_path: Vec<usize>,
+    pub ai_cached_included_columns_dirty: bool,
+    pub ai_cached_included_columns_valid: bool,
 }
 
 impl Default for EditorWindowState {
@@ -352,6 +366,12 @@ impl Default for EditorWindowState {
             show_ai_prompt_popup: false,
             ai_prompt_input: String::new(),
             last_ai_prompt_only: false,
+            ai_cached_included_columns: Vec::new(),
+            ai_cached_included_columns_category: None,
+            ai_cached_included_columns_sheet: None,
+            ai_cached_included_columns_path: Vec::new(),
+            ai_cached_included_columns_dirty: true,
+            ai_cached_included_columns_valid: false,
         }
     }
 }
@@ -437,8 +457,73 @@ impl EditorWindowState {
         self.pending_validator_target_is_structure = false;
 
         // NOTE: virtual structure stack intentionally preserved so user can back out after mode changes
-
         // Keep random picker visible state as-is across mode changes.
+
+        self.mark_ai_included_columns_dirty();
+    }
+
+    pub fn mark_ai_included_columns_dirty(&mut self) {
+        self.ai_cached_included_columns_dirty = true;
+        self.ai_cached_included_columns_valid = false;
+    }
+
+    pub fn ensure_ai_included_columns_cache(
+        &mut self,
+        registry: &crate::sheets::resources::SheetRegistry,
+        category: &Option<String>,
+        sheet_name: &str,
+    ) {
+        let path_matches = self.ai_cached_included_columns_path.len()
+            == self.virtual_structure_stack.len()
+            && self
+                .virtual_structure_stack
+                .iter()
+                .zip(self.ai_cached_included_columns_path.iter())
+                .all(|(ctx, cached)| ctx.parent.parent_col == *cached);
+
+        let needs_rebuild = self.ai_cached_included_columns_dirty
+            || self.ai_cached_included_columns_category.as_ref() != category.as_ref()
+            || self.ai_cached_included_columns_sheet.as_deref() != Some(sheet_name)
+            || !path_matches
+            || !self.ai_cached_included_columns_valid;
+
+        if !needs_rebuild {
+            self.ai_cached_included_columns_valid = true;
+            return;
+        }
+
+        self.ai_cached_included_columns_category = category.clone();
+        self.ai_cached_included_columns_sheet = Some(sheet_name.to_string());
+        self.ai_cached_included_columns_path.clear();
+        self.ai_cached_included_columns_path.extend(
+            self.virtual_structure_stack
+                .iter()
+                .map(|ctx| ctx.parent.parent_col),
+        );
+        self.ai_cached_included_columns_dirty = false;
+        self.ai_cached_included_columns_valid = false;
+
+        if let Some(meta) = registry
+            .get_sheet(category, sheet_name)
+            .and_then(|s| s.metadata.as_ref())
+        {
+            self.ai_cached_included_columns.clear();
+            self.ai_cached_included_columns
+                .resize(meta.columns.len(), false);
+            for (idx, column) in meta.columns.iter().enumerate() {
+                if matches!(column.validator, Some(ColumnValidator::Structure)) {
+                    continue;
+                }
+                if !matches!(column.ai_include_in_send, Some(false)) {
+                    if let Some(flag) = self.ai_cached_included_columns.get_mut(idx) {
+                        *flag = true;
+                    }
+                }
+            }
+            self.ai_cached_included_columns_valid = true;
+        } else {
+            self.ai_cached_included_columns.clear();
+        }
     }
 
     /// Resolve ultimate root sheet (category, sheet) for current view (following structure parents).

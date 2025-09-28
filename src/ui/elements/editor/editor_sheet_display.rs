@@ -2,11 +2,12 @@
 use crate::sheets::{
     events::{
         AddSheetRowRequest, OpenStructureViewEvent, RequestAddColumn, RequestReorderColumn,
-        UpdateCellEvent,
+        RequestToggleAiRowGeneration, RequestUpdateAiSendSchema, UpdateCellEvent,
     },
     resources::{SheetRegistry, SheetRenderCache},
 };
 use crate::ui::elements::editor::state::{AiModeState, EditorWindowState, SheetInteractionState};
+use crate::ui::elements::editor::table_body::get_filtered_row_indices_cached;
 use crate::ui::elements::editor::table_header::sheet_table_header;
 use bevy::prelude::*;
 use bevy_egui::egui; // EguiContexts might not be needed here if ctx is passed
@@ -26,6 +27,8 @@ pub(super) fn show_sheet_table(
     reorder_column_writer: EventWriter<RequestReorderColumn>,
     mut cell_update_writer: EventWriter<UpdateCellEvent>,
     mut open_structure_writer: EventWriter<OpenStructureViewEvent>,
+    mut toggle_add_rows_writer: EventWriter<RequestToggleAiRowGeneration>,
+    send_schema_writer: EventWriter<RequestUpdateAiSendSchema>,
     mut add_row_writer: EventWriter<AddSheetRowRequest>,
     mut add_column_writer: EventWriter<RequestAddColumn>,
 ) {
@@ -193,47 +196,40 @@ pub(super) fn show_sheet_table(
                                    });
                                }
                                // Render regular headers using existing helper
-                               sheet_table_header(&mut header_row, ctx, metadata, selected_name, state, reorder_column_writer);
+                               sheet_table_header(
+                                   &mut header_row,
+                                   ctx,
+                                   metadata,
+                                   selected_name,
+                                   &current_category_clone,
+                                   registry,
+                                   state,
+                                   reorder_column_writer,
+                                   send_schema_writer,
+                               );
                             })
                            .body(|body: TableBody| {
+                               state.ensure_ai_included_columns_cache(
+                                   registry,
+                                   &current_category_clone,
+                                   selected_name,
+                               );
+                               let sheet_ref =
+                                   registry.get_sheet(&current_category_clone, selected_name).unwrap();
+                               let meta_ref = sheet_ref.metadata.as_ref().unwrap();
+                               let grid = &sheet_ref.grid;
+                               let filtered_indices = get_filtered_row_indices_cached(
+                                   state,
+                                   &current_category_clone,
+                                   selected_name,
+                                   grid,
+                                   meta_ref,
+                               );
                                if ancestor_key_columns.is_empty() {
                                    // Render standard body with the control column prepended
-                                   let sheet_ref = registry.get_sheet(&current_category_clone, selected_name).unwrap();
-                                   let meta_ref = sheet_ref.metadata.as_ref().unwrap();
-                                   let grid = &sheet_ref.grid;
                                    use crate::sheets::definitions::ColumnValidator;
-                                   let validators: Vec<Option<ColumnValidator>> = meta_ref.columns.iter().map(|c| c.validator.clone()).collect();
-                                   // Filtering
-                                   let filters: Vec<Option<String>> = meta_ref.columns.iter().map(|c| c.filter.clone()).collect();
-                                   let filtered_indices: Vec<usize> = if filters.iter().all(|f| f.is_none()) {
-                                       (0..grid.len()).collect()
-                                   } else {
-                                       (0..grid.len()).filter(|row_idx| {
-                                           if let Some(row) = grid.get(*row_idx) {
-                                               // AND across columns, OR within a column (terms separated by '|')
-                                               filters.iter().enumerate().all(|(col_idx, filter_opt)| {
-                                                   match filter_opt {
-                                                       Some(txt) if !txt.is_empty() => {
-                                                           row.get(col_idx).map_or(false, |cell| {
-                                                               let cell_lower = cell.to_lowercase();
-                                                               let terms: Vec<&str> = txt
-                                                                   .split('|')
-                                                                   .map(|s| s.trim())
-                                                                   .filter(|s| !s.is_empty())
-                                                                   .collect();
-                                                               if terms.is_empty() { return true; }
-                                                               terms.iter().any(|t| {
-                                                                   let term_lower = t.to_lowercase();
-                                                                   cell_lower.contains(&term_lower)
-                                                               })
-                                                           })
-                                                       }
-                                                       _ => true,
-                                                   }
-                                               })
-                                           } else { false }
-                                       }).collect()
-                                   };
+                                   let validators: Vec<Option<ColumnValidator>> =
+                                       meta_ref.columns.iter().map(|c| c.validator.clone()).collect();
 
                                    body.rows(row_height, filtered_indices.len(), |mut row| {
                                        let idx_in_list = row.index();
@@ -274,6 +270,7 @@ pub(super) fn show_sheet_table(
                                                    render_cache,
                                                    state,
                                                    &mut open_structure_writer,
+                                                   &mut toggle_add_rows_writer,
                                                ) {
                                                    cell_update_writer.write(crate::sheets::events::UpdateCellEvent { category: current_category_clone.clone(), sheet_name: selected_name.to_string(), row_index: original_row_index, col_index: c_idx, new_value });
                                                }
@@ -285,40 +282,8 @@ pub(super) fn show_sheet_table(
                                    let inner_body = body;
                                    let original_category = current_category_clone.clone();
                                    use crate::sheets::definitions::ColumnValidator;
-                                   let sheet_ref = registry.get_sheet(&original_category, selected_name).unwrap();
-                                   let meta_ref = sheet_ref.metadata.as_ref().unwrap();
-                                   let grid = &sheet_ref.grid;
-                                   let validators: Vec<Option<ColumnValidator>> = meta_ref.columns.iter().map(|c| c.validator.clone()).collect();
-                                   let filters: Vec<Option<String>> = meta_ref.columns.iter().map(|c| c.filter.clone()).collect();
-                                   let filtered_indices: Vec<usize> = if filters.iter().all(|f| f.is_none()) {
-                                       (0..grid.len()).collect()
-                                   } else {
-                                       (0..grid.len()).filter(|row_idx| {
-                                           if let Some(row) = grid.get(*row_idx) {
-                                               // AND across columns, OR within a column (terms separated by '|')
-                                               filters.iter().enumerate().all(|(col_idx, filter_opt)| {
-                                                   match filter_opt {
-                                                       Some(txt) if !txt.is_empty() => {
-                                                           row.get(col_idx).map_or(false, |cell| {
-                                                               let cell_lower = cell.to_lowercase();
-                                                               let terms: Vec<&str> = txt
-                                                                   .split('|')
-                                                                   .map(|s| s.trim())
-                                                                   .filter(|s| !s.is_empty())
-                                                                   .collect();
-                                                               if terms.is_empty() { return true; }
-                                                               terms.iter().any(|t| {
-                                                                   let term_lower = t.to_lowercase();
-                                                                   cell_lower.contains(&term_lower)
-                                                               })
-                                                           })
-                                                       }
-                                                       _ => true,
-                                                   }
-                                               })
-                                           } else { false }
-                                       }).collect()
-                                   };
+                                   let validators: Vec<Option<ColumnValidator>> =
+                                       meta_ref.columns.iter().map(|c| c.validator.clone()).collect();
                                    let num_cols_local = meta_ref.columns.len();
                                    inner_body.rows(row_height, filtered_indices.len(), |mut row| {
                                        let idx_in_list = row.index();
@@ -363,6 +328,7 @@ pub(super) fn show_sheet_table(
                                                    render_cache,
                                                    state,
                                                    &mut open_structure_writer,
+                                                   &mut toggle_add_rows_writer,
                                                ) {
                                                    cell_update_writer.write(crate::sheets::events::UpdateCellEvent { category: original_category.clone(), sheet_name: selected_name.to_string(), row_index: original_row_index, col_index: c_idx, new_value });
                                                }

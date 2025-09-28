@@ -2,6 +2,7 @@
 // (Ensure ValidationState enum exists and is adjusted as discussed)
 use bevy::prelude::*;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use crate::sheets::{definitions::ColumnDataType, resources::SheetRegistry};
 // IMPORTANT: EditorWindowState is needed here ONLY for the linked cache access
@@ -75,13 +76,13 @@ pub(crate) fn validate_basic_cell(
 
 /// Validates a cell value based on a linked column validator.
 /// Returns the validation state and optionally a reference to the allowed values from the cache.
-pub(crate) fn validate_linked_cell<'a>(
+pub(crate) fn validate_linked_cell(
     current_cell_string: &str,
     target_sheet_name: &str,
     target_column_index: usize,
     registry: &SheetRegistry,
-    state: &'a mut EditorWindowState, // Still need EditorWindowState for the linked cache access
-) -> (ValidationState, Option<&'a HashSet<String>>) {
+    state: &mut EditorWindowState, // Still need EditorWindowState for the linked cache access
+) -> (ValidationState, Option<Arc<HashSet<String>>>) {
     if current_cell_string.is_empty() {
         // Empty string is considered Valid (Empty state) for linked columns
         return (ValidationState::Empty, None);

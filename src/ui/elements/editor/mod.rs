@@ -17,6 +17,7 @@ pub mod prefs;
 
 // Existing AI modules
 pub mod ai_batch_review_ui;
+pub mod ai_context_utils;
 pub mod ai_control_panel;
 pub mod ai_panel_structs;
 

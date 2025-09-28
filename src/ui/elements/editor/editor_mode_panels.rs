@@ -43,6 +43,7 @@ pub(super) fn show_active_mode_panel(
             commands,
             session_api_key,
             &mut sheet_writers.toggle_ai_row_generation,
+            &mut sheet_writers.update_ai_send_schema,
         );
         panel_shown = true;
     }

@@ -2,11 +2,12 @@
 use bevy::prelude::*;
 use bevy_egui::egui::{self, Color32, Response, Sense};
 use std::collections::HashSet;
+use std::sync::Arc;
 // use std::str::FromStr; // Not strictly needed if parsing logic moves
 
 use crate::sheets::{
-    definitions::{ColumnDataType, ColumnValidator},
-    events::OpenStructureViewEvent,
+    definitions::{ColumnDataType, ColumnValidator, SheetMetadata},
+    events::{OpenStructureViewEvent, RequestToggleAiRowGeneration},
     resources::{SheetRegistry, SheetRenderCache},
 };
 use crate::ui::elements::editor::state::{EditorWindowState, SheetInteractionState};
@@ -36,6 +37,7 @@ pub fn edit_cell_widget(
     state: &mut EditorWindowState,
     // NEW: event writer for structure navigation
     structure_open_events: &mut EventWriter<OpenStructureViewEvent>,
+    toggle_ai_events: &mut EventWriter<RequestToggleAiRowGeneration>,
 ) -> Option<String> {
     // Return type remains Option<String> for committed changes
 
@@ -70,8 +72,8 @@ pub fn edit_cell_widget(
         .map_or(ColumnDataType::String, |col_def| col_def.data_type);
 
     // Prefetch allowed values for linked columns once (and reuse below)
-    let mut prefetch_allowed_values: Option<&HashSet<String>> = None;
-    let mut prefetch_allowed_values_norm: Option<&HashSet<String>> = None;
+    let mut prefetch_allowed_values: Option<Arc<HashSet<String>>> = None;
+    let mut prefetch_allowed_values_norm: Option<Arc<HashSet<String>>> = None;
     if let Some(ColumnValidator::Linked {
         target_sheet_name,
         target_column_index,
@@ -96,8 +98,7 @@ pub fn edit_cell_widget(
     let (frame_id, frame_rect) = ui.allocate_space(desired_size);
 
     // Determine an effective validation state: prefer the up-to-date cached linked set when present
-    let effective_validation_state = if let (Some(_), Some(values_norm)) =
-        (prefetch_allowed_values, prefetch_allowed_values_norm)
+    let effective_validation_state = if let Some(values_norm) = prefetch_allowed_values_norm.as_ref()
     {
         if current_display_text.is_empty() {
             ValidationState::Empty
@@ -112,6 +113,20 @@ pub fn edit_cell_widget(
         }
     } else {
         cell_validation_state
+    };
+
+    // Determine whether the cached AI-included column set applies to this cell
+    let is_column_ai_included = if state.ai_cached_included_columns_valid
+        && state.ai_cached_included_columns_sheet.as_deref() == Some(sheet_name)
+        && state.ai_cached_included_columns_category.as_ref() == category.as_ref()
+    {
+        state
+            .ai_cached_included_columns
+            .get(col_index)
+            .copied()
+            .unwrap_or(false)
+    } else {
+        false
     };
 
     // Determine selection-based coloring first, then fall back to validation colors
@@ -133,7 +148,7 @@ pub fn edit_cell_widget(
                 .map(|v| matches!(v, crate::sheets::definitions::ColumnValidator::Structure))
                 .unwrap_or(false);
 
-            if is_structure_column {
+            if is_structure_column || !is_column_ai_included {
                 // Fall back to validation colors for structure columns
                 match effective_validation_state {
                     ValidationState::Empty => Color32::TRANSPARENT,
@@ -190,8 +205,8 @@ pub fn edit_cell_widget(
                                 // Use prefetch if available; provide stable empty backing otherwise
                                 let empty_backing_local; // defined on the stack and lives through this block
                                 let allowed_values: &HashSet<String> =
-                                    if let Some(values) = prefetch_allowed_values {
-                                        values
+                                    if let Some(values) = prefetch_allowed_values.as_ref() {
+                                        values.as_ref()
                                     } else {
                                         empty_backing_local = HashSet::new();
                                         &empty_backing_local
@@ -384,8 +399,115 @@ pub fn edit_cell_widget(
                                 if summary.chars().count() > 64 {
                                     summary = summary.chars().take(64).collect::<String>() + "…";
                                 }
-                                let btn = centered_widget_ui.button(summary);
-                                if btn.clicked() {
+                                let structure_context =
+                                    compute_structure_root_and_path(state, sheet_name, col_index);
+                                let response_btn = centered_widget_ui.button(summary);
+                                let clicked = response_btn.clicked();
+                                response_btn.context_menu(|menu_ui| {
+                                    let mut add_rows_clicked = false;
+                                    let mut toggle_change: Option<(
+                                        Option<String>,
+                                        String,
+                                        Vec<usize>,
+                                        bool,
+                                        Option<bool>,
+                                    )> = None;
+
+                                    menu_ui.horizontal(|row_ui| {
+                                        let add_rows_resp = row_ui.add(
+                                            egui::Label::new("Add Rows")
+                                                .sense(egui::Sense::click()),
+                                        );
+                                        if add_rows_resp.clicked() {
+                                            add_rows_clicked = true;
+                                        }
+
+                                        if structure_context.is_some() {
+                                            row_ui.separator();
+                                        }
+
+                                        if let Some((root_category, root_sheet, structure_path)) =
+                                            structure_context.as_ref()
+                                        {
+                                            if let Some(root_meta) = registry
+                                                .get_sheet(root_category, root_sheet)
+                                                .and_then(|sd| sd.metadata.as_ref())
+                                            {
+                                                let sheet_default =
+                                                    root_meta.ai_enable_row_generation;
+                                                let current_override =
+                                                    resolve_structure_override_for_menu(
+                                                        root_meta,
+                                                        structure_path,
+                                                    );
+                                                let mut desired =
+                                                    current_override.unwrap_or(sheet_default);
+                                                let toggle_resp = row_ui
+                                                    .add(egui::Checkbox::without_text(
+                                                        &mut desired,
+                                                    ))
+                                                    .on_hover_text(
+                                                        "Allow AI row generation for this structure",
+                                                    );
+                                                if toggle_resp.changed() {
+                                                    let new_override = if desired == sheet_default {
+                                                        None
+                                                    } else {
+                                                        Some(desired)
+                                                    };
+                                                    toggle_change = Some((
+                                                        root_category.clone(),
+                                                        root_sheet.clone(),
+                                                        structure_path.clone(),
+                                                        desired,
+                                                        new_override,
+                                                    ));
+                                                }
+                                            } else {
+                                                let mut dummy = false;
+                                                row_ui.add_enabled(
+                                                    false,
+                                                    egui::Checkbox::without_text(&mut dummy),
+                                                );
+                                            }
+                                        }
+                                    });
+
+                                    if add_rows_clicked {
+                                        if let Some((root_category, root_sheet, _structure_path)) =
+                                            structure_context.as_ref()
+                                        {
+                                            structure_open_events.write(OpenStructureViewEvent {
+                                                parent_category: root_category.clone(),
+                                                parent_sheet: root_sheet.clone(),
+                                                row_index,
+                                                col_index,
+                                            });
+                                        } else {
+                                            structure_open_events.write(OpenStructureViewEvent {
+                                                parent_category: category.clone(),
+                                                parent_sheet: sheet_name.to_string(),
+                                                row_index,
+                                                col_index,
+                                            });
+                                        }
+                                        menu_ui.close_menu();
+                                    }
+
+                                    if let Some((root_category, root_sheet, structure_path, desired, new_override)) =
+                                        toggle_change
+                                    {
+                                        toggle_ai_events.write(RequestToggleAiRowGeneration {
+                                            category: root_category,
+                                            sheet_name: root_sheet,
+                                            enabled: desired,
+                                            structure_path: Some(structure_path),
+                                            structure_override: new_override,
+                                        });
+                                        menu_ui.close_menu();
+                                    }
+                                });
+                                if clicked {
                                     structure_open_events.write(OpenStructureViewEvent {
                                         parent_category: category.clone(),
                                         parent_sheet: sheet_name.to_string(),
@@ -393,7 +515,7 @@ pub fn edit_cell_widget(
                                         col_index,
                                     });
                                 }
-                                response_opt = Some(btn);
+                                response_opt = Some(response_btn);
                             }
                         }
                     });
@@ -415,4 +537,73 @@ pub fn edit_cell_widget(
             .on_hover_text(hover_text);
     }
     final_new_value
+}
+
+fn compute_structure_root_and_path(
+    state: &EditorWindowState,
+    current_sheet_name: &str,
+    col_index: usize,
+) -> Option<(Option<String>, String, Vec<usize>)> {
+    let mut path: Vec<usize> = state
+        .virtual_structure_stack
+        .iter()
+        .map(|ctx| ctx.parent.parent_col)
+        .collect();
+    path.push(col_index);
+    if path.is_empty() {
+        return None;
+    }
+    let (root_category, root_sheet) = if let Some(first_ctx) = state.virtual_structure_stack.first()
+    {
+        (
+            first_ctx.parent.parent_category.clone(),
+            first_ctx.parent.parent_sheet.clone(),
+        )
+    } else {
+        (
+            state.selected_category.clone(),
+            state
+                .selected_sheet_name
+                .clone()
+                .unwrap_or_else(|| current_sheet_name.to_string()),
+        )
+    };
+    Some((root_category, root_sheet, path))
+}
+
+fn resolve_structure_override_for_menu(meta: &SheetMetadata, path: &[usize]) -> Option<bool> {
+    if path.is_empty() {
+        return None;
+    }
+    let column = meta.columns.get(path[0])?;
+    if path.len() == 1 {
+        return column.ai_enable_row_generation;
+    }
+    let mut field = column.structure_schema.as_ref()?.get(path[1])?;
+    if path.len() == 2 {
+        return field.ai_enable_row_generation;
+    }
+    for idx in path.iter().skip(2) {
+        field = field.structure_schema.as_ref()?.get(*idx)?;
+    }
+    field.ai_enable_row_generation
+}
+
+fn describe_structure_path_for_menu(meta: &SheetMetadata, path: &[usize]) -> Option<String> {
+    if path.is_empty() {
+        return None;
+    }
+    let mut names: Vec<String> = Vec::new();
+    let column = meta.columns.get(path[0])?;
+    names.push(column.header.clone());
+    if path.len() == 1 {
+        return Some(names.join(" -> "));
+    }
+    let mut field = column.structure_schema.as_ref()?.get(path[1])?;
+    names.push(field.header.clone());
+    for idx in path.iter().skip(2) {
+        field = field.structure_schema.as_ref()?.get(*idx)?;
+        names.push(field.header.clone());
+    }
+    Some(names.join(" -> "))
 }

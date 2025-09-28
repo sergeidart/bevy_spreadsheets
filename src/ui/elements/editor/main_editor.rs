@@ -16,8 +16,9 @@ use crate::sheets::{
         AddSheetRowRequest, CloseStructureViewEvent, RequestAddColumn, RequestCreateCategory,
         RequestCreateNewSheet, RequestDeleteCategory, RequestDeleteColumns, RequestDeleteRows,
         RequestDeleteSheet, RequestInitiateFileUpload, RequestRenameSheet, RequestReorderColumn,
-        RequestSheetRevalidation, RequestToggleAiRowGeneration, RequestUpdateColumnName,
-        RequestUpdateColumnValidator, SheetDataModifiedInRegistryEvent, UpdateCellEvent,
+        RequestSheetRevalidation, RequestToggleAiRowGeneration, RequestUpdateAiSendSchema,
+        RequestUpdateColumnName, RequestUpdateColumnValidator, SheetDataModifiedInRegistryEvent,
+        UpdateCellEvent,
     },
     resources::{SheetRegistry, SheetRenderCache},
 };
@@ -51,6 +52,7 @@ pub struct SheetEventWriters<'w> {
     pub revalidate: EventWriter<'w, RequestSheetRevalidation>,
     pub open_structure: EventWriter<'w, crate::sheets::events::OpenStructureViewEvent>,
     pub toggle_ai_row_generation: EventWriter<'w, RequestToggleAiRowGeneration>,
+    pub update_ai_send_schema: EventWriter<'w, RequestUpdateAiSendSchema>,
     // Category management
     pub create_category: EventWriter<'w, RequestCreateCategory>,
     pub delete_category: EventWriter<'w, RequestDeleteCategory>,
@@ -181,6 +183,8 @@ pub fn generic_sheet_editor_ui(
                 sheet_writers.reorder_column,
                 sheet_writers.cell_update,
                 sheet_writers.open_structure,
+                sheet_writers.toggle_ai_row_generation,
+                sheet_writers.update_ai_send_schema,
                 sheet_writers.add_row,
                 sheet_writers.add_column,
             );

@@ -330,6 +330,7 @@ fn initialize_popup_state(state: &mut EditorWindowState, registry: &SheetRegistr
                 filter: f.filter.clone(),
                 ai_context: f.ai_context.clone(),
                 ai_enable_row_generation: f.ai_enable_row_generation,
+                ai_include_in_send: f.ai_include_in_send,
                 width: None,
                 structure_schema: f.structure_schema.clone(),
                 structure_column_order: f.structure_column_order.clone(),

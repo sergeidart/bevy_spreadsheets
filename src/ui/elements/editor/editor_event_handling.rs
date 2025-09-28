@@ -45,6 +45,7 @@ pub(super) fn process_editor_events_and_state(
         {
             debug!("editor_event_handling: Received SheetDataModifiedInRegistryEvent for current sheet '{:?}/{}'. Forcing filter recalc.", event.category, event.sheet_name);
             state.force_filter_recalculation = true;
+            state.mark_ai_included_columns_dirty();
 
             if state.request_scroll_to_new_row {
                 if let Some(sheet_data) = registry.get_sheet(&event.category, &event.sheet_name) {

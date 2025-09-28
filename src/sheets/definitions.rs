@@ -193,6 +193,8 @@ pub struct ColumnDefinition {
     pub ai_context: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ai_enable_row_generation: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_include_in_send: Option<bool>,
     // Legacy width accepted but never serialized (feature removed)
     #[serde(default, skip_serializing)]
     pub width: Option<f32>,
@@ -220,6 +222,8 @@ pub struct StructureFieldDefinition {
     pub ai_context: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ai_enable_row_generation: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_include_in_send: Option<bool>,
     // Legacy width accepted but not serialized
     #[serde(default, skip_serializing)]
     pub width: Option<f32>,
@@ -243,6 +247,7 @@ impl From<&ColumnDefinition> for StructureFieldDefinition {
             filter: c.filter.clone(),
             ai_context: c.ai_context.clone(),
             ai_enable_row_generation: c.ai_enable_row_generation,
+            ai_include_in_send: c.ai_include_in_send,
             width: None,
             structure_schema: c.structure_schema.clone(),
             structure_column_order: c.structure_column_order.clone(),
@@ -263,6 +268,7 @@ impl ColumnDefinition {
             filter: None,
             ai_context: None,
             ai_enable_row_generation: None,
+            ai_include_in_send: None,
             width: None,
             structure_schema: None,
             structure_column_order: None,
@@ -528,6 +534,7 @@ impl<'de> Deserialize<'de> for SheetMetadata {
                 filter: filter_val,
                 ai_context: None,
                 ai_enable_row_generation: None,
+                ai_include_in_send: None,
                 width: None,
                 structure_schema: None,
                 structure_column_order: None,

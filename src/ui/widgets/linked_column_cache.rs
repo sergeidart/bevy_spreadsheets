@@ -4,13 +4,14 @@ use crate::ui::elements::editor::state::EditorWindowState;
 use crate::ui::validation::normalize_for_link_cmp;
 use bevy::prelude::*;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 /// Represents the result of trying to get or populate the cache.
-pub(crate) enum CacheResult<'a> {
+pub(crate) enum CacheResult {
     /// Successfully retrieved or populated cache, contains references to allowed values.
     Success {
-        raw: &'a HashSet<String>,
-        normalized: &'a HashSet<String>,
+        raw: Arc<HashSet<String>>,
+        normalized: Arc<HashSet<String>>,
     },
     /// An error occurred during cache population (e.g., target not found).
     Error(()),
@@ -29,12 +30,12 @@ pub(crate) enum CacheResult<'a> {
 ///
 /// * `CacheResult::Success(&HashSet<String>)` - On success, containing a reference to the set of allowed values.
 /// * `CacheResult::Error(String)` - On failure, containing an error message.
-pub(crate) fn get_or_populate_linked_options<'a>(
+pub(crate) fn get_or_populate_linked_options(
     target_sheet_name: &str,
     target_column_index: usize,
     registry: &SheetRegistry,
-    state: &'a mut EditorWindowState, // Return lifetime tied to state
-) -> CacheResult<'a> {
+    state: &mut EditorWindowState,
+) -> CacheResult {
     // Note: The cache key currently doesn't include the target category because
     // the validator definition doesn't store it. If multiple sheets could have the
     // same name in different categories, this cache might return incorrect results
@@ -70,12 +71,15 @@ pub(crate) fn get_or_populate_linked_options<'a>(
                         .map(|v| normalize_for_link_cmp(v))
                         .collect();
 
+                    let unique_values_arc = Arc::new(unique_values);
+                    let normalized_values_arc = Arc::new(normalized_values);
+
                     state
                         .linked_column_cache
-                        .insert(cache_key.clone(), unique_values);
+                        .insert(cache_key.clone(), Arc::clone(&unique_values_arc));
                     state
                         .linked_column_cache_normalized
-                        .insert(cache_key.clone(), normalized_values);
+                        .insert(cache_key.clone(), Arc::clone(&normalized_values_arc));
                     trace!(
                         "Cached linked options for ({}, {})",
                         target_sheet_name,
@@ -107,11 +111,11 @@ pub(crate) fn get_or_populate_linked_options<'a>(
             state
                 .linked_column_cache
                 .entry(cache_key.clone()) // Use entry API
-                .or_insert_with(HashSet::new);
+                .or_insert_with(|| Arc::new(HashSet::new()));
             state
                 .linked_column_cache_normalized
                 .entry(cache_key.clone())
-                .or_insert_with(HashSet::new);
+                .or_insert_with(|| Arc::new(HashSet::new()));
             return CacheResult::Error(()); // Return the error
         }
     }
@@ -123,7 +127,10 @@ pub(crate) fn get_or_populate_linked_options<'a>(
         state.linked_column_cache.get(&cache_key),
         state.linked_column_cache_normalized.get(&cache_key),
     ) {
-        CacheResult::Success { raw, normalized }
+        CacheResult::Success {
+            raw: Arc::clone(raw),
+            normalized: Arc::clone(normalized),
+        }
     } else {
         // This case should be unreachable due to the logic above.
         error!(

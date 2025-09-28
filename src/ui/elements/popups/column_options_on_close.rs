@@ -50,6 +50,7 @@ pub(super) fn handle_on_close(
                                 filter: vcol.filter.clone(),
                                 ai_context: vcol.ai_context.clone(),
                                 ai_enable_row_generation: vcol.ai_enable_row_generation,
+                                ai_include_in_send: vcol.ai_include_in_send,
                                 width: None,
                                 structure_schema: vcol.structure_schema.clone(),
                                 structure_column_order: vcol.structure_column_order.clone(),
@@ -83,6 +84,7 @@ pub(super) fn handle_on_close(
                                                 filter: None,
                                                 ai_context: None,
                                                 ai_enable_row_generation: None,
+                                                ai_include_in_send: None,
                                                 width: None,
                                                 structure_schema: None,
                                                 structure_column_order: None,
@@ -99,6 +101,7 @@ pub(super) fn handle_on_close(
                                                 field.ai_context = upd.ai_context.clone();
                                                 field.ai_enable_row_generation =
                                                     upd.ai_enable_row_generation;
+                                                field.ai_include_in_send = upd.ai_include_in_send;
                                                 field.structure_schema =
                                                     upd.structure_schema.clone();
                                                 field.structure_column_order =

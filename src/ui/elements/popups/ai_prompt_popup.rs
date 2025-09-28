@@ -1,7 +1,8 @@
 // src/ui/elements/popups/ai_prompt_popup.rs
-use crate::sheets::definitions::{default_ai_model_id, SheetMetadata};
+use crate::sheets::definitions::{default_ai_model_id, ColumnDataType, SheetMetadata};
 use crate::sheets::events::AiBatchTaskResult;
 use crate::sheets::resources::SheetRegistry;
+use crate::ui::elements::editor::ai_context_utils::decorate_context_with_type;
 use crate::ui::elements::editor::state::{AiModeState, EditorWindowState};
 use crate::ui::systems::SendEvent;
 use crate::SessionApiKey;
@@ -133,6 +134,7 @@ pub fn show_ai_prompt_popup(
         // Non-structure columns
         let mut included_actual_indices: Vec<usize> = Vec::new();
         let mut column_contexts: Vec<Option<String>> = Vec::new();
+        let mut column_data_types: Vec<ColumnDataType> = Vec::new();
         if let Some(sheet_meta) = registry
             .get_sheet(&task_category, &sheet_name)
             .and_then(|d| d.metadata.as_ref())
@@ -144,8 +146,15 @@ pub fn show_ai_prompt_popup(
                 ) {
                     continue;
                 }
+                if matches!(col_def.ai_include_in_send, Some(false)) {
+                    continue;
+                }
                 included_actual_indices.push(c_idx);
-                column_contexts.push(col_def.ai_context.clone());
+                column_contexts.push(decorate_context_with_type(
+                    col_def.ai_context.as_ref(),
+                    col_def.data_type,
+                ));
+                column_data_types.push(col_def.data_type);
             }
         }
         let mut key_chain_headers: Vec<String> = Vec::new();
@@ -171,14 +180,17 @@ pub fn show_ai_prompt_popup(
                     {
                         if let Some(col_def) = meta.columns.get(key_col_index) {
                             key_chain_headers.push(col_def.header.clone());
-                            key_chain_contexts.push(col_def.ai_context.clone());
+                            key_chain_contexts.push(decorate_context_with_type(
+                                col_def.ai_context.as_ref(),
+                                col_def.data_type,
+                            ));
                         }
                         ancestors_with_keys.push((anc_cat, anc_sheet, anc_row_idx, key_col_index));
                     }
                 }
             }
         }
-    #[derive(Clone, serde::Serialize)]
+        #[derive(Clone, serde::Serialize)]
         struct KeyPayload {
             #[serde(rename = "Context")]
             context: String,
@@ -190,6 +202,7 @@ pub fn show_ai_prompt_popup(
             ai_model_id: String,
             general_sheet_rule: Option<String>,
             column_contexts: Vec<Option<String>>,
+            column_data_types: Vec<String>,
             rows_data: Vec<Vec<String>>,
             key: Option<KeyPayload>,
             user_prompt: String,
@@ -207,6 +220,7 @@ pub fn show_ai_prompt_popup(
             ai_model_id: model_id,
             general_sheet_rule: rule,
             column_contexts: column_contexts.clone(),
+            column_data_types: column_data_types.iter().map(|dt| dt.to_string()).collect(),
             rows_data: Vec::new(),
             key: prompt_key_payload.clone(),
             user_prompt: state.ai_prompt_input.clone(),
@@ -226,6 +240,14 @@ pub fn show_ai_prompt_popup(
             let mut dbg = format!("--- AI Prompt Payload ---\n{}", pretty);
             use std::fmt::Write as _;
             let _ = writeln!(dbg, "AllowRowAdditions:{}", allow_additions_flag);
+            let _ = writeln!(
+                dbg,
+                "Column Data Types: {:?}",
+                column_data_types
+                    .iter()
+                    .map(|dt| dt.to_string())
+                    .collect::<Vec<_>>()
+            );
             if let Some(ref key_payload) = prompt_key_payload {
                 let _ = writeln!(dbg, "Key Context:{}", key_payload.context);
                 let _ = writeln!(dbg, "Key Value:{}", key_payload.key);

@@ -197,6 +197,7 @@ pub fn handle_open_structure_view(
                                             width: None,
                                             ai_context: def.ai_context.clone(),
                                             ai_enable_row_generation: def.ai_enable_row_generation,
+                                            ai_include_in_send: def.ai_include_in_send,
                                             // Preserve deeper-level nested schemas & key metadata so that deeper levels persist and render consistently
                                             structure_schema: def.structure_schema.clone(),
                                             structure_column_order: def
@@ -223,6 +224,7 @@ pub fn handle_open_structure_view(
                                     width: None,
                                     ai_context: ai_ctx,
                                     ai_enable_row_generation: None,
+                                    ai_include_in_send: None,
                                     structure_schema: None,
                                     structure_column_order: None,
                                     structure_key_parent_column_index: None,
@@ -262,11 +264,9 @@ pub fn handle_open_structure_view(
                             grid_data,
                         );
                         // Clear any cached filtered indices for this virtual sheet (avoid stale row index cache leading to Row Idx Err)
-                        state
-                            .filtered_row_indices_cache
-                            .retain(|(cat, name, _), _| {
-                                !(cat == &ev.parent_category && name == &virtual_name)
-                            });
+                        state.filtered_row_indices_cache.retain(|(cat, name), _| {
+                            !(cat == &ev.parent_category && name == &virtual_name)
+                        });
                         // Push context
                         state.virtual_structure_stack.push(VirtualStructureContext {
                             virtual_sheet_name: virtual_name.clone(),

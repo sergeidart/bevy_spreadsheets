@@ -372,6 +372,7 @@ fn load_and_update_single_sheet_entry(
                                                 filter: None,
                                                 ai_context: None,
                                                 ai_enable_row_generation: None,
+                                                ai_include_in_send: None,
                                                 width: None,
                                                 structure_schema: None,
                                                 structure_column_order: None,

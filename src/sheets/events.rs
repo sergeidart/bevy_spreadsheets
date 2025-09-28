@@ -175,6 +175,16 @@ pub struct RequestToggleAiRowGeneration {
 }
 
 #[derive(Event, Debug, Clone)]
+pub struct RequestUpdateAiSendSchema {
+    pub category: Option<String>,
+    pub sheet_name: String,
+    /// None targets the root sheet itself; Some(path) identifies nested structure path.
+    pub structure_path: Option<Vec<usize>>,
+    /// Indices (within the targeted schema) of non-structure columns that should remain included.
+    pub included_columns: Vec<usize>,
+}
+
+#[derive(Event, Debug, Clone)]
 pub struct RequestSheetRevalidation {
     pub category: Option<String>,
     pub sheet_name: String,

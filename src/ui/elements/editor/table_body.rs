@@ -1,17 +1,20 @@
 // src/ui/elements/editor/table_body.rs
 use crate::sheets::{
     definitions::{ColumnValidator, SheetMetadata},
-    events::{OpenStructureViewEvent, UpdateCellEvent},
+    events::{OpenStructureViewEvent, RequestToggleAiRowGeneration, UpdateCellEvent},
     resources::{SheetRegistry, SheetRenderCache},
 };
 // MODIFIED: Import SheetInteractionState
 use crate::ui::common::edit_cell_widget;
-use crate::ui::elements::editor::state::{AiModeState, EditorWindowState, SheetInteractionState};
+use crate::ui::elements::editor::state::{
+    AiModeState, EditorWindowState, FilteredRowsCacheEntry, SheetInteractionState,
+};
 use bevy::log::{debug, error, warn};
 use bevy::prelude::*;
 use bevy_egui::egui;
 use egui_extras::{TableBody, TableRow};
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 #[allow(dead_code)]
 fn calculate_filters_hash(filters: &Vec<Option<String>>) -> u64 {
@@ -21,10 +24,7 @@ fn calculate_filters_hash(filters: &Vec<Option<String>>) -> u64 {
 }
 
 #[allow(dead_code)]
-fn get_filtered_row_indices_internal(
-    grid: &Vec<Vec<String>>,
-    metadata: &SheetMetadata,
-) -> Vec<usize> {
+fn get_filtered_row_indices_internal(grid: &[Vec<String>], metadata: &SheetMetadata) -> Vec<usize> {
     let filters: Vec<Option<String>> = metadata.columns.iter().map(|c| c.filter.clone()).collect();
     if filters.iter().all(Option::is_none) {
         return (0..grid.len()).collect();
@@ -63,6 +63,49 @@ fn get_filtered_row_indices_internal(
         .collect()
 }
 
+pub(crate) fn get_filtered_row_indices_cached(
+    state: &mut EditorWindowState,
+    category: &Option<String>,
+    sheet_name: &str,
+    grid: &[Vec<String>],
+    metadata: &SheetMetadata,
+) -> Arc<Vec<usize>> {
+    let cache_key = (category.clone(), sheet_name.to_string());
+
+    if !state.force_filter_recalculation {
+        if let Some(entry) = state.filtered_row_indices_cache.get(&cache_key) {
+            return Arc::clone(&entry.rows);
+        }
+    }
+
+    let active_filters = metadata.get_filters();
+    let filters_hash = calculate_filters_hash(&active_filters);
+    let total_rows = grid.len();
+
+    if let Some(entry) = state.filtered_row_indices_cache.get(&cache_key) {
+        if entry.filters_hash == filters_hash && entry.total_rows == total_rows {
+            state.force_filter_recalculation = false;
+            return Arc::clone(&entry.rows);
+        }
+    }
+
+    debug!(
+        "Recalculating filtered indices for '{:?}/{}' (hash: {}, force_recalc: {})",
+        category, sheet_name, filters_hash, state.force_filter_recalculation
+    );
+    let indices = Arc::new(get_filtered_row_indices_internal(grid, metadata));
+    state.filtered_row_indices_cache.insert(
+        cache_key,
+        FilteredRowsCacheEntry {
+            rows: Arc::clone(&indices),
+            filters_hash,
+            total_rows,
+        },
+    );
+    state.force_filter_recalculation = false;
+    indices
+}
+
 #[allow(clippy::too_many_arguments)]
 #[allow(dead_code)]
 pub fn sheet_table_body(
@@ -75,6 +118,7 @@ pub fn sheet_table_body(
     mut cell_update_writer: EventWriter<UpdateCellEvent>,
     state: &mut EditorWindowState,
     open_structure_events: &mut EventWriter<OpenStructureViewEvent>,
+    toggle_ai_events: &mut EventWriter<RequestToggleAiRowGeneration>,
 ) -> bool {
     let sheet_data_ref = match registry.get_sheet(category, sheet_name) {
         Some(data) => data,
@@ -116,42 +160,8 @@ pub fn sheet_table_body(
         .map(|c| c.validator.clone())
         .collect();
 
-    let active_filters = metadata_ref.get_filters();
-    let filters_hash = calculate_filters_hash(&active_filters);
-    let cache_key = (category.clone(), sheet_name.to_string(), filters_hash);
-
-    let filtered_indices = if !state.force_filter_recalculation
-        && state.filtered_row_indices_cache.contains_key(&cache_key)
-    {
-        state
-            .filtered_row_indices_cache
-            .get(&cache_key)
-            .cloned()
-            .unwrap_or_else(|| {
-                debug!(
-                    "Cache key found but get failed for '{:?}/{}'. Recalculating.",
-                    category, sheet_name
-                );
-                let indices = get_filtered_row_indices_internal(grid_data, metadata_ref);
-                state
-                    .filtered_row_indices_cache
-                    .insert(cache_key.clone(), indices.clone());
-                indices
-            })
-    } else {
-        debug!(
-            "Recalculating filtered indices for '{:?}/{}' (hash: {}, force_recalc: {})",
-            category, sheet_name, filters_hash, state.force_filter_recalculation
-        );
-        let indices = get_filtered_row_indices_internal(grid_data, metadata_ref);
-        state
-            .filtered_row_indices_cache
-            .insert(cache_key.clone(), indices.clone());
-        if state.force_filter_recalculation {
-            state.force_filter_recalculation = false;
-        }
-        indices
-    };
+    let filtered_indices =
+        get_filtered_row_indices_cached(state, category, sheet_name, grid_data, metadata_ref);
 
     if num_cols == 0 && !grid_data.is_empty() {
         body.row(row_height, |mut row| {
@@ -178,9 +188,11 @@ pub fn sheet_table_body(
 
     let num_filtered_rows = filtered_indices.len();
 
+    state.ensure_ai_included_columns_cache(registry, category, sheet_name);
+
     body.rows(
         row_height,
-        num_filtered_rows,
+    num_filtered_rows,
         |mut ui_row: TableRow| {
             let filtered_row_index_in_list = ui_row.index();
             let original_row_index =
@@ -239,6 +251,7 @@ pub fn sheet_table_body(
                             render_cache,
                             state,
                             open_structure_events,
+                            toggle_ai_events,
                         ) {
                             cell_update_writer.write(UpdateCellEvent {
                                 category: category.clone(),

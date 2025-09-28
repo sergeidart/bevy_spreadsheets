@@ -1,15 +1,16 @@
 // src/sheets/systems/logic/add_row.rs
 use crate::sheets::{
-    definitions::{ColumnDefinition, SheetMetadata, StructureFieldDefinition},
+    definitions::{ColumnDefinition, ColumnValidator, SheetMetadata, StructureFieldDefinition},
     events::{
-        AddSheetRowRequest, RequestToggleAiRowGeneration, SheetDataModifiedInRegistryEvent,
-        SheetOperationFeedback,
+        AddSheetRowRequest, RequestToggleAiRowGeneration, RequestUpdateAiSendSchema,
+        SheetDataModifiedInRegistryEvent, SheetOperationFeedback,
     },
     resources::SheetRegistry,
     systems::io::save::save_single_sheet,
 };
 use crate::ui::elements::editor::state::EditorWindowState;
 use bevy::prelude::*;
+use std::collections::HashSet;
 
 pub fn handle_add_row_request(
     mut events: EventReader<AddSheetRowRequest>,
@@ -63,9 +64,7 @@ pub fn handle_add_row_request(
                     let keys_to_remove: Vec<_> = state_mut
                         .filtered_row_indices_cache
                         .keys()
-                        .filter(|(cat_opt, s_name, _)| {
-                            cat_opt == &category && s_name == &sheet_name
-                        })
+                        .filter(|(cat_opt, s_name)| cat_opt == &category && s_name == &sheet_name)
                         .cloned()
                         .collect();
                     for k in keys_to_remove {
@@ -142,16 +141,12 @@ pub fn handle_toggle_ai_row_generation(
             continue;
         };
 
-        let mut changed = false;
-        let mut message = String::new();
-
-        match &e.structure_path {
+        let outcome = match &e.structure_path {
             Some(path) if !path.is_empty() => {
                 match update_structure_row_generation(meta, path, e.structure_override) {
                     Ok((did_change, label_opt)) => {
-                        changed = did_change;
                         let scope_label = label_opt.unwrap_or_else(|| format!("path {:?}", path));
-                        message = match e.structure_override {
+                        let message = match e.structure_override {
                             Some(true) => format!(
                                 "AI row generation override ENABLED for structure '{}'",
                                 scope_label
@@ -165,9 +160,10 @@ pub fn handle_toggle_ai_row_generation(
                                 scope_label
                             ),
                         };
+                        Some((did_change, message))
                     }
                     Err(err) => {
-                        message = format!(
+                        let message = format!(
                             "Failed to update structure AI row generation for {:?}/{}: {}",
                             e.category, e.sheet_name, err
                         );
@@ -175,20 +171,25 @@ pub fn handle_toggle_ai_row_generation(
                             message,
                             is_error: true,
                         });
-                        continue;
+                        None
                     }
                 }
             }
             _ => {
-                changed = update_general_row_generation(meta, e.enabled);
-                message = format!(
+                let changed = update_general_row_generation(meta, e.enabled);
+                let message = format!(
                     "AI row generation {} for {:?}/{}",
                     if e.enabled { "ENABLED" } else { "DISABLED" },
                     e.category,
                     e.sheet_name
                 );
+                Some((changed, message))
             }
-        }
+        };
+
+        let Some((changed, message)) = outcome else {
+            continue;
+        };
 
         if changed {
             let meta_clone = meta.clone();
@@ -208,6 +209,206 @@ pub fn handle_toggle_ai_row_generation(
             });
         }
     }
+}
+
+pub fn handle_update_ai_send_schema(
+    mut ev: EventReader<RequestUpdateAiSendSchema>,
+    mut registry: ResMut<SheetRegistry>,
+    mut feedback: EventWriter<SheetOperationFeedback>,
+    mut data_modified_writer: EventWriter<SheetDataModifiedInRegistryEvent>,
+) {
+    for e in ev.read() {
+        let Some(sheet) = registry.get_sheet_mut(&e.category, &e.sheet_name) else {
+            feedback.write(SheetOperationFeedback {
+                message: format!(
+                    "Sheet {:?}/{} not found for AI send schema update",
+                    e.category, e.sheet_name
+                ),
+                is_error: true,
+            });
+            continue;
+        };
+
+        let Some(meta) = sheet.metadata.as_mut() else {
+            feedback.write(SheetOperationFeedback {
+                message: format!(
+                    "Metadata missing for {:?}/{} when updating AI send schema",
+                    e.category, e.sheet_name
+                ),
+                is_error: true,
+            });
+            continue;
+        };
+
+        let included: HashSet<usize> = e.included_columns.iter().copied().collect();
+        let included_count = included.len();
+        let sheet_label = format!("{:?}/{}", e.category, e.sheet_name);
+
+        let outcome = match &e.structure_path {
+            Some(path) if !path.is_empty() => apply_send_schema_to_structure(meta, path, &included)
+                .map(|(changed, labels)| (changed, Some(labels))),
+            _ => Ok((apply_send_schema_to_root(meta, &included), None)),
+        };
+
+        match outcome {
+            Ok((changed, labels_opt)) => {
+                let scope_description = labels_opt.as_ref().map(|labels| labels.join(" -> "));
+                let base_message = if let Some(labels) = scope_description.as_ref() {
+                    format!(
+                        "AI send columns for structure '{}' in {}",
+                        labels, sheet_label
+                    )
+                } else {
+                    format!("AI send columns for {}", sheet_label)
+                };
+
+                if changed {
+                    let meta_clone = meta.clone();
+                    save_single_sheet(registry.as_ref(), &meta_clone);
+                    feedback.write(SheetOperationFeedback {
+                        message: format!("{} updated ({} columns).", base_message, included_count),
+                        is_error: false,
+                    });
+                    data_modified_writer.write(SheetDataModifiedInRegistryEvent {
+                        category: e.category.clone(),
+                        sheet_name: e.sheet_name.clone(),
+                    });
+                } else {
+                    feedback.write(SheetOperationFeedback {
+                        message: format!(
+                            "{} already up to date ({} columns).",
+                            base_message, included_count
+                        ),
+                        is_error: false,
+                    });
+                }
+            }
+            Err(err) => {
+                feedback.write(SheetOperationFeedback {
+                    message: format!(
+                        "Failed to update AI send columns for {}: {}",
+                        sheet_label, err
+                    ),
+                    is_error: true,
+                });
+            }
+        }
+    }
+}
+
+fn apply_send_schema_to_root(meta: &mut SheetMetadata, included: &HashSet<usize>) -> bool {
+    apply_send_schema_to_columns(&mut meta.columns, included)
+}
+
+fn apply_send_schema_to_structure(
+    meta: &mut SheetMetadata,
+    path: &[usize],
+    included: &HashSet<usize>,
+) -> Result<(bool, Vec<String>), String> {
+    if path.is_empty() {
+        return Err("structure path missing".to_string());
+    }
+
+    let column_index = path[0];
+    let column = meta
+        .columns
+        .get_mut(column_index)
+        .ok_or_else(|| format!("column index {} out of bounds", column_index))?;
+    if !matches!(column.validator, Some(ColumnValidator::Structure)) {
+        return Err(format!("column '{}' is not a structure", column.header));
+    }
+
+    let mut labels = vec![column.header.clone()];
+
+    if path.len() == 1 {
+        let schema = column
+            .structure_schema
+            .as_mut()
+            .ok_or_else(|| format!("structure column '{}' missing schema", column.header))?;
+        let changed = apply_send_schema_to_fields(schema, included);
+        return Ok((changed, labels));
+    }
+
+    let mut field = {
+        let schema = column
+            .structure_schema
+            .as_mut()
+            .ok_or_else(|| format!("structure column '{}' missing schema", column.header))?;
+        schema.get_mut(path[1]).ok_or_else(|| {
+            format!(
+                "structure column '{}' index {} out of bounds",
+                column.header, path[1]
+            )
+        })?
+    };
+    labels.push(field.header.clone());
+
+    for next_index in path.iter().skip(2) {
+        let next_schema = field
+            .structure_schema
+            .as_mut()
+            .ok_or_else(|| format!("nested structure '{}' missing schema", field.header))?;
+        field = next_schema.get_mut(*next_index).ok_or_else(|| {
+            format!(
+                "nested structure '{}' index {} out of bounds",
+                field.header, next_index
+            )
+        })?;
+        labels.push(field.header.clone());
+    }
+
+    let target_schema = field
+        .structure_schema
+        .as_mut()
+        .ok_or_else(|| format!("structure '{}' missing schema", field.header))?;
+    let changed = apply_send_schema_to_fields(target_schema, included);
+    Ok((changed, labels))
+}
+
+fn apply_send_schema_to_columns(
+    columns: &mut [ColumnDefinition],
+    included: &HashSet<usize>,
+) -> bool {
+    let mut changed = false;
+    for (idx, column) in columns.iter_mut().enumerate() {
+        if matches!(column.validator, Some(ColumnValidator::Structure)) {
+            continue;
+        }
+        let should_include = included.contains(&idx);
+        if should_include {
+            if column.ai_include_in_send.is_some() {
+                column.ai_include_in_send = None;
+                changed = true;
+            }
+        } else if column.ai_include_in_send != Some(false) {
+            column.ai_include_in_send = Some(false);
+            changed = true;
+        }
+    }
+    changed
+}
+
+fn apply_send_schema_to_fields(
+    fields: &mut [StructureFieldDefinition],
+    included: &HashSet<usize>,
+) -> bool {
+    let mut changed = false;
+    for (idx, field) in fields.iter_mut().enumerate() {
+        if matches!(field.validator, Some(ColumnValidator::Structure)) {
+            continue;
+        }
+        let should_include = included.contains(&idx);
+        if should_include {
+            if field.ai_include_in_send.is_some() {
+                field.ai_include_in_send = None;
+                changed = true;
+            }
+        } else if field.ai_include_in_send != Some(false) {
+            field.ai_include_in_send = Some(false);
+            changed = true;
+        }
+    }
+    changed
 }
 
 fn update_general_row_generation(meta: &mut SheetMetadata, enabled: bool) -> bool {

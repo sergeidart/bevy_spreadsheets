@@ -21,19 +21,12 @@ pub fn handle_linked_column_edit(
     ui: &mut egui::Ui,
     id: egui::Id,        // Base ID for the cell
     current_value: &str, // <-- Changed: Accept &str
-    target_sheet_name: &str,
-    target_column_index: usize,
+    _target_sheet_name: &str,
+    _target_column_index: usize,
     _registry: &SheetRegistry, // Mark as unused with underscore
     // state: &mut EditorWindowState, // Removed state
     allowed_values: &HashSet<String>, // Added allowed_values reference
 ) -> Option<String> {
-    trace!(
-        "handle_linked_column_edit START. Original value: '{}', Target: '{}[{}]'",
-        current_value,
-        target_sheet_name,
-        target_column_index
-    );
-
     let mut final_new_value: Option<String> = None;
     // --- REMOVED: original_string = current_value.to_string(); ---
     let text_edit_id = id.with("ac_text_edit");
@@ -71,7 +64,6 @@ pub fn handle_linked_column_edit(
             })
             .clone() // Clone the String buffer from memory for local use
     });
-    trace!("Input text from memory: '{}'", input_text);
 
     // --- 3. Draw the TextEdit and Handle Focus for Popup ---
     let text_edit_response = add_linked_text_edit(
@@ -84,10 +76,6 @@ pub fn handle_linked_column_edit(
 
     // Update temporary memory immediately on change
     if text_edit_response.changed() {
-        trace!(
-            "TextEdit changed, updating temporary memory with: '{}'",
-            input_text
-        );
         ui.memory_mut(|mem| mem.data.insert_temp(text_edit_id, input_text.clone()));
     }
 
@@ -219,9 +207,5 @@ pub fn handle_linked_column_edit(
     // Visual validation (background color) handled by edit_cell_widget.
 
     // --- 8. Return the result ---
-    trace!(
-        "handle_linked_column_edit END. Returning: {:?}",
-        final_new_value
-    );
     final_new_value
 }

@@ -1,7 +1,10 @@
 // src/ui/elements/editor/ai_control_panel.rs
+use super::ai_context_utils::decorate_context_with_type;
 use super::state::{AiModeState, EditorWindowState};
-use crate::sheets::definitions::{default_ai_model_id, SheetMetadata};
-use crate::sheets::events::{AiBatchTaskResult, RequestToggleAiRowGeneration};
+use crate::sheets::definitions::{default_ai_model_id, ColumnDataType, SheetMetadata};
+use crate::sheets::events::{
+    AiBatchTaskResult, RequestToggleAiRowGeneration, RequestUpdateAiSendSchema,
+};
 use crate::sheets::resources::SheetRegistry;
 use crate::ui::systems::SendEvent;
 use crate::SessionApiKey;
@@ -25,6 +28,36 @@ struct KeyPayload {
     key: String,
 }
 
+#[derive(Clone)]
+struct NonStructureColumnInfo {
+    index: usize,
+    header: String,
+    context: Option<String>,
+    data_type: ColumnDataType,
+    included: bool,
+}
+
+fn rebuild_included_vectors(
+    columns: &[NonStructureColumnInfo],
+    indices: &mut Vec<usize>,
+    contexts: &mut Vec<Option<String>>,
+    data_types: &mut Vec<ColumnDataType>,
+) {
+    indices.clear();
+    contexts.clear();
+    data_types.clear();
+    for info in columns.iter() {
+        if info.included {
+            indices.push(info.index);
+            contexts.push(decorate_context_with_type(
+                info.context.as_ref(),
+                info.data_type,
+            ));
+            data_types.push(info.data_type);
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn show_ai_control_panel(
     ui: &mut egui::Ui,
@@ -36,6 +69,7 @@ pub(crate) fn show_ai_control_panel(
     commands: &mut Commands,
     session_api_key: &SessionApiKey,
     toggle_writer: &mut EventWriter<RequestToggleAiRowGeneration>,
+    send_schema_writer: &mut EventWriter<RequestUpdateAiSendSchema>,
 ) {
     let selection_allowed =
         state.ai_mode == AiModeState::Preparing || state.ai_mode == AiModeState::ResultsReady;
@@ -136,7 +170,10 @@ pub(crate) fn show_ai_control_panel(
                 {
                     if let Some(col_def) = meta.columns.get(key_col_index) {
                         key_chain_headers.push(col_def.header.clone());
-                        key_chain_contexts.push(col_def.ai_context.clone());
+                        key_chain_contexts.push(decorate_context_with_type(
+                            col_def.ai_context.as_ref(),
+                            col_def.data_type,
+                        ));
                     }
                     ancestors_with_keys.push((anc_cat, anc_sheet, anc_row_idx, key_col_index));
                 }
@@ -144,8 +181,7 @@ pub(crate) fn show_ai_control_panel(
         }
     }
 
-    let mut included_actual_indices: Vec<usize> = Vec::new();
-    let mut column_contexts: Vec<Option<String>> = Vec::new();
+    let mut non_structure_columns: Vec<NonStructureColumnInfo> = Vec::new();
     if let Some(meta) = metadata_opt_ref {
         for (c_idx, col_def) in meta.columns.iter().enumerate() {
             if matches!(
@@ -154,10 +190,26 @@ pub(crate) fn show_ai_control_panel(
             ) {
                 continue;
             }
-            included_actual_indices.push(c_idx);
-            column_contexts.push(col_def.ai_context.clone());
+            let included = !matches!(col_def.ai_include_in_send, Some(false));
+            non_structure_columns.push(NonStructureColumnInfo {
+                index: c_idx,
+                header: col_def.header.clone(),
+                context: col_def.ai_context.clone(),
+                data_type: col_def.data_type,
+                included,
+            });
         }
     }
+
+    let mut included_actual_indices: Vec<usize> = Vec::new();
+    let mut column_contexts: Vec<Option<String>> = Vec::new();
+    let mut column_data_types: Vec<ColumnDataType> = Vec::new();
+    rebuild_included_vectors(
+        &non_structure_columns,
+        &mut included_actual_indices,
+        &mut column_contexts,
+        &mut column_data_types,
+    );
 
     let root_model_id = root_meta
         .as_ref()
@@ -190,6 +242,12 @@ pub(crate) fn show_ai_control_panel(
             .on_hover_text(hover_text_send)
             .clicked()
         {
+            rebuild_included_vectors(
+                &non_structure_columns,
+                &mut included_actual_indices,
+                &mut column_contexts,
+                &mut column_data_types,
+            );
             // If no rows selected, open the prompt popup instead of immediate send
             if state.ai_selected_rows.is_empty() {
                 state.show_ai_prompt_popup = true;
@@ -218,6 +276,8 @@ pub(crate) fn show_ai_control_panel(
 
             let included_actual_indices = included_actual_indices.clone();
             let column_contexts = column_contexts.clone();
+            let column_type_names: Vec<String> =
+                column_data_types.iter().map(|dt| dt.to_string()).collect();
 
             // Build rows_data (only non-structure columns)
             let mut rows_data: Vec<Vec<String>> = Vec::new();
@@ -236,6 +296,8 @@ pub(crate) fn show_ai_control_panel(
                 general_sheet_rule: Option<String>,
                 // Contexts for ONLY non-structure columns; order matches rows_data columns
                 column_contexts: Vec<Option<String>>,
+                // Data types per non-structure column in payload order
+                column_data_types: Vec<String>,
                 // Row data for ONLY non-structure columns
                 rows_data: Vec<Vec<String>>,
                 // Normalized single key object (Context + Key). We prefer a single
@@ -284,12 +346,13 @@ pub(crate) fn show_ai_control_panel(
                 ai_model_id: model_id,
                 general_sheet_rule: rule,
                 column_contexts: column_contexts.clone(),
+                column_data_types: column_type_names.clone(),
                 rows_data: rows_data.clone(),
                 key: key_payload_opt,
                 requested_grounding_with_google_search: grounding,
                 allow_row_additions: allow_additions_flag,
                 row_additions_hint: if allow_additions_flag { Some(format!(
-                    "Row Additions Enabled: The model may add new rows AFTER the first {} original rows to provide similar item if any applicable here. Each new row must match column count.",
+                    "Add Rows Enabled: The model may add new rows AFTER the first {} original rows to provide similar item if any applicable here. Each new row must match column count.",
                     original_rows.len()
                 )) } else { None },
             };
@@ -313,6 +376,8 @@ pub(crate) fn show_ai_control_panel(
                     let _ = writeln!(dbg, "--- Included Column Names (payload position, name) ---");
                     let _ = writeln!(dbg, "{:?}", names);
                 }
+                let _ = writeln!(dbg, "--- Column Data Types (payload order) ---");
+                let _ = writeln!(dbg, "{:?}", column_type_names);
                 // Show allow additions flag + its source + model id
                 let _ = writeln!(dbg, "Model: {}  AllowRowAdditions:{} ({})  Grounding:{}", payload.ai_model_id, payload.allow_row_additions, allow_additions_source, grounding);
                 if !key_chain_headers.is_empty() {
@@ -322,7 +387,7 @@ pub(crate) fn show_ai_control_panel(
                     for (i, keys) in key_chain_values_per_row.iter().enumerate() { let _ = writeln!(dbg, "Row {} Keys: {:?}", original_rows[i], keys); }
                 }
                 if payload.allow_row_additions {
-                    let _ = writeln!(dbg, "Row Additions Enabled: The model may add new rows AFTER the first {} original rows to provide similar item if any applicable here. Each new row must match column count.", original_rows.len());
+                    let _ = writeln!(dbg, "Add Rows Enabled: The model may add new rows AFTER the first {} original rows to provide similar item if any applicable here. Each new row must match column count.", original_rows.len());
                 }
                 state.ai_raw_output_display = dbg;
                 state.ai_output_panel_visible = true;
@@ -394,7 +459,7 @@ pub(crate) fn show_ai_control_panel(
             state.show_ai_rule_popup = true;
         }
 
-        let toggle_label = if structure_path.is_empty() { "Row Additions" } else { "Structure Row Additions" };
+    let toggle_label = "Add Rows";
         let toggle_tooltip = if structure_path.is_empty() {
             "Allow the AI to append new rows when generating results for this sheet.".to_string()
         } else if let Some(label) = structure_label.as_deref() {
@@ -488,6 +553,12 @@ pub(crate) fn show_ai_control_panel(
         }
         if do_send {
             // Build and send payload similar to batch but with zero originals + prompt
+            rebuild_included_vectors(
+                &non_structure_columns,
+                &mut included_actual_indices,
+                &mut column_contexts,
+                &mut column_data_types,
+            );
             state.show_ai_prompt_popup = false;
             state.last_ai_prompt_only = true;
             state.ai_mode = AiModeState::Submitting;
@@ -500,11 +571,14 @@ pub(crate) fn show_ai_control_panel(
             let rule = root_rule.clone();
             let grounding = root_grounding;
             let column_contexts = column_contexts.clone();
+            let column_type_names: Vec<String> =
+                column_data_types.iter().map(|dt| dt.to_string()).collect();
             #[derive(serde::Serialize)]
             struct PromptPayload {
                 ai_model_id: String,
                 general_sheet_rule: Option<String>,
                 column_contexts: Vec<Option<String>>,
+                column_data_types: Vec<String>,
                 rows_data: Vec<Vec<String>>,
                 key: Option<KeyPayload>,
                 user_prompt: String,
@@ -522,6 +596,7 @@ pub(crate) fn show_ai_control_panel(
                 ai_model_id: model_id,
                 general_sheet_rule: rule,
                 column_contexts: column_contexts.clone(),
+                column_data_types: column_type_names.clone(),
                 rows_data: Vec::new(),
                 key: prompt_key_payload.clone(),
                 user_prompt: state.ai_prompt_input.clone(),
@@ -541,9 +616,10 @@ pub(crate) fn show_ai_control_panel(
                 use std::fmt::Write as _;
                 let _ = writeln!(
                     dbg,
-                    "AllowRowAdditions:{} ({})",
+                    "AllowAddRows:{} ({})",
                     allow_additions_flag, allow_additions_source
                 );
+                let _ = writeln!(dbg, "Column Data Types: {:?}", column_type_names);
                 if let Some(ref key_payload) = prompt_key_payload {
                     let _ = writeln!(dbg, "Key Context:{}", key_payload.context);
                     let _ = writeln!(dbg, "Key Value:{}", key_payload.key);
