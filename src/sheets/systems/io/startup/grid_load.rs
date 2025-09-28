@@ -13,9 +13,7 @@ use std::path::Path;
 /// * `Ok(Some(Vec<Vec<String>>))` - If the file exists, is not empty, and parses correctly.
 /// * `Ok(None)` - If the file exists but is empty or contains only empty rows.
 /// * `Err(String)` - If the file doesn't exist, is not a file, or fails to parse.
-pub(super) fn load_grid_data_file(
-    grid_path: &Path,
-) -> Result<Option<Vec<Vec<String>>>, String> {
+pub(super) fn load_grid_data_file(grid_path: &Path) -> Result<Option<Vec<Vec<String>>>, String> {
     // --- File Validation ---
     // Use validator::validate_file_exists which checks existence and is_file
     if let Err(e) = validator::validate_file_exists(grid_path) {

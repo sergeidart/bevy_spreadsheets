@@ -3,16 +3,16 @@
 use bevy::prelude::*;
 use bevy_tokio_tasks::TokioTasksRuntime;
 
-use super::resources::VisualCopierManager;
 use super::events::CopyOperationResultEvent;
-use super::executers::execute_single_copy_operation; // Import from executers
+use super::executers::execute_single_copy_operation;
+use super::resources::VisualCopierManager; // Import from executers
 
 /// System to process queued copy operations asynchronously using bevy_tokio_tasks.
 pub(crate) fn process_copy_operations_system(
     mut manager: ResMut<VisualCopierManager>,
     runtime: Res<TokioTasksRuntime>,
     mut _commands: Commands, // Kept for symmetry; remove if unused warning bothers you
-    // Removed result_writer as events are sent from the spawned task directly
+                             // Removed result_writer as events are sent from the spawned task directly
 ) {
     // --- Top Panel copy ---
     if manager.top_panel_copy_status == "Queued..." {
@@ -31,17 +31,17 @@ pub(crate) fn process_copy_operations_system(
                 // Send the result back to the main thread using an event.
                 // The event will be handled by `handle_copy_operation_result_event_system`.
                 ctx.run_on_main_thread(move |ctx| {
-                    ctx.world.send_event(CopyOperationResultEvent { task_id: None, result });
+                    ctx.world.send_event(CopyOperationResultEvent {
+                        task_id: None,
+                        result,
+                    });
                 })
                 .await;
             });
         } else {
             // This case might happen if folders are unset between queueing and processing.
-            manager.top_panel_copy_status =
-                "Error: Folders became unset before copy.".to_string();
-            warn!(
-                "VisualCopier: Top panel folders became unset before copy task could start."
-            );
+            manager.top_panel_copy_status = "Error: Folders became unset before copy.".to_string();
+            warn!("VisualCopier: Top panel folders became unset before copy task could start.");
         }
     }
 

@@ -7,9 +7,9 @@ use bevy_egui::egui::{self, Response};
 pub(super) fn add_linked_text_edit(
     ui: &mut egui::Ui,
     id: egui::Id,
-    input_text: &mut String,        // Mutable text buffer
-    _link_error: &Option<String>,   // Error state is handled by the containing frame's background
-    _original_value: &str,          // Hover text is handled by the containing frame
+    input_text: &mut String,      // Mutable text buffer
+    _link_error: &Option<String>, // Error state is handled by the containing frame's background
+    _original_value: &str,        // Hover text is handled by the containing frame
 ) -> Response {
     let text_edit_id = id.with("ac_text_edit");
 

@@ -3,7 +3,7 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 
-use crate::sheets::events::{RequestRenameSheet, RequestRenameCategory};
+use crate::sheets::events::{RequestRenameCategory, RequestRenameSheet};
 use crate::ui::elements::editor::EditorWindowState;
 use crate::ui::UiFeedbackState;
 
@@ -24,7 +24,8 @@ pub fn show_rename_popup(
     let mut trigger_rename = false; // Flag for rename action
 
     // Determine if we're renaming a sheet or a category
-    let renaming_category = state.rename_target_sheet.is_empty() && state.rename_target_category.is_some();
+    let renaming_category =
+        state.rename_target_sheet.is_empty() && state.rename_target_category.is_some();
     // Keep the generic head title as "Rename" per request
     let window_title = "Rename";
 
@@ -41,7 +42,8 @@ pub fn show_rename_popup(
                 let mut just_opened_prefill = false;
                 if state.new_name_input.is_empty() {
                     if renaming_category {
-                        state.new_name_input = state.rename_target_category.clone().unwrap_or_default();
+                        state.new_name_input =
+                            state.rename_target_category.clone().unwrap_or_default();
                     } else {
                         state.new_name_input = state.rename_target_sheet.clone();
                     }
@@ -70,7 +72,13 @@ pub fn show_rename_popup(
 
             ui.separator();
             ui.horizontal(|ui| {
-                if ui.add_enabled(!state.new_name_input.trim().is_empty(), egui::Button::new("Rename")).clicked() {
+                if ui
+                    .add_enabled(
+                        !state.new_name_input.trim().is_empty(),
+                        egui::Button::new("Rename"),
+                    )
+                    .clicked()
+                {
                     trigger_rename = true;
                 }
                 if ui.button("Cancel").clicked() {
@@ -87,7 +95,10 @@ pub fn show_rename_popup(
             if renaming_category {
                 if let Some(old_cat) = state.rename_target_category.clone() {
                     let new_cat = state.new_name_input.clone();
-                    rename_category_writer.write(RequestRenameCategory { old_name: old_cat.clone(), new_name: new_cat.clone() });
+                    rename_category_writer.write(RequestRenameCategory {
+                        old_name: old_cat.clone(),
+                        new_name: new_cat.clone(),
+                    });
                     // Optimistically update selection if we're renaming the currently selected category
                     if state.selected_category.as_deref() == Some(old_cat.as_str()) {
                         state.selected_category = Some(new_cat);

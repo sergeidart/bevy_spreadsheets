@@ -1,8 +1,6 @@
 // src/sheets/systems/io/startup/registration.rs
 use crate::{
-    example_definitions::{
-        create_example_items_metadata, create_simple_config_metadata,
-    },
+    example_definitions::{create_example_items_metadata, create_simple_config_metadata},
     sheets::{
         definitions::{SheetGridData, SheetMetadata},
         resources::SheetRegistry,
@@ -29,9 +27,7 @@ pub fn register_default_sheets_if_needed(mut registry: ResMut<SheetRegistry>) {
             data_dir_path
         );
         needs_creation = true;
-    } else if fs::read_dir(&data_dir_path)
-        .map_or(true, |mut dir| dir.next().is_none())
-    {
+    } else if fs::read_dir(&data_dir_path).map_or(true, |mut dir| dir.next().is_none()) {
         info!(
             "Data directory '{:?}' is empty. Registering default template sheets.",
             data_dir_path
@@ -87,14 +83,12 @@ pub(super) fn add_scanned_sheet_to_registry(
     registry: &mut SheetRegistry, // Needs mutable access
     category: Option<String>,
     sheet_name: String,
-    metadata: SheetMetadata, // Takes ownership of finalized metadata
-    grid: Vec<Vec<String>>,  // Takes ownership of loaded grid
+    metadata: SheetMetadata,     // Takes ownership of finalized metadata
+    grid: Vec<Vec<String>>,      // Takes ownership of loaded grid
     source_path_display: String, // For logging
 ) -> bool {
     // --- Final Grid Structure Validation ---
-    if let Err(e) =
-        validator::validate_grid_structure(&grid, &metadata, &sheet_name)
-    {
+    if let Err(e) = validator::validate_grid_structure(&grid, &metadata, &sheet_name) {
         error!(
             "Grid structure validation failed for '{}' during registration: {}. Skipping registration.",
             source_path_display, e
@@ -115,4 +109,3 @@ pub(super) fn add_scanned_sheet_to_registry(
     );
     true
 }
-

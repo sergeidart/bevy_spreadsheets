@@ -1,9 +1,9 @@
 // src/ui/elements/popups/ai_rule_popup.rs
 use crate::{
     sheets::{
-        definitions::{SheetMetadata, default_ai_model_id},
+        definitions::{default_ai_model_id, SheetMetadata},
         resources::SheetRegistry,
-        systems::io::save::save_single_sheet
+        systems::io::save::save_single_sheet,
     },
     ui::elements::editor::EditorWindowState,
 };
@@ -25,31 +25,37 @@ pub fn show_ai_rule_popup(
         if let Some(sheet_name) = &state.selected_sheet_name {
             if let Some(sheet_data) = registry.get_sheet(&state.selected_category, sheet_name) {
                 if let Some(metadata) = &sheet_data.metadata {
-                    info!("Initializing AI Config popup for sheet: '{:?}/{}'", state.selected_category, sheet_name);
+                    info!(
+                        "Initializing AI Config popup for sheet: '{:?}/{}'",
+                        state.selected_category, sheet_name
+                    );
                     state.ai_model_id_input = metadata.ai_model_id.clone();
-                    state.ai_general_rule_input = metadata.ai_general_rule.clone().unwrap_or_default();
-                    // Initialize toggles from metadata
-                    state.effective_ai_can_add_rows = Some(metadata.ai_enable_row_generation);
-                    state.ai_rule_popup_grounding = Some(metadata.requested_grounding_with_google_search.unwrap_or(false));
+                    state.ai_general_rule_input =
+                        metadata.ai_general_rule.clone().unwrap_or_default();
+                    state.ai_rule_popup_grounding = Some(
+                        metadata
+                            .requested_grounding_with_google_search
+                            .unwrap_or(false),
+                    );
                 } else {
                     warn!("Metadata not found for sheet '{:?}/{}' during AI Config popup init. Using defaults.", state.selected_category, sheet_name);
                     state.ai_model_id_input = default_ai_model_id();
                     state.ai_general_rule_input = "".to_string();
-                    state.effective_ai_can_add_rows = Some(false);
                     state.ai_rule_popup_grounding = Some(false);
                 }
             } else {
-                warn!("Sheet '{:?}/{}' not found during AI Config popup init. Using defaults.", state.selected_category, sheet_name);
+                warn!(
+                    "Sheet '{:?}/{}' not found during AI Config popup init. Using defaults.",
+                    state.selected_category, sheet_name
+                );
                 state.ai_model_id_input = default_ai_model_id();
                 state.ai_general_rule_input = "".to_string();
-                state.effective_ai_can_add_rows = Some(false);
                 state.ai_rule_popup_grounding = Some(false);
             }
         } else {
             info!("No sheet selected for AI Config popup. Using defaults.");
             state.ai_model_id_input = default_ai_model_id();
             state.ai_general_rule_input = "".to_string();
-            state.effective_ai_can_add_rows = Some(false);
             state.ai_rule_popup_grounding = Some(false);
         }
         state.ai_rule_popup_needs_init = false; // Consumed the init flag
@@ -57,8 +63,13 @@ pub fn show_ai_rule_popup(
     // --- END MODIFIED ---
 
     // If selection changed while open, reinitialize instead of closing
-    if let (Some(last_cat_opt), Some(last_sheet)) = (&state.ai_rule_popup_last_category, &state.ai_rule_popup_last_sheet) {
-        if &state.selected_category != last_cat_opt || state.selected_sheet_name.as_deref() != Some(last_sheet) {
+    if let (Some(last_cat_opt), Some(last_sheet)) = (
+        &state.ai_rule_popup_last_category,
+        &state.ai_rule_popup_last_sheet,
+    ) {
+        if &state.selected_category != last_cat_opt
+            || state.selected_sheet_name.as_deref() != Some(last_sheet)
+        {
             state.ai_rule_popup_needs_init = true;
             state.ai_rule_popup_last_category = Some(state.selected_category.clone());
             state.ai_rule_popup_last_sheet = state.selected_sheet_name.clone();
@@ -81,58 +92,46 @@ pub fn show_ai_rule_popup(
         .open(&mut is_window_open)
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
-        ui.label("AI Model:");
+                ui.label("AI Model:");
                 // The TextEdit for ai_model_id_input. No validation here.
                 ui.add(
                     egui::TextEdit::singleline(&mut state.ai_model_id_input)
                         .desired_width(f32::INFINITY)
-            .hint_text("e.g., gemini-1.5-flash, gemini-2.5-flash-preview-04-17"),
+                        .hint_text("e.g., gemini-1.5-flash, gemini-2.5-flash-preview-04-17"),
                 );
             });
             ui.separator();
-        ui.label("Sheet AI Context");
+            ui.label("Sheet AI Context");
             ui.add_sized(
                 [ui.available_width(), 100.0],
                 egui::TextEdit::multiline(&mut state.ai_general_rule_input)
-            .hint_text("Provide a general instruction or context for the AI processing this sheet" )
+                    .hint_text(
+                        "Provide a general instruction or context for the AI processing this sheet",
+                    )
                     .desired_rows(5),
             );
             ui.separator();
             // Row: AI options toggles (stacked vertically)
             ui.vertical(|ui_v| {
-                let mut can_add_rows = state.effective_ai_can_add_rows.unwrap_or(false);
-                if ui_v.checkbox(&mut can_add_rows, "AI can add rows").on_hover_text("Permit the AI to append rows when generating results").changed() {
-                    state.effective_ai_can_add_rows = Some(can_add_rows);
-                    // Also stage an in-flight pending toggle for the root sheet so Send panel honors it immediately
-                    if let Some(current_sheet) = &state.selected_sheet_name {
-                        // Resolve root sheet by walking structure_parent chain
-                        let mut root_category = state.selected_category.clone();
-                        let mut root_sheet = current_sheet.clone();
-                        let mut safety = 0;
-                        loop {
-                            safety += 1; if safety > 16 { break; }
-                            let meta_opt = registry.get_sheet(&root_category, &root_sheet).and_then(|s| s.metadata.as_ref());
-                            if let Some(m) = meta_opt {
-                                if let Some(parent) = &m.structure_parent {
-                                    root_category = parent.parent_category.clone();
-                                    root_sheet = parent.parent_sheet.clone();
-                                    continue;
-                                }
-                            }
-                            break;
-                        }
-                        state.pending_ai_row_generation_toggle = Some((root_category, root_sheet, can_add_rows));
-                    }
-                }
                 let mut grounded = state.ai_rule_popup_grounding.unwrap_or(false);
-                if ui_v.checkbox(&mut grounded, "Search").on_hover_text("Enable Google Search grounding for AI responses").changed() {
+                if ui_v
+                    .checkbox(&mut grounded, "Search")
+                    .on_hover_text("Enable Google Search grounding for AI responses")
+                    .changed()
+                {
                     state.ai_rule_popup_grounding = Some(grounded);
                 }
             });
             ui.separator();
             ui.horizontal(|ui| {
                 // Enable save if a sheet is actually selected
-                if ui.add_enabled(state.selected_sheet_name.is_some(), egui::Button::new("Save Settings")).clicked() {
+                if ui
+                    .add_enabled(
+                        state.selected_sheet_name.is_some(),
+                        egui::Button::new("Save Settings"),
+                    )
+                    .clicked()
+                {
                     save_requested = true;
                 }
                 if ui.button("Cancel").clicked() {
@@ -142,10 +141,13 @@ pub fn show_ai_rule_popup(
         });
 
     if save_requested {
-        if let Some(sheet_name_clone) = state.selected_sheet_name.clone() { // Ensure a sheet is selected
+        if let Some(sheet_name_clone) = state.selected_sheet_name.clone() {
+            // Ensure a sheet is selected
             let mut meta_to_save_cloned: Option<SheetMetadata> = None;
 
-            if let Some(sheet_mut) = registry.get_sheet_mut(&state.selected_category, &sheet_name_clone) {
+            if let Some(sheet_mut) =
+                registry.get_sheet_mut(&state.selected_category, &sheet_name_clone)
+            {
                 if let Some(meta_mut) = &mut sheet_mut.metadata {
                     let mut changed = false;
 
@@ -161,12 +163,14 @@ pub fn show_ai_rule_popup(
                         changed = true;
                     }
 
-                    let rule_to_save = if state.ai_general_rule_input.trim().is_empty() { None } else { Some(state.ai_general_rule_input.trim().to_string()) };
-                    if meta_mut.ai_general_rule != rule_to_save { meta_mut.ai_general_rule = rule_to_save; changed = true; }
-
-                    // Persist AI add rows flag if changed
-                    if let Some(can_add) = state.effective_ai_can_add_rows {
-                        if meta_mut.ai_enable_row_generation != can_add { meta_mut.ai_enable_row_generation = can_add; changed = true; }
+                    let rule_to_save = if state.ai_general_rule_input.trim().is_empty() {
+                        None
+                    } else {
+                        Some(state.ai_general_rule_input.trim().to_string())
+                    };
+                    if meta_mut.ai_general_rule != rule_to_save {
+                        meta_mut.ai_general_rule = rule_to_save;
+                        changed = true;
                     }
 
                     // Persist Grounding toggle
@@ -177,7 +181,6 @@ pub fn show_ai_rule_popup(
                         }
                     }
 
-
                     if changed {
                         info!(
                             "AI Config updated for '{:?}/{}': Model ID='{}', Rule='{:?}', AddRows={}, Grounding={:?}. Triggering save.",
@@ -187,7 +190,10 @@ pub fn show_ai_rule_popup(
                         );
                         meta_to_save_cloned = Some(meta_mut.clone());
                     } else {
-                        info!("AI Config unchanged for '{:?}/{}'.", state.selected_category, sheet_name_clone);
+                        info!(
+                            "AI Config unchanged for '{:?}/{}'.",
+                            state.selected_category, sheet_name_clone
+                        );
                     }
                 }
             }

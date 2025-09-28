@@ -17,10 +17,8 @@ pub(super) fn load_and_validate_metadata_file(
     full_grid_path: &Path, // Needed for filename correction
 ) -> Result<(Option<SheetMetadata>, bool), String> {
     // Construct the expected path to the metadata file
-    let expected_meta_path = base_path.join(
-        relative_grid_path
-            .with_file_name(format!("{}.meta.json", sheet_name_candidate)),
-    );
+    let expected_meta_path = base_path
+        .join(relative_grid_path.with_file_name(format!("{}.meta.json", sheet_name_candidate)));
 
     let mut loaded_metadata: Option<SheetMetadata> = None;
     let mut needs_correction_save = false;
@@ -34,7 +32,10 @@ pub(super) fn load_and_validate_metadata_file(
                     Some(os) => os.to_string_lossy().into_owned(),
                     None => {
                         // This should be unlikely if full_grid_path is valid
-                        error!("Could not extract filename from '{}' during metadata load.", full_grid_path.display());
+                        error!(
+                            "Could not extract filename from '{}' during metadata load.",
+                            full_grid_path.display()
+                        );
                         // Return Ok(None) as we cannot reliably validate/correct filename
                         return Ok((None, false));
                     }
@@ -46,7 +47,7 @@ pub(super) fn load_and_validate_metadata_file(
                     &mut meta,
                     sheet_name_candidate,
                     &actual_grid_filename, // Use the actual grid filename here
-                    true, // Use warning mode to correct
+                    true,                  // Use warning mode to correct
                 ) {
                     Ok(()) => {
                         // Basic validation/correction passed
@@ -77,7 +78,10 @@ pub(super) fn load_and_validate_metadata_file(
                     }
                     Err(e) => {
                         // This block shouldn't be reached in warnings_only mode unless validator changes
-                        error!("Metadata validation failed unexpectedly for '{}': {}", sheet_name_candidate, e);
+                        error!(
+                            "Metadata validation failed unexpectedly for '{}': {}",
+                            sheet_name_candidate, e
+                        );
                         // Return Ok but with None metadata and no correction flag set
                         return Ok((None, false));
                     }

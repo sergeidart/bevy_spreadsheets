@@ -1,13 +1,19 @@
 // src/main.rs
-#![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
+#![cfg_attr(
+    all(not(debug_assertions), target_os = "windows"),
+    windows_subsystem = "windows"
+)]
 
-use bevy::{
-    log::LogPlugin, prelude::*, window::{PrimaryWindow, WindowPlugin}, winit::{UpdateMode, WinitSettings}
-};
-use winit::window::UserAttentionType;
-use bevy_framepace::Limiter;
 use crate::ui::elements::editor::state::{EditorWindowState, FpsSetting};
+use bevy::{
+    log::LogPlugin,
+    prelude::*,
+    window::{PrimaryWindow, WindowPlugin},
+    winit::{UpdateMode, WinitSettings},
+};
+use bevy_framepace::Limiter;
 use std::time::Duration;
+use winit::window::UserAttentionType;
 
 use image::ImageFormat as CrateImageFormat;
 use winit::window::Icon as WinitIcon;
@@ -17,10 +23,9 @@ use bevy_tokio_tasks::TokioTasksPlugin;
 use dotenvy::dotenv;
 mod settings;
 
-
+mod example_definitions;
 mod sheets;
 mod ui;
-mod example_definitions;
 mod visual_copier;
 
 use sheets::SheetsPlugin;
@@ -57,7 +62,9 @@ fn main() {
 
     match dotenv() {
         Ok(path) => info!("Loaded .env file from: {:?}", path),
-        Err(_) => info!(".env file not found or failed to load. API key must be set via UI or other means."),
+        Err(_) => info!(
+            ".env file not found or failed to load. API key must be set via UI or other means."
+        ),
     }
 
     App::new()
@@ -98,7 +105,6 @@ fn main() {
         .add_systems(Update, fps_limit)
         .run();
 }
-
 
 fn fps_limit(
     mut settings: ResMut<bevy_framepace::FramepaceSettings>,
@@ -157,7 +163,8 @@ fn initialize_api_key_status_startup(
             Ok(cred) if !cred.is_empty() => {
                 info!("API Key loaded from Windows Credential Manager. Populating SessionApiKey.");
                 session_api_key.0 = Some(cred);
-                api_key_status_res.status = "Key Set (Session from Windows Credential Manager)".to_string();
+                api_key_status_res.status =
+                    "Key Set (Session from Windows Credential Manager)".to_string();
                 return;
             }
             _ => {}
@@ -172,48 +179,52 @@ fn initialize_api_key_status_startup(
 }
 
 fn set_window_icon(
-     primary_window_query: Query<Entity, With<PrimaryWindow>>,
-     windows: NonSend<bevy::winit::WinitWindows>,
- ) {
-     let Ok(primary_entity) = primary_window_query.single() else {
-         warn!("Could not find single primary window to set icon.");
-         return;
-     };
+    primary_window_query: Query<Entity, With<PrimaryWindow>>,
+    windows: NonSend<bevy::winit::WinitWindows>,
+) {
+    let Ok(primary_entity) = primary_window_query.single() else {
+        warn!("Could not find single primary window to set icon.");
+        return;
+    };
 
-     let Some(primary_winit_window) = windows.get_window(primary_entity) else {
-         warn!("Could not get winit window for primary window entity.");
-         return;
-     };
+    let Some(primary_winit_window) = windows.get_window(primary_entity) else {
+        warn!("Could not get winit window for primary window entity.");
+        return;
+    };
 
-     let icon_path = "assets/icon.png";
-     match std::fs::read(icon_path) {
-         Ok(icon_bytes) => {
-             match image::load_from_memory_with_format(&icon_bytes, CrateImageFormat::Png) {
-                 Ok(image_data) => {
-                     let image_buffer = image_data.into_rgba8();
-                     let (width, height) = image_buffer.dimensions();
-                     let rgba_data = image_buffer.into_raw();
+    let icon_path = "assets/icon.png";
+    match std::fs::read(icon_path) {
+        Ok(icon_bytes) => {
+            match image::load_from_memory_with_format(&icon_bytes, CrateImageFormat::Png) {
+                Ok(image_data) => {
+                    let image_buffer = image_data.into_rgba8();
+                    let (width, height) = image_buffer.dimensions();
+                    let rgba_data = image_buffer.into_raw();
 
-                     match WinitIcon::from_rgba(rgba_data, width, height) {
-                         Ok(winit_icon) => {
-                             primary_winit_window.set_window_icon(Some(winit_icon));
-                             info!("Successfully set window icon from: {}", icon_path);
+                    match WinitIcon::from_rgba(rgba_data, width, height) {
+                        Ok(winit_icon) => {
+                            primary_winit_window.set_window_icon(Some(winit_icon));
+                            info!("Successfully set window icon from: {}", icon_path);
                             // Request user attention on startup so the app signals the OS (taskbar flash / attention request).
                             // This doesn't guarantee focus (OS may prevent focus stealing), but it brings attention to the app.
-                            primary_winit_window.request_user_attention(Some(UserAttentionType::Critical));
-                         }
-                         Err(e) => {
-                             warn!("Failed to create winit::window::Icon: {:?}", e);
-                         }
-                     }
-                 }
-                 Err(e) => {
-                     warn!("'image' crate: Failed to load image data from '{}': {}", icon_path, e);
-                 }
-             }
-         }
-         Err(e) => {
-             warn!("Failed to read icon file '{}': {}", icon_path, e);
-         }
-     }
- }
+                            primary_winit_window
+                                .request_user_attention(Some(UserAttentionType::Critical));
+                        }
+                        Err(e) => {
+                            warn!("Failed to create winit::window::Icon: {:?}", e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "'image' crate: Failed to load image data from '{}': {}",
+                        icon_path, e
+                    );
+                }
+            }
+        }
+        Err(e) => {
+            warn!("Failed to read icon file '{}': {}", icon_path, e);
+        }
+    }
+}

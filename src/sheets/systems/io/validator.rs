@@ -1,7 +1,7 @@
 // src/sheets/systems/io/validator.rs
 use crate::sheets::{
     definitions::SheetMetadata,
-    events::SheetOperationFeedback,               // Use the specific event
+    events::SheetOperationFeedback, // Use the specific event
     resources::SheetRegistry,
 };
 use bevy::prelude::*;
@@ -46,7 +46,7 @@ pub fn validate_sheet_name_for_upload(
         // but warn the user that a sheet with this name exists somewhere.
         let msg = format!("Sheet name '{}' already exists (possibly in another category). Upload will overwrite/update if it's in the Root category, or fail if the name exists elsewhere.", trimmed_name);
         warn!("{}", msg); // Log internally
-                         // Make this a warning, not an error, as upload logic might handle replacement.
+                          // Make this a warning, not an error, as upload logic might handle replacement.
         feedback_writer.write(SheetOperationFeedback {
             message: msg,
             is_error: false, // It's a warning about potential overwrite
@@ -114,10 +114,7 @@ pub fn validate_or_correct_loaded_metadata(
         );
         if warnings_only {
             warn!("Correcting {}", issue);
-            corrections_made.push(format!(
-                "Corrected sheet_name to '{}'",
-                expected_sheet_name
-            ));
+            corrections_made.push(format!("Corrected sheet_name to '{}'", expected_sheet_name));
             metadata.sheet_name = expected_sheet_name.to_string();
         } else {
             issues.push(issue);
@@ -184,36 +181,36 @@ pub fn validate_or_correct_loaded_metadata(
 
 /// Validates the grid structure (row lengths) against metadata's column count.
 pub fn validate_grid_structure(
-   _grid: &Vec<Vec<String>>, // Prefix with _ to mark as unused
-   _metadata: &SheetMetadata, // Prefix with _
-   _sheet_name: &str, // Prefix with _
+    _grid: &Vec<Vec<String>>,  // Prefix with _ to mark as unused
+    _metadata: &SheetMetadata, // Prefix with _
+    _sheet_name: &str,         // Prefix with _
 ) -> Result<(), String> {
-   // Temporarily bypass the strict column count validation
-   Ok(())
+    // Temporarily bypass the strict column count validation
+    Ok(())
 
-   // You can comment out the original logic like this for easy restoration:
-   /*
-   if grid.is_empty() {
-       return Ok(()); // Nothing to validate in an empty grid
-   }
-   // --- CORRECTED: Get expected columns from columns.len() ---
-   let expected_cols = metadata.columns.len();
+    // You can comment out the original logic like this for easy restoration:
+    /*
+    if grid.is_empty() {
+        return Ok(()); // Nothing to validate in an empty grid
+    }
+    // --- CORRECTED: Get expected columns from columns.len() ---
+    let expected_cols = metadata.columns.len();
 
-   // --- REMOVED internal metadata consistency check ---
-   // Assume metadata passed here is reasonably consistent or checked elsewhere.
-   /*
-   if expected_cols != metadata.column_types.len() || ... { ... }
-   */
+    // --- REMOVED internal metadata consistency check ---
+    // Assume metadata passed here is reasonably consistent or checked elsewhere.
+    /*
+    if expected_cols != metadata.column_types.len() || ... { ... }
+    */
 
-   // Validate row lengths against expected_cols
-   for (i, row) in grid.iter().enumerate() {
-       if row.len() != expected_cols {
-           return Err(format!(
-               "Sheet '{:?}/{}' row {} column count mismatch: Expected {}, found {}. Grid invalid.",
-               metadata.category, sheet_name, i, expected_cols, row.len()
-           ));
-       }
-   }
-   Ok(())
-   */
+    // Validate row lengths against expected_cols
+    for (i, row) in grid.iter().enumerate() {
+        if row.len() != expected_cols {
+            return Err(format!(
+                "Sheet '{:?}/{}' row {} column count mismatch: Expected {}, found {}. Grid invalid.",
+                metadata.category, sheet_name, i, expected_cols, row.len()
+            ));
+        }
+    }
+    Ok(())
+    */
 }

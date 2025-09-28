@@ -27,8 +27,7 @@ pub fn show_delete_confirm_popup(
         .show(ctx, |ui| {
             ui.label(format!(
                 "Permanently delete sheet '{:?}/{}'?", // Show category
-                state.delete_target_category,
-                state.delete_target_sheet
+                state.delete_target_category, state.delete_target_sheet
             ));
             ui.label("This will also delete the associated file(s) if they exist.");
             ui.colored_label(egui::Color32::YELLOW, "This action cannot be undone.");

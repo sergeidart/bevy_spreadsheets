@@ -1,7 +1,7 @@
 // src/ui/widgets/linked_column_handler.rs
 use bevy::prelude::*;
-use bevy_egui::egui::{self, Id};
 use bevy_egui::egui::containers::popup::PopupCloseBehavior;
+use bevy_egui::egui::{self, Id};
 use std::collections::HashSet;
 
 use crate::sheets::resources::SheetRegistry;
@@ -19,7 +19,7 @@ use crate::ui::validation::normalize_for_link_cmp;
 /// Assumes allowed_values have been fetched previously.
 pub fn handle_linked_column_edit(
     ui: &mut egui::Ui,
-    id: egui::Id, // Base ID for the cell
+    id: egui::Id,        // Base ID for the cell
     current_value: &str, // <-- Changed: Accept &str
     target_sheet_name: &str,
     target_column_index: usize,
@@ -29,7 +29,9 @@ pub fn handle_linked_column_edit(
 ) -> Option<String> {
     trace!(
         "handle_linked_column_edit START. Original value: '{}', Target: '{}[{}]'",
-        current_value, target_sheet_name, target_column_index
+        current_value,
+        target_sheet_name,
+        target_column_index
     );
 
     let mut final_new_value: Option<String> = None;
@@ -55,13 +57,18 @@ pub fn handle_linked_column_edit(
             .unwrap_or(false)
     });
     if !has_focus && needs_reset {
-        ui.memory_mut(|mem| mem.data.insert_temp(text_edit_id, current_value.to_string()));
+        ui.memory_mut(|mem| {
+            mem.data
+                .insert_temp(text_edit_id, current_value.to_string())
+        });
     }
 
     let mut input_text = ui.memory_mut(|mem| {
         mem.data
             // Initialize with current_value (&str) if no cache exists (first render)
-            .get_temp_mut_or_insert_with::<String>(text_edit_id, || -> String { current_value.to_string() })
+            .get_temp_mut_or_insert_with::<String>(text_edit_id, || -> String {
+                current_value.to_string()
+            })
             .clone() // Clone the String buffer from memory for local use
     });
     trace!("Input text from memory: '{}'", input_text);
@@ -77,7 +84,10 @@ pub fn handle_linked_column_edit(
 
     // Update temporary memory immediately on change
     if text_edit_response.changed() {
-        trace!("TextEdit changed, updating temporary memory with: '{}'", input_text);
+        trace!(
+            "TextEdit changed, updating temporary memory with: '{}'",
+            input_text
+        );
         ui.memory_mut(|mem| mem.data.insert_temp(text_edit_id, input_text.clone()));
     }
 
@@ -116,13 +126,17 @@ pub fn handle_linked_column_edit(
                                 .iter()
                                 .filter(|v| normalize_for_link_cmp(v).contains(&input_norm))
                                 .collect();
-                            suggestions.sort_unstable_by(|a, b| normalize_for_link_cmp(a).cmp(&normalize_for_link_cmp(b)));
+                            suggestions.sort_unstable_by(|a, b| {
+                                normalize_for_link_cmp(a).cmp(&normalize_for_link_cmp(b))
+                            });
                             // Limit number displayed after sorting for stability across frames
                             let mut any_suggestions = false;
-                            for suggestion in suggestions.into_iter().take(50) { // raise cap a bit; UI scrolls anyway
+                            for suggestion in suggestions.into_iter().take(50) {
+                                // raise cap a bit; UI scrolls anyway
                                 any_suggestions = true;
                                 // Highlight if current input exactly matches suggestion (normalized)
-                                let is_selected = normalize_for_link_cmp(&current_input) == normalize_for_link_cmp(suggestion);
+                                let is_selected = normalize_for_link_cmp(&current_input)
+                                    == normalize_for_link_cmp(suggestion);
                                 let response = list_ui.selectable_label(is_selected, suggestion);
 
                                 // Handle click on suggestion
@@ -130,7 +144,9 @@ pub fn handle_linked_column_edit(
                                     debug!("Suggestion Clicked: '{}'.", suggestion);
                                     clicked_suggestion_in_popup = Some(suggestion.clone());
                                     // Update temp memory immediately on click
-                                    list_ui.memory_mut(|mem| mem.data.insert_temp(text_edit_id, suggestion.clone()));
+                                    list_ui.memory_mut(|mem| {
+                                        mem.data.insert_temp(text_edit_id, suggestion.clone())
+                                    });
                                     // Close popup on selection
                                     list_ui.memory_mut(|mem| mem.close_popup());
                                 }
@@ -157,21 +173,29 @@ pub fn handle_linked_column_edit(
         // Commit value if a suggestion was clicked
         debug!("Commit via popup click. Value: '{}'", clicked);
         committed_value = Some(clicked.clone()); // Clone the clicked suggestion
-        // Ensure local input_text variable matches clicked value for consistency this frame
-        // input_text = clicked.clone(); // Redundant: temp memory already updated
+                                                 // Ensure local input_text variable matches clicked value for consistency this frame
+                                                 // input_text = clicked.clone(); // Redundant: temp memory already updated
     } else if text_edit_response.lost_focus() {
         // Commit value when focus is lost
         // --- MODIFIED: Fallback clone from &str ---
-        let buffer = ui.memory(|mem| mem.data.get_temp(text_edit_id).unwrap_or_else(|| current_value.to_string()));
+        let buffer = ui.memory(|mem| {
+            mem.data
+                .get_temp(text_edit_id)
+                .unwrap_or_else(|| current_value.to_string())
+        });
         debug!("Commit on LostFocus: '{}'", buffer);
         committed_value = Some(buffer); // Clone buffer from memory
     } else if text_edit_response.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-         // Commit value on Enter key press while focused
-         // --- MODIFIED: Fallback clone from &str ---
-         let buffer = ui.memory(|mem| mem.data.get_temp(text_edit_id).unwrap_or_else(|| current_value.to_string()));
-         debug!("Commit on Enter: '{}'", buffer);
-         committed_value = Some(buffer); // Clone buffer from memory
-         // Defocus and close popup on Enter commit
+        // Commit value on Enter key press while focused
+        // --- MODIFIED: Fallback clone from &str ---
+        let buffer = ui.memory(|mem| {
+            mem.data
+                .get_temp(text_edit_id)
+                .unwrap_or_else(|| current_value.to_string())
+        });
+        debug!("Commit on Enter: '{}'", buffer);
+        committed_value = Some(buffer); // Clone buffer from memory
+                                        // Defocus and close popup on Enter commit
         ui.memory_mut(|mem| mem.request_focus(Id::NULL));
         ui.memory_mut(|mem| mem.close_popup());
     }
@@ -195,6 +219,9 @@ pub fn handle_linked_column_edit(
     // Visual validation (background color) handled by edit_cell_widget.
 
     // --- 8. Return the result ---
-    trace!("handle_linked_column_edit END. Returning: {:?}", final_new_value);
+    trace!(
+        "handle_linked_column_edit END. Returning: {:?}",
+        final_new_value
+    );
     final_new_value
 }

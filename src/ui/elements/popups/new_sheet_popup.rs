@@ -81,25 +81,32 @@ pub fn show_new_sheet_popup(
                 state.new_sheet_name_input.clear();
                 state.new_sheet_show_validation_hint = false;
             } else {
-                warn!("New sheet name '{}' contains invalid characters.", trimmed_name);
+                warn!(
+                    "New sheet name '{}' contains invalid characters.",
+                    trimmed_name
+                );
                 state.new_sheet_show_validation_hint = true;
             }
         }
     }
 
     if cancel_clicked || !popup_open {
-    state.show_new_sheet_popup = false;
-    state.new_sheet_name_input.clear();
+        state.show_new_sheet_popup = false;
+        state.new_sheet_name_input.clear();
         state.new_sheet_target_category = None; // Clear target category
-    state.new_sheet_show_validation_hint = false;
+        state.new_sheet_show_validation_hint = false;
     }
 }
 
 // Basic client-side validator (can be expanded)
 fn validator_basic_sheet_name(name: &str) -> bool {
-    if name.is_empty() || name.starts_with('.') || name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|']) {
+    if name.is_empty()
+        || name.starts_with('.')
+        || name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|'])
+    {
         return false;
     }
     // Allow spaces, alphanumeric, underscore, hyphen
-    name.chars().all(|c| c.is_alphanumeric() || c == ' ' || c == '_' || c == '-')
+    name.chars()
+        .all(|c| c.is_alphanumeric() || c == ' ' || c == '_' || c == '-')
 }

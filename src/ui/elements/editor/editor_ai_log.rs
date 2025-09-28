@@ -1,13 +1,12 @@
 // src/ui/elements/editor/editor_ai_log.rs
-use bevy_egui::egui;
 use super::state::EditorWindowState;
+use bevy_egui::egui;
 
 // Draws persistent bottom panel if enabled
-pub(super) fn show_ai_output_log_bottom(
-    ctx: &egui::Context,
-    state: &mut EditorWindowState,
-) {
-    if !state.ai_output_panel_visible { return; }
+pub(super) fn show_ai_output_log_bottom(ctx: &egui::Context, state: &mut EditorWindowState) {
+    if !state.ai_output_panel_visible {
+        return;
+    }
     let panel_id = egui::Id::new("ai_output_bottom_panel");
     egui::TopBottomPanel::bottom(panel_id)
         .resizable(true)
@@ -33,7 +32,7 @@ pub(super) fn show_ai_output_log_bottom(
                         egui::TextEdit::multiline(&mut display_text_clone)
                             .font(egui::TextStyle::Monospace)
                             .interactive(false)
-                            .desired_width(f32::INFINITY)
+                            .desired_width(f32::INFINITY),
                     );
                 });
         });

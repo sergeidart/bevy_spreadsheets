@@ -1,7 +1,7 @@
 // src/sheets/systems/logic/delete_rows.rs
 use crate::sheets::{
     definitions::SheetMetadata, // Need metadata for saving
-    events::{RequestDeleteRows, SheetOperationFeedback, SheetDataModifiedInRegistryEvent}, // Added SheetDataModifiedInRegistryEvent
+    events::{RequestDeleteRows, SheetDataModifiedInRegistryEvent, SheetOperationFeedback}, // Added SheetDataModifiedInRegistryEvent
     resources::SheetRegistry,
     systems::io::save::save_single_sheet,
 };
@@ -26,7 +26,8 @@ pub fn handle_delete_rows_request(
         if indices_to_delete.is_empty() {
             trace!(
                 "Skipping delete request for '{:?}/{}': No indices provided.",
-                category, sheet_name
+                category,
+                sheet_name
             );
             continue;
         }
@@ -64,7 +65,7 @@ pub fn handle_delete_rows_request(
 
             if deleted_count > 0 {
                 operation_successful = true; // Mark successful even if partial
-                // Cache metadata for saving if deletion occurred
+                                             // Cache metadata for saving if deletion occurred
                 metadata_cache = sheet_data.metadata.clone();
                 // Send data modified event
                 data_modified_writer.write(SheetDataModifiedInRegistryEvent {
@@ -72,12 +73,8 @@ pub fn handle_delete_rows_request(
                     sheet_name: sheet_name.clone(),
                 });
             }
-
         } else {
-            error_message = Some(format!(
-                "Sheet '{:?}/{}' not found.",
-                category, sheet_name
-            ));
+            error_message = Some(format!("Sheet '{:?}/{}' not found.", category, sheet_name));
         }
 
         // --- Feedback and Saving ---
@@ -102,11 +99,17 @@ pub fn handle_delete_rows_request(
                 let key = (category.clone(), sheet_name.clone());
                 sheets_to_save.insert(key, meta);
             } else if deleted_count > 0 {
-                 warn!("Rows deleted from '{:?}/{}' but cannot save: Metadata missing.", category, sheet_name);
+                warn!(
+                    "Rows deleted from '{:?}/{}' but cannot save: Metadata missing.",
+                    category, sheet_name
+                );
             }
         } else if let Some(err) = error_message {
             // Only send feedback if the whole operation failed (e.g., sheet not found)
-            error!("Failed to delete rows from '{:?}/{}': {}", category, sheet_name, err);
+            error!(
+                "Failed to delete rows from '{:?}/{}': {}",
+                category, sheet_name, err
+            );
             feedback_writer.write(SheetOperationFeedback {
                 message: format!("Delete failed for '{:?}/{}': {}", category, sheet_name, err),
                 is_error: true,
@@ -118,10 +121,7 @@ pub fn handle_delete_rows_request(
     if !sheets_to_save.is_empty() {
         let registry_immut = registry.as_ref(); // Get immutable borrow for saving
         for ((cat, name), metadata) in sheets_to_save {
-            info!(
-                "Rows deleted in '{:?}/{}', triggering save.",
-                cat, name
-            );
+            info!("Rows deleted in '{:?}/{}', triggering save.", cat, name);
             save_single_sheet(registry_immut, &metadata); // Pass metadata
         }
     }

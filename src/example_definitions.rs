@@ -1,7 +1,6 @@
 // src/example_definitions.rs
 use crate::sheets::definitions::{
-    ColumnDataType, ColumnDefinition, SheetMetadata,
-    default_ai_model_id,
+    default_ai_model_id, ColumnDataType, ColumnDefinition, SheetMetadata,
 };
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Default)]
@@ -41,9 +40,7 @@ pub fn create_example_items_metadata() -> SheetMetadata {
     let columns: Vec<ColumnDefinition> = EXAMPLE_ITEMS_HEADERS
         .iter()
         .zip(EXAMPLE_ITEMS_COLUMN_TYPES.iter())
-        .map(|(&header, &data_type)| {
-            ColumnDefinition::new_basic(header.to_string(), data_type)
-        })
+        .map(|(&header, &data_type)| ColumnDefinition::new_basic(header.to_string(), data_type))
         .collect();
 
     SheetMetadata {
@@ -53,13 +50,13 @@ pub fn create_example_items_metadata() -> SheetMetadata {
         columns,
         ai_general_rule: None,
         // --- MODIFIED: Initialize new AI model ID field and keep existing params ---
-    ai_model_id: default_ai_model_id(),
-    ai_temperature: None,
-    ai_top_k: None,
-    ai_top_p: None,
+        ai_model_id: default_ai_model_id(),
+        ai_temperature: None,
+        ai_top_k: None,
+        ai_top_p: None,
         requested_grounding_with_google_search: Default::default(),
-    ai_enable_row_generation: false,
-    random_picker: None,
+        ai_enable_row_generation: false,
+        random_picker: None,
         structure_parent: None,
         // --- END MODIFIED ---
     }
@@ -67,13 +64,12 @@ pub fn create_example_items_metadata() -> SheetMetadata {
 
 const SIMPLE_CONFIG_SHEET_NAME: &str = "SimpleConfig";
 const SIMPLE_CONFIG_FILENAME: &str = "SimpleConfig.json";
-const SIMPLE_CONFIG_COLUMN_TYPES: &[ColumnDataType] = &[ 
+const SIMPLE_CONFIG_COLUMN_TYPES: &[ColumnDataType] = &[
     ColumnDataType::String,
     ColumnDataType::String,
     ColumnDataType::I64,
 ];
-const SIMPLE_CONFIG_HEADERS: &[&str] =
-    &["Setting Key", "Setting Value", "Priority (int)"];
+const SIMPLE_CONFIG_HEADERS: &[&str] = &["Setting Key", "Setting Value", "Priority (int)"];
 
 pub fn create_simple_config_metadata() -> SheetMetadata {
     let num_cols = SIMPLE_CONFIG_HEADERS.len();
@@ -86,9 +82,7 @@ pub fn create_simple_config_metadata() -> SheetMetadata {
     let columns: Vec<ColumnDefinition> = SIMPLE_CONFIG_HEADERS
         .iter()
         .zip(SIMPLE_CONFIG_COLUMN_TYPES.iter())
-        .map(|(&header, &data_type)| {
-            ColumnDefinition::new_basic(header.to_string(), data_type)
-        })
+        .map(|(&header, &data_type)| ColumnDefinition::new_basic(header.to_string(), data_type))
         .collect();
 
     SheetMetadata {
@@ -98,13 +92,13 @@ pub fn create_simple_config_metadata() -> SheetMetadata {
         columns,
         ai_general_rule: None,
         // --- MODIFIED: Initialize new AI model ID field and keep existing params ---
-    ai_model_id: default_ai_model_id(),
-    ai_temperature: None,
-    ai_top_k: None,
-    ai_top_p: None,
+        ai_model_id: default_ai_model_id(),
+        ai_temperature: None,
+        ai_top_k: None,
+        ai_top_p: None,
         requested_grounding_with_google_search: Default::default(),
-    ai_enable_row_generation: false,
-    random_picker: None,
+        ai_enable_row_generation: false,
+        random_picker: None,
         structure_parent: None,
         // --- END MODIFIED ---
     }

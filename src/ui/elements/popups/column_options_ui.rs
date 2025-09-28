@@ -1,9 +1,9 @@
 // src/ui/elements/popups/column_options_ui.rs
+use super::column_options_validator::{is_validator_config_valid, show_validator_section};
 use crate::sheets::resources::SheetRegistry;
 use crate::ui::elements::editor::state::EditorWindowState;
 use bevy::prelude::*; // Keep bevy prelude
-use bevy_egui::egui;
-use super::column_options_validator::{is_validator_config_valid, show_validator_section}; // Import helper
+use bevy_egui::egui; // Import helper
 
 // Structure to hold the results of the UI interaction
 pub(super) struct ColumnOptionsUiResult {
@@ -43,15 +43,11 @@ pub(super) fn show_column_options_window_ui(
             // Name field
             ui.strong("Name");
             let rename_resp = ui.add(
-                egui::TextEdit::singleline(
-                    &mut state.options_column_rename_input,
-                )
-                .desired_width(150.0)
-                .lock_focus(true), // Keep focus on open
+                egui::TextEdit::singleline(&mut state.options_column_rename_input)
+                    .desired_width(150.0)
+                    .lock_focus(true), // Keep focus on open
             );
-            if rename_resp.lost_focus()
-                && ui.input(|i| i.key_pressed(egui::Key::Enter))
-            {
+            if rename_resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 if !state.options_column_rename_input.trim().is_empty()
                     && is_validator_config_valid(state)
                 {
@@ -61,9 +57,13 @@ pub(super) fn show_column_options_window_ui(
             ui.separator();
 
             // --- Filter Section (Multi-term OR) ---
-            let _filter_title = ui.add(egui::Label::new(egui::RichText::new("Filter (OR)" ).strong()));
+            let _filter_title = ui.add(egui::Label::new(
+                egui::RichText::new("Filter (OR)").strong(),
+            ));
             // Ensure at least one term
-            if state.options_column_filter_terms.is_empty() { state.options_column_filter_terms.push(String::new()); }
+            if state.options_column_filter_terms.is_empty() {
+                state.options_column_filter_terms.push(String::new());
+            }
             let mut to_remove: Vec<usize> = Vec::new();
             for i in 0..state.options_column_filter_terms.len() {
                 ui.horizontal(|ui_h| {
@@ -73,32 +73,48 @@ pub(super) fn show_column_options_window_ui(
                             .hint_text("contains fragment"),
                     );
                     if resp.lost_focus() && ui_h.input(|inp| inp.key_pressed(egui::Key::Enter)) {
-                        if is_validator_config_valid(state) { apply_clicked = true; }
+                        if is_validator_config_valid(state) {
+                            apply_clicked = true;
+                        }
                     }
-                    if i + 1 < state.options_column_filter_terms.len() && ui_h.small_button("x").on_hover_text("Remove").clicked() {
+                    if i + 1 < state.options_column_filter_terms.len()
+                        && ui_h.small_button("x").on_hover_text("Remove").clicked()
+                    {
                         to_remove.push(i);
                     }
                 });
             }
             if !to_remove.is_empty() {
-                for idx in to_remove.into_iter().rev() { if idx < state.options_column_filter_terms.len() { state.options_column_filter_terms.remove(idx); } }
-                if state.options_column_filter_terms.is_empty() { state.options_column_filter_terms.push(String::new()); }
+                for idx in to_remove.into_iter().rev() {
+                    if idx < state.options_column_filter_terms.len() {
+                        state.options_column_filter_terms.remove(idx);
+                    }
+                }
+                if state.options_column_filter_terms.is_empty() {
+                    state.options_column_filter_terms.push(String::new());
+                }
             }
-            let need_new = state.options_column_filter_terms.last().map(|s| !s.is_empty()).unwrap_or(false);
-            if need_new && state.options_column_filter_terms.len() < 12 { state.options_column_filter_terms.push(String::new()); }
+            let need_new = state
+                .options_column_filter_terms
+                .last()
+                .map(|s| !s.is_empty())
+                .unwrap_or(false);
+            if need_new && state.options_column_filter_terms.len() < 12 {
+                state.options_column_filter_terms.push(String::new());
+            }
             ui.horizontal(|ui_h| {
-                if ui_h.button("Clear All").clicked() { state.options_column_filter_terms = vec![String::new()]; }
+                if ui_h.button("Clear All").clicked() {
+                    state.options_column_filter_terms = vec![String::new()];
+                }
             });
             ui.separator();
 
             // AI Context Section
             ui.strong("AI Context");
             ui.add(
-                egui::TextEdit::multiline(
-                    &mut state.options_column_ai_context_input,
-                )
-                .desired_width(f32::INFINITY)
-                .desired_rows(2),
+                egui::TextEdit::multiline(&mut state.options_column_ai_context_input)
+                    .desired_width(f32::INFINITY)
+                    .desired_rows(2),
             );
             ui.separator();
 
@@ -110,10 +126,9 @@ pub(super) fn show_column_options_window_ui(
 
             // --- Action Buttons ---
             ui.horizontal(|ui| {
-                let apply_enabled =
-                    !state.options_column_rename_input.trim().is_empty()
-                        && is_validator_config_valid(state)
-                        && !state.pending_validator_change_requires_confirmation; // disable while awaiting confirm
+                let apply_enabled = !state.options_column_rename_input.trim().is_empty()
+                    && is_validator_config_valid(state)
+                    && !state.pending_validator_change_requires_confirmation; // disable while awaiting confirm
                 if ui
                     .add_enabled(apply_enabled, egui::Button::new("Apply"))
                     .clicked()

@@ -1,32 +1,26 @@
 // src/visual_copier/plugin.rs
 
 // --- MODIFIED: Import AppExit here ---
-use bevy::app::{App, Plugin, Startup, Update, AppExit};
+use bevy::app::{App, AppExit, Plugin, Startup, Update};
 // --- END MODIFIED ---
 use bevy::prelude::*;
 
 use super::resources::VisualCopierManager;
 // --- MODIFIED: Add RequestAppExit event ---
 use super::events::*; // Includes VisualCopierStateChanged, RequestAppExit
-// --- END MODIFIED ---
+                      // --- END MODIFIED ---
 use super::handler::{
-    handle_add_new_copy_task_event_system,
-    handle_copy_operation_result_event_system,
-    handle_folder_picked_event_system,
-    handle_pick_folder_request_system,
-    handle_queue_all_copy_tasks_event_system,
-    handle_queue_copy_task_event_system,
-    handle_queue_top_panel_copy_event_system,
-    handle_remove_copy_task_event_system,
+    apply_task_end_folder_update_system, apply_task_start_folder_update_system,
+    apply_top_panel_from_folder_update_system, apply_top_panel_to_folder_update_system,
+    handle_add_new_copy_task_event_system, handle_copy_operation_result_event_system,
+    handle_folder_picked_event_system, handle_pick_folder_request_system,
+    handle_queue_all_copy_tasks_event_system, handle_queue_copy_task_event_system,
+    handle_queue_top_panel_copy_event_system, handle_remove_copy_task_event_system,
     handle_reverse_top_panel_folders_event_system,
-    apply_task_start_folder_update_system,
-    apply_task_end_folder_update_system,
-    apply_top_panel_from_folder_update_system,
-    apply_top_panel_to_folder_update_system,
     handle_visual_copier_state_change_and_save_system,
 };
-use super::processes::process_copy_operations_system;
 use super::io::load_copier_manager_from_file;
+use super::processes::process_copy_operations_system;
 
 pub struct VisualCopierPlugin;
 
@@ -51,12 +45,13 @@ impl Plugin for VisualCopierPlugin {
             // --- MODIFIED: Register new events ---
             .add_event::<VisualCopierStateChanged>()
             .add_event::<RequestAppExit>();
-            // --- END MODIFIED ---
+        // --- END MODIFIED ---
 
         app.add_systems(Startup, load_visual_copier_state_on_startup);
 
         // Add systems
-        app.add_systems(Update,
+        app.add_systems(
+            Update,
             (
                 // Folder picking and updates
                 handle_pick_folder_request_system,
@@ -66,20 +61,18 @@ impl Plugin for VisualCopierPlugin {
                     apply_task_end_folder_update_system,
                     apply_top_panel_from_folder_update_system,
                     apply_top_panel_to_folder_update_system,
-                ).after(handle_folder_picked_event_system),
-
+                )
+                    .after(handle_folder_picked_event_system),
                 // Other state modifications
                 handle_add_new_copy_task_event_system,
                 handle_remove_copy_task_event_system,
                 handle_reverse_top_panel_folders_event_system,
-
                 // Handle immediate save
                 handle_visual_copier_state_change_and_save_system
                     .after(apply_top_panel_to_folder_update_system) // Example ordering
                     .after(handle_add_new_copy_task_event_system)
                     .after(handle_remove_copy_task_event_system)
                     .after(handle_reverse_top_panel_folders_event_system),
-
                 // Queueing and processing copies (asynchronous)
                 handle_queue_copy_task_event_system,
                 handle_queue_top_panel_copy_event_system,
@@ -87,12 +80,11 @@ impl Plugin for VisualCopierPlugin {
                 ApplyDeferred,
                 process_copy_operations_system,
                 handle_copy_operation_result_event_system.after(process_copy_operations_system),
-
                 // --- ADDED: Register new custom exit handler ---
                 custom_exit_handler_system,
                 // --- END ADDED ---
-
-            ).chain()
+            )
+                .chain(),
         );
 
         // --- REMOVED old exit system ---
@@ -104,9 +96,7 @@ impl Plugin for VisualCopierPlugin {
 }
 
 // --- Startup system (Remains the same as previous version) ---
-fn load_visual_copier_state_on_startup(
-    mut manager: ResMut<VisualCopierManager>,
-) {
+fn load_visual_copier_state_on_startup(mut manager: ResMut<VisualCopierManager>) {
     info!("VisualCopier: Attempting to load copier state at startup...");
     match load_copier_manager_from_file() {
         Ok(loaded_manager) => {
@@ -114,8 +104,11 @@ fn load_visual_copier_state_on_startup(
             *manager = loaded_manager;
         }
         Err(e) => {
-             error!("VisualCopier: Failed to load copier state: {}. Using default state.", e);
-             *manager = VisualCopierManager::default();
+            error!(
+                "VisualCopier: Failed to load copier state: {}. Using default state.",
+                e
+            );
+            *manager = VisualCopierManager::default();
         }
     }
 
@@ -153,10 +146,16 @@ fn custom_exit_handler_system(
         // 1. Perform synchronous copy if manager.copy_top_panel_on_exit is true
         let mut copy_error: Option<String> = None;
         if manager.copy_top_panel_on_exit {
-            if let (Some(from), Some(to)) = (&manager.top_panel_from_folder, &manager.top_panel_to_folder) {
+            if let (Some(from), Some(to)) =
+                (&manager.top_panel_from_folder, &manager.top_panel_to_folder)
+            {
                 info!("VisualCopier: Performing synchronous copy before exiting...");
                 // BLOCKING CALL - UI WILL FREEZE
-                match crate::visual_copier::executers::execute_single_copy_operation(from, to, "Sync Copy on Exit") {
+                match crate::visual_copier::executers::execute_single_copy_operation(
+                    from,
+                    to,
+                    "Sync Copy on Exit",
+                ) {
                     Ok(msg) => {
                         info!("VisualCopier: Sync copy on exit successful: {}", msg);
                         // --- Optional: Reset flag and trigger immediate save ---
@@ -178,7 +177,7 @@ fn custom_exit_handler_system(
                 warn!("VisualCopier: 'Copy on Exit' true, but paths not set. Skipping copy.");
             }
         } else {
-             info!("VisualCopier: 'Copy on Exit' is false. Skipping sync copy.");
+            info!("VisualCopier: 'Copy on Exit' is false. Skipping sync copy.");
         }
 
         // 2. Save final state (Potentially redundant if immediate saves are reliable)
@@ -189,9 +188,9 @@ fn custom_exit_handler_system(
 
         // 3. Send the actual AppExit event
         if let Some(err) = copy_error {
-             warn!("VisualCopier: Requesting app termination following exit request, but sync copy failed: {}", err);
+            warn!("VisualCopier: Requesting app termination following exit request, but sync copy failed: {}", err);
         } else {
-             info!("VisualCopier: All pre-exit tasks done. Requesting actual app termination.");
+            info!("VisualCopier: All pre-exit tasks done. Requesting actual app termination.");
         }
         app_exit_writer.write(AppExit::Success); // Use success variant or appropriate code
     }

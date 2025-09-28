@@ -1,7 +1,7 @@
 pub mod io;
 
-use serde::{Serialize, Deserialize};
 use crate::ui::elements::editor::state::FpsSetting;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct AppSettings {
@@ -10,6 +10,8 @@ pub struct AppSettings {
 
 impl Default for AppSettings {
     fn default() -> Self {
-        Self { fps_setting: FpsSetting::default() }
+        Self {
+            fps_setting: FpsSetting::default(),
+        }
     }
 }

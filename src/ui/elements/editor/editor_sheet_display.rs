@@ -1,20 +1,23 @@
 // src/ui/elements/editor/editor_sheet_display.rs
+use crate::sheets::{
+    events::{
+        AddSheetRowRequest, OpenStructureViewEvent, RequestAddColumn, RequestReorderColumn,
+        UpdateCellEvent,
+    },
+    resources::{SheetRegistry, SheetRenderCache},
+};
+use crate::ui::elements::editor::state::{AiModeState, EditorWindowState, SheetInteractionState};
+use crate::ui::elements::editor::table_header::sheet_table_header;
 use bevy::prelude::*;
 use bevy_egui::egui; // EguiContexts might not be needed here if ctx is passed
 use egui_extras::{Column, TableBody, TableBuilder};
-use crate::sheets::{
-    resources::{SheetRegistry, SheetRenderCache},
-    events::{RequestReorderColumn, UpdateCellEvent, OpenStructureViewEvent, AddSheetRowRequest, RequestAddColumn},
-};
-use crate::ui::elements::editor::state::{EditorWindowState, SheetInteractionState, AiModeState};
-use crate::ui::elements::editor::table_header::sheet_table_header;
 // removed: legacy direct body helper (we render body inline to support the new control column)
 // No longer need to import SheetEventWriters as a whole struct here
 
 #[allow(clippy::too_many_arguments)]
 pub(super) fn show_sheet_table(
     ui: &mut egui::Ui,
-    ctx: &egui::Context, 
+    ctx: &egui::Context,
     row_height: f32,
     state: &mut EditorWindowState,
     registry: &SheetRegistry,
@@ -30,8 +33,14 @@ pub(super) fn show_sheet_table(
     if !state.virtual_structure_stack.is_empty() {
         if let Some(current_sel) = &state.selected_sheet_name {
             // Root parent sheet is the parent sheet of the first (oldest) virtual context
-            let root_parent_sheet = state.virtual_structure_stack.first().map(|v| v.parent.parent_sheet.clone());
-            let root_parent_category_opt = state.virtual_structure_stack.first().and_then(|v| v.parent.parent_category.clone());
+            let root_parent_sheet = state
+                .virtual_structure_stack
+                .first()
+                .map(|v| v.parent.parent_sheet.clone());
+            let root_parent_category_opt = state
+                .virtual_structure_stack
+                .first()
+                .and_then(|v| v.parent.parent_category.clone());
             // If user changed either sheet name or category away from the root parent, clear stack
             let category_changed = root_parent_category_opt != state.selected_category;
             if root_parent_sheet.as_ref() != Some(current_sel) || category_changed {
@@ -45,20 +54,29 @@ pub(super) fn show_sheet_table(
     // If a virtual structure sheet is active, temporarily override selected sheet for rendering
     let backup_sheet = state.selected_sheet_name.clone();
     if let Some(vctx) = state.virtual_structure_stack.last() {
-        if let Some(vsheet) = registry.get_sheet(&state.selected_category, &vctx.virtual_sheet_name) {
+        if let Some(vsheet) = registry.get_sheet(&state.selected_category, &vctx.virtual_sheet_name)
+        {
             if vsheet.metadata.is_some() {
                 state.selected_sheet_name = Some(vctx.virtual_sheet_name.clone());
             }
         }
     }
-    if let Some(selected_name) = &state.selected_sheet_name.clone() { 
-        let current_category_clone = state.selected_category.clone(); 
+    if let Some(selected_name) = &state.selected_sheet_name.clone() {
+        let current_category_clone = state.selected_category.clone();
 
         let sheet_data_ref_opt = registry.get_sheet(&current_category_clone, selected_name);
 
         if sheet_data_ref_opt.is_none() {
-            warn!("Selected sheet '{:?}/{}' not found in registry for rendering.", current_category_clone, selected_name);
-            ui.vertical_centered(|ui| { ui.label(format!("Sheet '{:?}/{}' no longer exists...", current_category_clone, selected_name)); });
+            warn!(
+                "Selected sheet '{:?}/{}' not found in registry for rendering.",
+                current_category_clone, selected_name
+            );
+            ui.vertical_centered(|ui| {
+                ui.label(format!(
+                    "Sheet '{:?}/{}' no longer exists...",
+                    current_category_clone, selected_name
+                ));
+            });
             if state.selected_sheet_name.as_deref() == Some(selected_name.as_str()) {
                 state.selected_sheet_name = None;
                 state.reset_interaction_modes_and_selections();
@@ -68,13 +86,13 @@ pub(super) fn show_sheet_table(
         }
 
         if let Some(sheet_data_ref) = sheet_data_ref_opt {
-             if let Some(metadata) = &sheet_data_ref.metadata {
+            if let Some(metadata) = &sheet_data_ref.metadata {
                 // Notice for standard sheets only (structure view handled earlier)
                 let num_cols = metadata.columns.len();
                 if metadata.get_filters().len() != num_cols && num_cols > 0 {
-                     error!("Metadata inconsistency detected (cols vs filters) for sheet '{:?}/{}'. Revalidation might be needed.", current_category_clone, selected_name);
-                     ui.colored_label(egui::Color32::RED, "Metadata inconsistency detected...");
-                     return;
+                    error!("Metadata inconsistency detected (cols vs filters) for sheet '{:?}/{}'. Revalidation might be needed.", current_category_clone, selected_name);
+                    ui.colored_label(egui::Color32::RED, "Metadata inconsistency detected...");
+                    return;
                 }
 
                 // Determine if this is a virtual structure sheet and gather ancestor key columns
@@ -84,14 +102,29 @@ pub(super) fn show_sheet_table(
                     if last_ctx.virtual_sheet_name == *selected_name {
                         // Iterate through stack in order (oldest -> newest)
                         for vctx in &state.virtual_structure_stack {
-                            if let Some(parent_sheet) = registry.get_sheet(&state.selected_category, &vctx.parent.parent_sheet) {
-                                if let (Some(parent_meta), Some(parent_row)) = (&parent_sheet.metadata, parent_sheet.grid.get(vctx.parent.parent_row)) {
-                                    if let Some(struct_col_def) = parent_meta.columns.get(vctx.parent.parent_col) {
+                            if let Some(parent_sheet) = registry
+                                .get_sheet(&state.selected_category, &vctx.parent.parent_sheet)
+                            {
+                                if let (Some(parent_meta), Some(parent_row)) = (
+                                    &parent_sheet.metadata,
+                                    parent_sheet.grid.get(vctx.parent.parent_row),
+                                ) {
+                                    if let Some(struct_col_def) =
+                                        parent_meta.columns.get(vctx.parent.parent_col)
+                                    {
                                         // Prefer parent-selected key; fallback to first non-structure
-                                        if let Some(key_col_idx) = struct_col_def.structure_key_parent_column_index {
-                                            if let Some(key_col_def) = parent_meta.columns.get(key_col_idx) {
-                                                let value = parent_row.get(key_col_idx).cloned().unwrap_or_default();
-                                                ancestor_key_columns.push((key_col_def.header.clone(), value));
+                                        if let Some(key_col_idx) =
+                                            struct_col_def.structure_key_parent_column_index
+                                        {
+                                            if let Some(key_col_def) =
+                                                parent_meta.columns.get(key_col_idx)
+                                            {
+                                                let value = parent_row
+                                                    .get(key_col_idx)
+                                                    .cloned()
+                                                    .unwrap_or_default();
+                                                ancestor_key_columns
+                                                    .push((key_col_def.header.clone(), value));
                                             }
                                         }
                                     }
@@ -343,20 +376,30 @@ pub(super) fn show_sheet_table(
 
                 // Floating overlay controls (outside ScrollArea so they don't clip over content)
                 let header_h = row_height; // must match header height above
-                let any_toolbox_open = state.current_interaction_mode != SheetInteractionState::Idle || state.show_toybox_menu;
+                let any_toolbox_open = state.current_interaction_mode
+                    != SheetInteractionState::Idle
+                    || state.show_toybox_menu;
                 let add_controls_visible = !any_toolbox_open;
                 if add_controls_visible {
                     let scroll_rect = scroll_resp.inner_rect;
                     // Add Row: place on the delimiter (bottom of header), near left edge of the table
-                    let pos_left = egui::pos2(table_start_pos.x + 6.0, table_start_pos.y + header_h - 9.0);
-                    egui::Area::new("floating_add_row_btn".into()).order(egui::Order::Foreground).fixed_pos(pos_left).show(ctx, |ui_f| {
-                        let btn = egui::Button::new("+").min_size(egui::vec2(18.0, 18.0));
-                        if ui_f.add(btn).on_hover_text("Simple Add Row").clicked() {
-                            if let Some(sheet_name) = &state.selected_sheet_name {
-                                add_row_writer.write(AddSheetRowRequest { category: state.selected_category.clone(), sheet_name: sheet_name.clone(), initial_values: None });
+                    let pos_left =
+                        egui::pos2(table_start_pos.x + 6.0, table_start_pos.y + header_h - 9.0);
+                    egui::Area::new("floating_add_row_btn".into())
+                        .order(egui::Order::Foreground)
+                        .fixed_pos(pos_left)
+                        .show(ctx, |ui_f| {
+                            let btn = egui::Button::new("+").min_size(egui::vec2(18.0, 18.0));
+                            if ui_f.add(btn).on_hover_text("Simple Add Row").clicked() {
+                                if let Some(sheet_name) = &state.selected_sheet_name {
+                                    add_row_writer.write(AddSheetRowRequest {
+                                        category: state.selected_category.clone(),
+                                        sheet_name: sheet_name.clone(),
+                                        initial_values: None,
+                                    });
+                                }
                             }
-                        }
-                    });
+                        });
 
                     // Add Column placement:
                     // - If no horizontal scrolling: place right after the last header delimiter
@@ -371,31 +414,53 @@ pub(super) fn show_sheet_table(
                         scroll_rect.right() + 12.0
                     };
                     let pos_right = egui::pos2(right_x, table_start_pos.y + 2.0);
-                    egui::Area::new("floating_add_col_btn".into()).order(egui::Order::Foreground).fixed_pos(pos_right).show(ctx, |ui_f| {
-                        let btn = egui::Button::new("+").min_size(egui::vec2(18.0, 18.0));
-                        if ui_f.add(btn).on_hover_text("Add Column").clicked() {
-                            if let Some(sheet_name) = &state.selected_sheet_name {
-                                add_column_writer.write(RequestAddColumn { category: state.selected_category.clone(), sheet_name: sheet_name.clone() });
+                    egui::Area::new("floating_add_col_btn".into())
+                        .order(egui::Order::Foreground)
+                        .fixed_pos(pos_right)
+                        .show(ctx, |ui_f| {
+                            let btn = egui::Button::new("+").min_size(egui::vec2(18.0, 18.0));
+                            if ui_f.add(btn).on_hover_text("Add Column").clicked() {
+                                if let Some(sheet_name) = &state.selected_sheet_name {
+                                    add_column_writer.write(RequestAddColumn {
+                                        category: state.selected_category.clone(),
+                                        sheet_name: sheet_name.clone(),
+                                    });
+                                }
                             }
-                        }
-                    });
+                        });
                 }
             } else {
-                 warn!("Metadata object missing for sheet '{:?}/{}' even though sheet data exists.", current_category_clone, selected_name);
-                 ui.colored_label(egui::Color32::YELLOW, format!("Metadata missing for sheet '{:?}/{}'.", current_category_clone, selected_name));
+                warn!(
+                    "Metadata object missing for sheet '{:?}/{}' even though sheet data exists.",
+                    current_category_clone, selected_name
+                );
+                ui.colored_label(
+                    egui::Color32::YELLOW,
+                    format!(
+                        "Metadata missing for sheet '{:?}/{}'.",
+                        current_category_clone, selected_name
+                    ),
+                );
             }
         }
     } else {
-         if state.selected_category.is_some() {
-            ui.vertical_centered(|ui| { ui.label("Select a sheet from the category, or upload a new one."); });
-         }
-         else {
-            ui.vertical_centered(|ui| { ui.label("Select a category and sheet, or upload JSON."); });
-         }
+        if state.selected_category.is_some() {
+            ui.vertical_centered(|ui| {
+                ui.label("Select a sheet from the category, or upload a new one.");
+            });
+        } else {
+            ui.vertical_centered(|ui| {
+                ui.label("Select a category and sheet, or upload JSON.");
+            });
+        }
     }
     // Restore selection if we temporarily switched to virtual
     if let Some(vctx) = state.virtual_structure_stack.last() {
-        if let Some(orig_sheet) = &backup_sheet { if *orig_sheet != vctx.virtual_sheet_name { state.selected_sheet_name = backup_sheet; } }
+        if let Some(orig_sheet) = &backup_sheet {
+            if *orig_sheet != vctx.virtual_sheet_name {
+                state.selected_sheet_name = backup_sheet;
+            }
+        }
     } else {
         // No virtual sheet active, ensure selection remains original
         state.selected_sheet_name = backup_sheet;

@@ -1,24 +1,27 @@
 // src/ui/elements/popups/settings_popup.rs
+use crate::sheets::resources::SheetRegistry;
 use crate::ui::elements::editor::EditorWindowState;
-use bevy::log::info;
-use bevy_egui::egui;
 use crate::ApiKeyDisplayStatus;
 use crate::SessionApiKey;
-use crate::sheets::resources::SheetRegistry;
+use bevy::log::info;
+use bevy_egui::egui;
 // Removed: use bevy::prelude::ResMut;
-use whoami;
-use crate::settings::io::{save_settings_to_file, load_settings_from_file};
+use crate::settings::io::{load_settings_from_file, save_settings_to_file};
 use crate::settings::AppSettings;
+use crate::visual_copier::events::{
+    PickFolderRequest, QueueTopPanelCopyEvent, ReverseTopPanelFoldersEvent,
+    VisualCopierStateChanged,
+};
 use crate::visual_copier::resources::VisualCopierManager;
 use bevy::prelude::EventWriter;
-use crate::visual_copier::events::{PickFolderRequest, QueueTopPanelCopyEvent, ReverseTopPanelFoldersEvent, VisualCopierStateChanged};
+use whoami;
 
 // --- MODIFIED: Function signature uses plain mutable references ---
 pub fn show_settings_popup(
     ctx: &egui::Context,
     state: &mut EditorWindowState,
     api_key_status: &mut ApiKeyDisplayStatus, // Changed from ResMut<>
-    session_api_key: &mut SessionApiKey,    // Changed from ResMut<>
+    session_api_key: &mut SessionApiKey,      // Changed from ResMut<>
     // Registry retained for potential future settings, currently unused
     _registry: &mut SheetRegistry,
     // NEW: Quick Copy settings (Copy on Exit)
@@ -29,17 +32,20 @@ pub fn show_settings_popup(
     reverse_folders_writer: &mut EventWriter<ReverseTopPanelFoldersEvent>,
     state_changed_writer: &mut EventWriter<VisualCopierStateChanged>,
 ) {
-// --- END MODIFIED ---
+    // --- END MODIFIED ---
     if state.show_settings_popup {
-    // Only check keyring when popup is first opened
-    let popup_just_opened = state.show_settings_popup && !state.was_settings_popup_open;
+        // Only check keyring when popup is first opened
+        let popup_just_opened = state.show_settings_popup && !state.was_settings_popup_open;
         if popup_just_opened {
             let username = whoami::username();
             info!("[DEBUG] (Popup just opened) Checking key status for username: {username}");
             let keyring_status = keyring::Entry::new("GoogleGeminiAPI", username.as_str())
                 .and_then(|entry| entry.get_password());
             match &keyring_status {
-                Ok(loaded_key) => info!("[DEBUG] (Popup just opened) Loaded key from keyring: '{}'", loaded_key),
+                Ok(loaded_key) => info!(
+                    "[DEBUG] (Popup just opened) Loaded key from keyring: '{}'",
+                    loaded_key
+                ),
                 Err(e) => info!("[DEBUG] (Popup just opened) Failed to load key from keyring: {e}"),
             }
             if let Ok(loaded_key) = keyring_status {
@@ -54,10 +60,10 @@ pub fn show_settings_popup(
                 session_api_key.0 = None;
                 api_key_status.status = "No Key Set".to_string();
             }
-                // Also load persisted AppSettings into the UI state (best-effort)
-                if let Ok(loaded) = load_settings_from_file::<AppSettings>() {
-                    state.fps_setting = loaded.fps_setting;
-                }
+            // Also load persisted AppSettings into the UI state (best-effort)
+            if let Ok(loaded) = load_settings_from_file::<AppSettings>() {
+                state.fps_setting = loaded.fps_setting;
+            }
         }
     }
 

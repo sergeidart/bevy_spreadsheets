@@ -1,9 +1,9 @@
 // src/visual_copier/executers.rs
 
 use bevy::prelude::*;
-use std::path::PathBuf;
 use chrono::Local;
-use fs_extra; // Ensure fs_extra is a dependency in Cargo.toml
+use fs_extra;
+use std::path::PathBuf; // Ensure fs_extra is a dependency in Cargo.toml
 
 use super::resources::CopyError;
 
@@ -33,7 +33,6 @@ pub(crate) fn execute_single_copy_operation(
         // More specific error if creating the directory fails.
         return Err(CopyError::EndPathInvalid(to_path.clone()));
     }
-
 
     let mut options = fs_extra::dir::CopyOptions::new();
     options.overwrite = true; // Overwrite existing files/folders.

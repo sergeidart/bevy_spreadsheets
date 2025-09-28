@@ -1,11 +1,11 @@
 // src/ui/elements/editor/table_header.rs
 use bevy::prelude::*;
-use bevy_egui::egui::{self, Id, Sense, PointerButton, Order, Stroke, Color32};
+use bevy_egui::egui::{self, Color32, Id, Order, PointerButton, Sense, Stroke};
 use egui_extras::TableRow;
 
+use super::state::{EditorWindowState, SheetInteractionState};
 use crate::sheets::definitions::SheetMetadata;
 use crate::sheets::events::RequestReorderColumn;
-use super::state::{EditorWindowState, SheetInteractionState};
 
 pub fn sheet_table_header(
     header_row: &mut TableRow,
@@ -24,8 +24,8 @@ pub fn sheet_table_header(
     let dnd_id_source = Id::new("column_dnd_context")
         .with(&state.selected_category)
         .with(sheet_name);
-    
-    let mut _header_row_y_range: Option<std::ops::RangeInclusive<f32>> = None; 
+
+    let mut _header_row_y_range: Option<std::ops::RangeInclusive<f32>> = None;
     let mut drop_handled_this_frame = false;
 
     // Check for global primary button release once at the start of header processing for this frame
@@ -182,20 +182,23 @@ pub fn sheet_table_header(
                     }
                 }
             } 
-        }); 
-    } 
+        });
+    }
 
     // Global drag release check (if mouse released and not handled by a specific column drop)
     if primary_released_this_frame && !drop_handled_this_frame {
         if state.column_drag_state.source_index.is_some() {
-            info!("Drag cancelled or released outside target (Global Check). Source idx: {:?}", state.column_drag_state.source_index);
+            info!(
+                "Drag cancelled or released outside target (Global Check). Source idx: {:?}",
+                state.column_drag_state.source_index
+            );
             state.column_drag_state.source_index = None;
             // It's good practice to also clear egui's dragged_id if our app thought a drag was active.
             // Egui might have already cleared it, but this ensures consistency.
             ctx.set_dragged_id(Id::NULL);
         }
     }
-    
+
     if num_cols == 0 {
         header_row.col(|ui| {
             ui.strong("(No Columns)");

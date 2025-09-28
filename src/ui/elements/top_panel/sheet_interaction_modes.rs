@@ -3,8 +3,8 @@
 use bevy_egui::egui;
 
 // no sheet events needed here after refactor
-use crate::ui::elements::editor::state::{AiModeState, EditorWindowState, SheetInteractionState};
 use crate::sheets::resources::SheetRegistry;
+use crate::ui::elements::editor::state::{AiModeState, EditorWindowState, SheetInteractionState};
 // use crate::sheets::definitions::RandomPickerMode; // (Initialization now handled when Toybox is open)
 
 #[allow(unused_variables)]
@@ -23,7 +23,8 @@ pub(super) fn show_sheet_interaction_mode_buttons<'a, 'w>(
         }
     } else {
         // Always show 'AI Mode' button when not in AI mode
-        let ai_btn = ui.add_enabled(is_sheet_selected, egui::Button::new("✨ AI Mode"))
+        let ai_btn = ui
+            .add_enabled(is_sheet_selected, egui::Button::new("✨ AI Mode"))
             .on_hover_text("Enable row selection and AI controls");
         {
             let rect = ai_btn.rect;
@@ -41,7 +42,11 @@ pub(super) fn show_sheet_interaction_mode_buttons<'a, 'w>(
     // No separator between AI and Delete rows
 
     // Delete Mode toggler
-    let edit_label = if state.show_edit_mode_panel { "🗑 Exit Delete" } else { "🗑 Delete" };
+    let edit_label = if state.show_edit_mode_panel {
+        "🗑 Exit Delete"
+    } else {
+        "🗑 Delete"
+    };
     // Record the x position so the below-row delete button can align under this toggle
     let edit_btn_resp = ui.add_enabled(is_sheet_selected, egui::Button::new(edit_label));
     if edit_btn_resp.clicked() {
@@ -62,7 +67,11 @@ pub(super) fn show_sheet_interaction_mode_buttons<'a, 'w>(
 
     // No separator before Toybox
     // Toybox menu button that groups Randomizer and Summarizer
-    let toybox_label = if state.show_toybox_menu { "Exit Toybox" } else { "Toybox" };
+    let toybox_label = if state.show_toybox_menu {
+        "Exit Toybox"
+    } else {
+        "Toybox"
+    };
     let toybox_btn = ui.add_enabled(is_sheet_selected, egui::Button::new(toybox_label));
     {
         let rect = toybox_btn.rect;

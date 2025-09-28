@@ -1,8 +1,8 @@
 // src/visual_copier/events.rs
 
+use super::resources::CopyError;
 use bevy::prelude::*;
-use std::path::PathBuf;
-use super::resources::CopyError; // Import CopyError
+use std::path::PathBuf; // Import CopyError
 
 /// Event to add a new, empty copy task.
 #[derive(Event, Debug)]

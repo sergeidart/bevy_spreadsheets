@@ -1,12 +1,13 @@
 // src/sheets/definitions.rs
-use bevy::prelude::{warn, info};
-use serde::{Deserialize, Serialize, de::{self, Deserializer}};
-use std::fmt;
+use bevy::prelude::{info, warn};
+use serde::{
+    de::{self, Deserializer},
+    Deserialize, Serialize,
+};
 use std::collections::HashMap;
+use std::fmt;
 
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Default,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Default)]
 pub enum ColumnDataType {
     #[default]
     String,
@@ -30,19 +31,25 @@ impl<'de> Deserialize<'de> for ColumnDataType {
         let v = serde_json::Value::deserialize(deserializer)?;
         let as_str = match v {
             serde_json::Value::String(s) => s,
-            other => return Err(de::Error::custom(format!("ColumnDataType must be string, got {}", other))),
+            other => {
+                return Err(de::Error::custom(format!(
+                    "ColumnDataType must be string, got {}",
+                    other
+                )))
+            }
         };
-        parse_column_data_type(&as_str).ok_or_else(|| de::Error::custom(format!(
-            "Unknown ColumnDataType '{}'",
-            as_str
-        )))
+        parse_column_data_type(&as_str)
+            .ok_or_else(|| de::Error::custom(format!("Unknown ColumnDataType '{}'", as_str)))
     }
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub enum ColumnValidator {
     Basic(ColumnDataType),
-    Linked { target_sheet_name: String, target_column_index: usize },
+    Linked {
+        target_sheet_name: String,
+        target_column_index: usize,
+    },
     // Schema B: Structure validator (schema embedded elsewhere, no indices here)
     Structure,
 }
@@ -59,7 +66,9 @@ impl<'de> Deserialize<'de> for ColumnValidator {
                 "Structure" => Ok(ColumnValidator::Structure),
                 other => parse_column_data_type(other)
                     .map(ColumnValidator::Basic)
-                    .ok_or_else(|| de::Error::custom(format!("Unknown ColumnValidator string '{}'.", other))),
+                    .ok_or_else(|| {
+                        de::Error::custom(format!("Unknown ColumnValidator string '{}'.", other))
+                    }),
             };
         }
         if let Some(obj) = value.as_object() {
@@ -68,25 +77,44 @@ impl<'de> Deserialize<'de> for ColumnValidator {
                 match tag.as_str() {
                     "Basic" => {
                         if inner.is_string() {
-                            if let Some(dt) = inner.as_str().and_then(parse_column_data_type) { return Ok(ColumnValidator::Basic(dt)); }
+                            if let Some(dt) = inner.as_str().and_then(parse_column_data_type) {
+                                return Ok(ColumnValidator::Basic(dt));
+                            }
                         }
-                        let dt: ColumnDataType = serde_json::from_value(inner.clone())
-                            .map_err(|e| de::Error::custom(format!("Invalid Basic validator payload: {}", e)))?;
+                        let dt: ColumnDataType =
+                            serde_json::from_value(inner.clone()).map_err(|e| {
+                                de::Error::custom(format!("Invalid Basic validator payload: {}", e))
+                            })?;
                         return Ok(ColumnValidator::Basic(dt));
                     }
                     "Linked" => {
                         #[derive(Deserialize)]
-                        struct LinkedHelper { target_sheet_name: String, target_column_index: usize }
-                        let helper: LinkedHelper = serde_json::from_value(inner.clone())
-                            .map_err(|e| de::Error::custom(format!("Invalid Linked validator payload: {}", e)))?;
-                        return Ok(ColumnValidator::Linked { target_sheet_name: helper.target_sheet_name, target_column_index: helper.target_column_index });
+                        struct LinkedHelper {
+                            target_sheet_name: String,
+                            target_column_index: usize,
+                        }
+                        let helper: LinkedHelper =
+                            serde_json::from_value(inner.clone()).map_err(|e| {
+                                de::Error::custom(format!(
+                                    "Invalid Linked validator payload: {}",
+                                    e
+                                ))
+                            })?;
+                        return Ok(ColumnValidator::Linked {
+                            target_sheet_name: helper.target_sheet_name,
+                            target_column_index: helper.target_column_index,
+                        });
                     }
-                    "Structure" => { return Ok(ColumnValidator::Structure); }
+                    "Structure" => {
+                        return Ok(ColumnValidator::Structure);
+                    }
                     _ => {}
                 }
             }
         }
-        Err(de::Error::custom("Unrecognized ColumnValidator representation"))
+        Err(de::Error::custom(
+            "Unrecognized ColumnValidator representation",
+        ))
     }
 }
 
@@ -94,8 +122,15 @@ impl fmt::Display for ColumnValidator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ColumnValidator::Basic(data_type) => write!(f, "Basic({})", data_type),
-            ColumnValidator::Linked { target_sheet_name, target_column_index } => {
-                write!(f, "Linked{{target_sheet_name: \"{}\", target_column_index: {}}}", target_sheet_name, target_column_index)
+            ColumnValidator::Linked {
+                target_sheet_name,
+                target_column_index,
+            } => {
+                write!(
+                    f,
+                    "Linked{{target_sheet_name: \"{}\", target_column_index: {}}}",
+                    target_sheet_name, target_column_index
+                )
             }
             ColumnValidator::Structure => write!(f, "Structure"),
         }
@@ -110,7 +145,9 @@ pub enum RandomPickerMode {
 }
 
 impl Default for RandomPickerMode {
-    fn default() -> Self { RandomPickerMode::Simple }
+    fn default() -> Self {
+        RandomPickerMode::Simple
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -154,6 +191,8 @@ pub struct ColumnDefinition {
     pub filter: Option<String>,
     #[serde(default)]
     pub ai_context: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_enable_row_generation: Option<bool>,
     // Legacy width accepted but never serialized (feature removed)
     #[serde(default, skip_serializing)]
     pub width: Option<f32>,
@@ -179,6 +218,8 @@ pub struct StructureFieldDefinition {
     pub filter: Option<String>,
     #[serde(default)]
     pub ai_context: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ai_enable_row_generation: Option<bool>,
     // Legacy width accepted but not serialized
     #[serde(default, skip_serializing)]
     pub width: Option<f32>,
@@ -201,11 +242,14 @@ impl From<&ColumnDefinition> for StructureFieldDefinition {
             data_type: c.data_type,
             filter: c.filter.clone(),
             ai_context: c.ai_context.clone(),
+            ai_enable_row_generation: c.ai_enable_row_generation,
             width: None,
             structure_schema: c.structure_schema.clone(),
             structure_column_order: c.structure_column_order.clone(),
             structure_key_parent_column_index: c.structure_key_parent_column_index,
-            structure_ancestor_key_parent_column_indices: c.structure_ancestor_key_parent_column_indices.clone(),
+            structure_ancestor_key_parent_column_indices: c
+                .structure_ancestor_key_parent_column_indices
+                .clone(),
         }
     }
 }
@@ -218,6 +262,7 @@ impl ColumnDefinition {
             data_type,
             filter: None,
             ai_context: None,
+            ai_enable_row_generation: None,
             width: None,
             structure_schema: None,
             structure_column_order: None,
@@ -244,17 +289,27 @@ impl ColumnDefinition {
 
 // Default function for ai_model_id
 pub fn default_ai_model_id() -> String {
-    "gemini-2.5-pro-preview-06-05".to_string() // Default model
+    "gemini-flash-latest".to_string() // Default model
 }
 
 // Helper functions for skip_serializing_if
-fn is_zero_usize(v: &usize) -> bool { *v == 0 }
-fn is_simple_mode(m: &RandomPickerMode) -> bool { matches!(m, RandomPickerMode::Simple) }
+fn is_zero_usize(v: &usize) -> bool {
+    *v == 0
+}
+fn is_simple_mode(m: &RandomPickerMode) -> bool {
+    matches!(m, RandomPickerMode::Simple)
+}
 
 // Deprecated AI sampling parameters (kept for backward compatibility on load only)
-pub fn default_temperature() -> Option<f32> { None }
-pub fn default_top_k() -> Option<i32> { None }
-pub fn default_top_p() -> Option<f32> { None }
+pub fn default_temperature() -> Option<f32> {
+    None
+}
+pub fn default_top_k() -> Option<i32> {
+    None
+}
+pub fn default_top_p() -> Option<f32> {
+    None
+}
 
 // --- CORRECTED: Definition of the default function for grounding ---
 /// Default function for `requested_grounding_with_Google Search` field in `SheetMetadata`.
@@ -275,7 +330,10 @@ pub struct SheetMetadata {
     pub ai_general_rule: Option<String>,
     #[serde(default = "default_ai_model_id")]
     pub ai_model_id: String,
-    #[serde(default = "default_temperature", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default = "default_temperature",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub ai_temperature: Option<f32>,
     #[serde(default = "default_top_k", skip_serializing_if = "Option::is_none")]
     pub ai_top_k: Option<i32>,
@@ -324,7 +382,7 @@ impl<'de> Deserialize<'de> for SheetMetadata {
     {
         // First try the current format directly by attempting to deserialize into an identical helper.
         #[derive(Deserialize)]
-    struct CurrentSheetMetadataHelper {
+        struct CurrentSheetMetadataHelper {
             sheet_name: String,
             #[serde(default)]
             category: Option<String>,
@@ -333,15 +391,15 @@ impl<'de> Deserialize<'de> for SheetMetadata {
             columns: Vec<ColumnDefinition>,
             #[serde(default)]
             ai_general_rule: Option<String>,
-            #[serde(default = "default_ai_model_id")] 
+            #[serde(default = "default_ai_model_id")]
             ai_model_id: String,
-            #[serde(default = "default_temperature")] 
+            #[serde(default = "default_temperature")]
             ai_temperature: Option<f32>,
-            #[serde(default = "default_top_k")] 
+            #[serde(default = "default_top_k")]
             ai_top_k: Option<i32>,
-            #[serde(default = "default_top_p")] 
+            #[serde(default = "default_top_p")]
             ai_top_p: Option<f32>,
-            #[serde(default = "default_grounding_with_google_search")] 
+            #[serde(default = "default_grounding_with_google_search")]
             requested_grounding_with_google_search: Option<bool>,
             #[serde(default)]
             ai_enable_row_generation: bool,
@@ -393,20 +451,37 @@ impl<'de> Deserialize<'de> for SheetMetadata {
                 structure_parent: cur.structure_parent,
             };
             // Auto-migrate deprecated AI sampling params if they equal legacy defaults
-            if matches!(meta.ai_temperature, Some(t) if (t - 0.9).abs() < f32::EPSILON || (t - 1.0).abs() < f32::EPSILON) { meta.ai_temperature = None; }
-            if matches!(meta.ai_top_k, Some(k) if k == 1) { meta.ai_top_k = None; }
-            if matches!(meta.ai_top_p, Some(p) if (p - 0.95).abs() < f32::EPSILON || (p - 1.0).abs() < f32::EPSILON) { meta.ai_top_p = None; }
+            if matches!(meta.ai_temperature, Some(t) if (t - 0.9).abs() < f32::EPSILON || (t - 1.0).abs() < f32::EPSILON)
+            {
+                meta.ai_temperature = None;
+            }
+            if matches!(meta.ai_top_k, Some(k) if k == 1) {
+                meta.ai_top_k = None;
+            }
+            if matches!(meta.ai_top_p, Some(p) if (p - 0.95).abs() < f32::EPSILON || (p - 1.0).abs() < f32::EPSILON)
+            {
+                meta.ai_top_p = None;
+            }
             // Migrate legacy map + inline legacy schemas
             let mut legacy_map = cur.structures_meta;
             for (idx, col) in meta.columns.iter_mut().enumerate() {
                 if let Some(inline_schema) = col.structure_schema.as_ref() {
-                    if col.structure_column_order.is_none() { col.structure_column_order = Some((0..inline_schema.len()).collect()); }
+                    if col.structure_column_order.is_none() {
+                        col.structure_column_order = Some((0..inline_schema.len()).collect());
+                    }
                 }
                 if let Some(entry) = legacy_map.remove(&format!("column_{}", idx)) {
                     col.structure_schema = Some(entry.columns.clone());
-                    if col.structure_column_order.is_none() { col.structure_column_order = Some(entry.column_order.clone()); }
-                    if let Some(k) = entry.key_parent_column_index { col.structure_key_parent_column_index = Some(k); }
-                    if !entry.ancestor_key_parent_column_indices.is_empty() { col.structure_ancestor_key_parent_column_indices = Some(entry.ancestor_key_parent_column_indices.clone()); }
+                    if col.structure_column_order.is_none() {
+                        col.structure_column_order = Some(entry.column_order.clone());
+                    }
+                    if let Some(k) = entry.key_parent_column_index {
+                        col.structure_key_parent_column_index = Some(k);
+                    }
+                    if !entry.ancestor_key_parent_column_indices.is_empty() {
+                        col.structure_ancestor_key_parent_column_indices =
+                            Some(entry.ancestor_key_parent_column_indices.clone());
+                    }
                 }
                 col.width = None; // discard legacy width
             }
@@ -415,8 +490,13 @@ impl<'de> Deserialize<'de> for SheetMetadata {
         }
 
         // Fallback legacy
-        let legacy: LegacySheetMetadataHelper = LegacySheetMetadataHelper::deserialize(value.clone())
-            .map_err(|e| de::Error::custom(format!("Failed to parse SheetMetadata (current or legacy): {}", e)))?;
+        let legacy: LegacySheetMetadataHelper =
+            LegacySheetMetadataHelper::deserialize(value.clone()).map_err(|e| {
+                de::Error::custom(format!(
+                    "Failed to parse SheetMetadata (current or legacy): {}",
+                    e
+                ))
+            })?;
 
         let headers = legacy.column_headers.unwrap_or_default();
         let types = legacy.column_types.unwrap_or_default();
@@ -426,8 +506,14 @@ impl<'de> Deserialize<'de> for SheetMetadata {
         let len = headers.len();
         let mut columns: Vec<ColumnDefinition> = Vec::with_capacity(len);
         for i in 0..len {
-            let header = headers.get(i).cloned().unwrap_or_else(|| format!("Column {}", i+1));
-            let type_str = types.get(i).cloned().unwrap_or_else(|| "String".to_string());
+            let header = headers
+                .get(i)
+                .cloned()
+                .unwrap_or_else(|| format!("Column {}", i + 1));
+            let type_str = types
+                .get(i)
+                .cloned()
+                .unwrap_or_else(|| "String".to_string());
             let data_type = parse_column_data_type(&type_str).unwrap_or(ColumnDataType::String);
             let filter_val = filters.get(i).cloned().unwrap_or(None);
             // Attempt validator parse (basic only); ignore complex variants in legacy for now
@@ -441,6 +527,7 @@ impl<'de> Deserialize<'de> for SheetMetadata {
                 data_type,
                 filter: filter_val,
                 ai_context: None,
+                ai_enable_row_generation: None,
                 width: None,
                 structure_schema: None,
                 structure_column_order: None,
@@ -452,23 +539,39 @@ impl<'de> Deserialize<'de> for SheetMetadata {
         let mut meta = SheetMetadata {
             sheet_name: legacy.sheet_name.unwrap_or_else(|| "Unnamed".to_string()),
             category: legacy.category,
-            data_filename: legacy.data_filename.unwrap_or_else(|| "unknown.json".to_string()),
+            data_filename: legacy
+                .data_filename
+                .unwrap_or_else(|| "unknown.json".to_string()),
             columns,
             ai_general_rule: legacy.ai_general_rule,
             ai_model_id: legacy.ai_model_id.unwrap_or_else(|| default_ai_model_id()),
             ai_temperature: legacy.ai_temperature,
             ai_top_k: legacy.ai_top_k,
             ai_top_p: legacy.ai_top_p,
-            requested_grounding_with_google_search: legacy.requested_grounding_with_google_search.or_else(default_grounding_with_google_search),
+            requested_grounding_with_google_search: legacy
+                .requested_grounding_with_google_search
+                .or_else(default_grounding_with_google_search),
             ai_enable_row_generation: false,
             random_picker: legacy.random_picker,
             structure_parent: None,
         };
-        if matches!(meta.ai_temperature, Some(t) if (t - 0.9).abs() < f32::EPSILON || (t - 1.0).abs() < f32::EPSILON) { meta.ai_temperature = None; }
-        if matches!(meta.ai_top_k, Some(k) if k == 1) { meta.ai_top_k = None; }
-        if matches!(meta.ai_top_p, Some(p) if (p - 0.95).abs() < f32::EPSILON || (p - 1.0).abs() < f32::EPSILON) { meta.ai_top_p = None; }
+        if matches!(meta.ai_temperature, Some(t) if (t - 0.9).abs() < f32::EPSILON || (t - 1.0).abs() < f32::EPSILON)
+        {
+            meta.ai_temperature = None;
+        }
+        if matches!(meta.ai_top_k, Some(k) if k == 1) {
+            meta.ai_top_k = None;
+        }
+        if matches!(meta.ai_top_p, Some(p) if (p - 0.95).abs() < f32::EPSILON || (p - 1.0).abs() < f32::EPSILON)
+        {
+            meta.ai_top_p = None;
+        }
         meta.ensure_column_consistency();
-        info!("Loaded legacy metadata for sheet '{}': {} columns", meta.sheet_name, meta.columns.len());
+        info!(
+            "Loaded legacy metadata for sheet '{}': {} columns",
+            meta.sheet_name,
+            meta.columns.len()
+        );
         Ok(meta)
     }
 }
@@ -478,30 +581,46 @@ fn parse_column_data_type(s: &str) -> Option<ColumnDataType> {
     // Accept exact Debug variants or lowercase
     match norm {
         // Supported canonical variants
-    "String" | "string" | "OptionString" | "optionstring" | "Option<String>" => Some(ColumnDataType::String),
-    "Bool" | "bool" | "OptionBool" | "optionbool" | "Option<Bool>" => Some(ColumnDataType::Bool),
-    "I64" | "i64" | "Int" | "int" | "OptionI64" | "optioni64" | "Option<Int>" | "Option<int>" => Some(ColumnDataType::I64),
-    "F64" | "f64" | "Float" | "float" | "OptionF64" | "optionf64" | "Option<Float>" | "Option<float>" => Some(ColumnDataType::F64),
+        "String" | "string" | "OptionString" | "optionstring" | "Option<String>" => {
+            Some(ColumnDataType::String)
+        }
+        "Bool" | "bool" | "OptionBool" | "optionbool" | "Option<Bool>" => {
+            Some(ColumnDataType::Bool)
+        }
+        "I64" | "i64" | "Int" | "int" | "OptionI64" | "optioni64" | "Option<Int>"
+        | "Option<int>" => Some(ColumnDataType::I64),
+        "F64" | "f64" | "Float" | "float" | "OptionF64" | "optionf64" | "Option<Float>"
+        | "Option<float>" => Some(ColumnDataType::F64),
         // Legacy integer widths map to I64
-        "U8" | "u8" | "U16" | "u16" | "U32" | "u32" | "U64" | "u64" |
-    "I8" | "i8" | "I16" | "i16" | "I32" | "i32" => Some(ColumnDataType::I64),
-    "OptionU8" | "optionu8" | "OptionU16" | "optionu16" | "OptionU32" | "optionu32" | "OptionU64" | "optionu64" |
-    "OptionI8" | "optioni8" | "OptionI16" | "optioni16" | "OptionI32" | "optioni32" => Some(ColumnDataType::I64),
+        "U8" | "u8" | "U16" | "u16" | "U32" | "u32" | "U64" | "u64" | "I8" | "i8" | "I16"
+        | "i16" | "I32" | "i32" => Some(ColumnDataType::I64),
+        "OptionU8" | "optionu8" | "OptionU16" | "optionu16" | "OptionU32" | "optionu32"
+        | "OptionU64" | "optionu64" | "OptionI8" | "optioni8" | "OptionI16" | "optioni16"
+        | "OptionI32" | "optioni32" => Some(ColumnDataType::I64),
         // Legacy float f32 maps to F64
-    "F32" | "f32" => Some(ColumnDataType::F64),
-    "OptionF32" | "optionf32" => Some(ColumnDataType::F64),
+        "F32" | "f32" => Some(ColumnDataType::F64),
+        "OptionF32" | "optionf32" => Some(ColumnDataType::F64),
         _ => None,
     }
 }
 
 fn parse_legacy_validator(raw: &str, fallback_type: ColumnDataType) -> Option<ColumnValidator> {
     let trimmed = raw.trim();
-    if trimmed.is_empty() { return None; }
-    if let Some(stripped) = trimmed.strip_prefix("Basic(").and_then(|r| r.strip_suffix(')')) {
-        if let Some(dt) = parse_column_data_type(stripped) { return Some(ColumnValidator::Basic(dt)); }
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some(stripped) = trimmed
+        .strip_prefix("Basic(")
+        .and_then(|r| r.strip_suffix(')'))
+    {
+        if let Some(dt) = parse_column_data_type(stripped) {
+            return Some(ColumnValidator::Basic(dt));
+        }
         return Some(ColumnValidator::Basic(fallback_type));
     }
-    if let Some(dt) = parse_column_data_type(trimmed) { return Some(ColumnValidator::Basic(dt)); }
+    if let Some(dt) = parse_column_data_type(trimmed) {
+        return Some(ColumnValidator::Basic(dt));
+    }
     Some(ColumnValidator::Basic(fallback_type))
 }
 
@@ -514,10 +633,7 @@ impl SheetMetadata {
     ) -> Self {
         let columns = (0..num_cols)
             .map(|i| {
-                ColumnDefinition::new_basic(
-                    format!("Column {}", i + 1),
-                    ColumnDataType::String,
-                )
+                ColumnDefinition::new_basic(format!("Column {}", i + 1), ColumnDataType::String)
             })
             .collect();
 

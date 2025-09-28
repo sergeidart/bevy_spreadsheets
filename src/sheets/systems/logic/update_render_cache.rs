@@ -4,11 +4,13 @@ use std::collections::HashSet; // For collecting unique sheet identifiers
 
 use crate::{
     sheets::{
-        definitions::{ColumnValidator, ColumnDataType},
+        definitions::{ColumnDataType, ColumnValidator},
         events::{
-            RequestSheetRevalidation, SheetDataModifiedInRegistryEvent,
             // Potentially listen to other events that change sheet structure or metadata
-            RequestDeleteSheet, RequestRenameSheet,
+            RequestDeleteSheet,
+            RequestRenameSheet,
+            RequestSheetRevalidation,
+            SheetDataModifiedInRegistryEvent,
         },
         resources::{SheetRegistry, SheetRenderCache},
     },
@@ -58,7 +60,10 @@ pub fn handle_sheet_render_cache_update(
         render_cache.clear_sheet_render_data(&event.category, &event.sheet_name);
         // Also remove from sheets_to_rebuild if it was marked, as it no longer exists
         sheets_to_rebuild.remove(&(event.category.clone(), event.sheet_name.clone()));
-        debug!("Cleared render cache for deleted sheet: '{:?}/{}'", event.category, event.sheet_name);
+        debug!(
+            "Cleared render cache for deleted sheet: '{:?}/{}'",
+            event.category, event.sheet_name
+        );
     }
 
     // Handle cache renaming for renamed sheets
@@ -68,15 +73,20 @@ pub fn handle_sheet_render_cache_update(
         if sheets_to_rebuild.remove(&(event.category.clone(), event.old_name.clone())) {
             sheets_to_rebuild.insert((event.category.clone(), event.new_name.clone()));
         }
-        debug!("Renamed render cache entry: '{:?}/{}' -> '{:?}/{}'", event.category, event.old_name, event.category, event.new_name);
+        debug!(
+            "Renamed render cache entry: '{:?}/{}' -> '{:?}/{}'",
+            event.category, event.old_name, event.category, event.new_name
+        );
     }
-
 
     if sheets_to_rebuild.is_empty() {
         return;
     }
 
-    debug!("Rebuilding render cache for sheets: {:?}", sheets_to_rebuild);
+    debug!(
+        "Rebuilding render cache for sheets: {:?}",
+        sheets_to_rebuild
+    );
 
     for (category, sheet_name) in sheets_to_rebuild {
         if let Some(sheet_data) = registry.get_sheet(&category, &sheet_name) {
@@ -86,12 +96,17 @@ pub fn handle_sheet_render_cache_update(
 
                 // Get a mutable reference to the sheet's cache, ensuring dimensions
                 let current_sheet_render_cache = render_cache.ensure_and_get_sheet_cache_mut(
-                    &category, &sheet_name, num_rows, num_cols
+                    &category,
+                    &sheet_name,
+                    num_rows,
+                    num_cols,
                 );
 
                 for r_idx in 0..num_rows {
                     for c_idx in 0..num_cols {
-                        let cell_value_str = sheet_data.grid.get(r_idx)
+                        let cell_value_str = sheet_data
+                            .grid
+                            .get(r_idx)
                             .and_then(|row| row.get(c_idx))
                             .map(|s| s.as_str())
                             .unwrap_or(""); // Default to empty string if out of bounds
@@ -105,63 +120,81 @@ pub fn handle_sheet_render_cache_update(
                             // Remove unused val_state assignment
                             let (_val_state, _allowed_values_opt) = match &col_def.validator {
                                 Some(ColumnValidator::Basic(data_type)) => {
-                                    let (state, _parse_error) = validate_basic_cell(cell_value_str, *data_type);
+                                    let (state, _parse_error) =
+                                        validate_basic_cell(cell_value_str, *data_type);
                                     (state, None)
-                                 }
-                                Some(ColumnValidator::Linked { target_sheet_name, target_column_index }) => {
+                                }
+                                Some(ColumnValidator::Linked {
+                                    target_sheet_name,
+                                    target_column_index,
+                                }) => {
                                     validate_linked_cell(
-                                         cell_value_str,
-                                         target_sheet_name,
-                                         *target_column_index,
-                                         &registry,
-                                         &mut editor_state, // Pass Local state mutably for linked_column_cache access
-                                     )
-                                 }
+                                        cell_value_str,
+                                        target_sheet_name,
+                                        *target_column_index,
+                                        &registry,
+                                        &mut editor_state, // Pass Local state mutably for linked_column_cache access
+                                    )
+                                }
                                 Some(ColumnValidator::Structure) => {
                                     // Treat structure cells as always valid (content is JSON string) for now
                                     (ValidationState::Valid, None)
                                 }
-                                None => { // Treat as basic string if no validator
-                                    let (state, _parse_error) = validate_basic_cell(cell_value_str, ColumnDataType::String);
+                                None => {
+                                    // Treat as basic string if no validator
+                                    let (state, _parse_error) =
+                                        validate_basic_cell(cell_value_str, ColumnDataType::String);
                                     (state, None)
-                                 }
-                             };
+                                }
+                            };
                             // Directly use validation in the render_cell assignment below
                         } else {
-                             error!("Render Cache: Metadata column index mismatch for sheet '{:?}/{}' at column {}", category, sheet_name, c_idx);
-                             // Directly use ValidationState::Invalid below
+                            error!("Render Cache: Metadata column index mismatch for sheet '{:?}/{}' at column {}", category, sheet_name, c_idx);
+                            // Directly use ValidationState::Invalid below
                         }
 
                         // Update the specific cell in the render cache
-                        if let Some(render_cell) = current_sheet_render_cache.get_mut(r_idx).and_then(|row| row.get_mut(c_idx)) {
+                        if let Some(render_cell) = current_sheet_render_cache
+                            .get_mut(r_idx)
+                            .and_then(|row| row.get_mut(c_idx))
+                        {
                             // Custom preview for structure cells: show first row only, truncated
                             let preview_text = if let Some(col_def) = col_def_opt {
                                 if matches!(col_def.validator, Some(ColumnValidator::Structure)) {
                                     generate_structure_preview(cell_value_str)
-                                } else { cell_value_str.to_string() }
-                            } else { cell_value_str.to_string() };
+                                } else {
+                                    cell_value_str.to_string()
+                                }
+                            } else {
+                                cell_value_str.to_string()
+                            };
                             render_cell.display_text = preview_text;
                             render_cell.validation_state = if let Some(col_def) = col_def_opt {
                                 // Use val_state from above
                                 let (val_state, _) = match &col_def.validator {
                                     Some(ColumnValidator::Basic(data_type)) => {
-                                        let (state, _) = validate_basic_cell(cell_value_str, *data_type);
+                                        let (state, _) =
+                                            validate_basic_cell(cell_value_str, *data_type);
                                         (state, None)
                                     }
-                                    Some(ColumnValidator::Linked { target_sheet_name, target_column_index }) => {
-                                        validate_linked_cell(
-                                            cell_value_str,
-                                            target_sheet_name,
-                                            *target_column_index,
-                                            &registry,
-                                            &mut editor_state,
-                                        )
-                                    }
+                                    Some(ColumnValidator::Linked {
+                                        target_sheet_name,
+                                        target_column_index,
+                                    }) => validate_linked_cell(
+                                        cell_value_str,
+                                        target_sheet_name,
+                                        *target_column_index,
+                                        &registry,
+                                        &mut editor_state,
+                                    ),
                                     Some(ColumnValidator::Structure) => {
                                         (ValidationState::Valid, None)
                                     }
                                     None => {
-                                        let (state, _) = validate_basic_cell(cell_value_str, ColumnDataType::String);
+                                        let (state, _) = validate_basic_cell(
+                                            cell_value_str,
+                                            ColumnDataType::String,
+                                        );
                                         (state, None)
                                     }
                                 };
@@ -177,12 +210,19 @@ pub fn handle_sheet_render_cache_update(
                 } // end row loop
                 debug!("Render cache updated for '{:?}/{}'.", category, sheet_name);
             } else {
-                warn!("Cannot update render cache for sheet '{:?}/{}': Metadata missing.", category, sheet_name);
+                warn!(
+                    "Cannot update render cache for sheet '{:?}/{}': Metadata missing.",
+                    category, sheet_name
+                );
                 render_cache.clear_sheet_render_data(&category, &sheet_name);
             }
         } else {
             // Sheet not found in registry, ensure its render cache is also cleared
-            trace!("Sheet '{:?}/{}' not found in registry. Clearing its render cache.", category, sheet_name);
+            trace!(
+                "Sheet '{:?}/{}' not found in registry. Clearing its render cache.",
+                category,
+                sheet_name
+            );
             render_cache.clear_sheet_render_data(&category, &sheet_name);
         }
     }
@@ -190,32 +230,54 @@ pub fn handle_sheet_render_cache_update(
 
 // Generate a concise preview for a structure cell: first row's non-empty values joined by ' | ' and truncated.
 fn generate_structure_preview(raw: &str) -> String {
-    if raw.trim().is_empty() { return String::new(); }
+    if raw.trim().is_empty() {
+        return String::new();
+    }
     let mut out = String::new();
     let mut multi_rows = false;
     if let Ok(val) = serde_json::from_str::<serde_json::Value>(raw) {
         match val {
             serde_json::Value::Array(arr) => {
-                if arr.iter().all(|v| v.is_string()) { // single row new format
-                    let vals: Vec<&str> = arr.iter().map(|v| v.as_str().unwrap_or("")).filter(|s| !s.trim().is_empty()).collect();
+                if arr.iter().all(|v| v.is_string()) {
+                    // single row new format
+                    let vals: Vec<&str> = arr
+                        .iter()
+                        .map(|v| v.as_str().unwrap_or(""))
+                        .filter(|s| !s.trim().is_empty())
+                        .collect();
                     out = vals.join(" | ");
-                } else if arr.iter().all(|v| v.is_array()) { // multi-row new format
+                } else if arr.iter().all(|v| v.is_array()) {
+                    // multi-row new format
                     multi_rows = true;
                     if let Some(first) = arr.first().and_then(|v| v.as_array()) {
-                        let vals: Vec<&str> = first.iter().map(|v| v.as_str().unwrap_or("")).filter(|s| !s.trim().is_empty()).collect();
+                        let vals: Vec<&str> = first
+                            .iter()
+                            .map(|v| v.as_str().unwrap_or(""))
+                            .filter(|s| !s.trim().is_empty())
+                            .collect();
                         out = vals.join(" | ");
                     }
-                } else if arr.iter().all(|v| v.is_object()) { // legacy multi-row objects
+                } else if arr.iter().all(|v| v.is_object()) {
+                    // legacy multi-row objects
                     multi_rows = true;
                     if let Some(first) = arr.first().and_then(|v| v.as_object()) {
-                        let mut kv: Vec<String> = first.iter().map(|(k,v)| format!("{}={}", k, v.as_str().unwrap_or(&v.to_string()))).filter(|s| !s.ends_with('=')).collect();
+                        let mut kv: Vec<String> = first
+                            .iter()
+                            .map(|(k, v)| format!("{}={}", k, v.as_str().unwrap_or(&v.to_string())))
+                            .filter(|s| !s.ends_with('='))
+                            .collect();
                         kv.sort();
                         out = kv.join(" | ");
                     }
                 }
             }
-            serde_json::Value::Object(map) => { // legacy single object
-                let mut kv: Vec<String> = map.iter().map(|(k,v)| format!("{}={}", k, v.as_str().unwrap_or(&v.to_string()))).filter(|s| !s.ends_with('=')).collect();
+            serde_json::Value::Object(map) => {
+                // legacy single object
+                let mut kv: Vec<String> = map
+                    .iter()
+                    .map(|(k, v)| format!("{}={}", k, v.as_str().unwrap_or(&v.to_string())))
+                    .filter(|s| !s.ends_with('='))
+                    .collect();
                 kv.sort();
                 out = kv.join(" | ");
             }
@@ -226,6 +288,8 @@ fn generate_structure_preview(raw: &str) -> String {
         let truncated: String = out.chars().take(64).collect();
         out = truncated + "…";
     }
-    if multi_rows { out.push_str("..."); }
+    if multi_rows {
+        out.push_str("...");
+    }
     out
 }

@@ -4,11 +4,13 @@ use bevy_egui::egui;
 use bevy_tokio_tasks::TokioTasksRuntime;
 
 use crate::sheets::resources::SheetRegistry;
-use crate::ui::elements::editor::state::{EditorWindowState, ToyboxMode, AiModeState, SheetInteractionState};
+use crate::ui::elements::editor::state::{
+    AiModeState, EditorWindowState, SheetInteractionState, ToyboxMode,
+};
 // Import the SheetEventWriters SystemParam struct
+use crate::ui::elements::editor::ai_control_panel::show_ai_control_panel;
 use crate::ui::elements::editor::main_editor::SheetEventWriters;
 use crate::visual_copier::events::RequestAppExit;
-use crate::ui::elements::editor::ai_control_panel::show_ai_control_panel;
 
 // Declare sub-modules
 pub mod sheet_management_bar;
@@ -26,7 +28,7 @@ pub use self::orchestrator::show_top_panel_orchestrator;
 mod orchestrator {
     use super::*;
     // No extra imports needed here
-    
+
     // Calculate an approximate button width for a given text using current UI fonts and padding
     fn calc_button_width(ui: &egui::Ui, text: &str) -> f32 {
         let style = ui.style().clone();
@@ -47,8 +49,8 @@ mod orchestrator {
         state: &mut EditorWindowState,
         registry: &mut SheetRegistry,
         sheet_writers: &mut SheetEventWriters<'w>, // Received as &mut
-    mut request_app_exit_writer: EventWriter<'w, RequestAppExit>,
-    mut close_structure_writer: EventWriter<'w, crate::sheets::events::CloseStructureViewEvent>,
+        mut request_app_exit_writer: EventWriter<'w, RequestAppExit>,
+        mut close_structure_writer: EventWriter<'w, crate::sheets::events::CloseStructureViewEvent>,
         runtime: &TokioTasksRuntime,
         session_api_key: &crate::SessionApiKey,
         commands: &mut Commands,
@@ -267,6 +269,7 @@ mod orchestrator {
                             &*registry,
                             commands,
                             session_api_key,
+                            &mut sheet_writers.toggle_ai_row_generation,
                         );
                     }
                     if state.current_interaction_mode == SheetInteractionState::DeleteModeActive {

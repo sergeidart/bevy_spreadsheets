@@ -1,40 +1,37 @@
 // src/ui/elements/editor/main_editor.rs
 use bevy::ecs::system::SystemParam;
-use bevy::prelude::*;
-use bevy_egui::{egui, EguiContexts};
 use bevy::input::keyboard::KeyCode;
+use bevy::prelude::*;
 use bevy::window::Window;
+use bevy_egui::{egui, EguiContexts};
 use bevy_tokio_tasks::TokioTasksRuntime;
 
-use crate::sheets::{
-    events::{
-        AddSheetRowRequest, RequestDeleteSheet, RequestInitiateFileUpload, RequestRenameSheet,
-        RequestUpdateColumnName, RequestUpdateColumnValidator, UpdateCellEvent, RequestDeleteRows,
-        RequestSheetRevalidation, SheetDataModifiedInRegistryEvent, RequestDeleteColumns,
-        RequestAddColumn, RequestReorderColumn, RequestCreateNewSheet, CloseStructureViewEvent,
-        RequestCreateCategory, RequestDeleteCategory,
-    },
-    resources::{SheetRegistry, SheetRenderCache},
-};
-use crate::ui::{
-    elements::top_panel::show_top_panel_orchestrator,
-    UiFeedbackState,
-};
-use super::state::{AiModeState, EditorWindowState, SheetInteractionState};
+use super::editor_ai_log;
 use super::editor_event_handling;
 use super::editor_popups_integration;
 use super::editor_sheet_display;
-use super::editor_ai_log;
+use super::state::{AiModeState, EditorWindowState, SheetInteractionState};
+use crate::sheets::{
+    events::{
+        AddSheetRowRequest, CloseStructureViewEvent, RequestAddColumn, RequestCreateCategory,
+        RequestCreateNewSheet, RequestDeleteCategory, RequestDeleteColumns, RequestDeleteRows,
+        RequestDeleteSheet, RequestInitiateFileUpload, RequestRenameSheet, RequestReorderColumn,
+        RequestSheetRevalidation, RequestToggleAiRowGeneration, RequestUpdateColumnName,
+        RequestUpdateColumnValidator, SheetDataModifiedInRegistryEvent, UpdateCellEvent,
+    },
+    resources::{SheetRegistry, SheetRenderCache},
+};
+use crate::ui::{elements::top_panel::show_top_panel_orchestrator, UiFeedbackState};
 
+use crate::visual_copier::{
+    events::{
+        PickFolderRequest, QueueTopPanelCopyEvent, RequestAppExit, ReverseTopPanelFoldersEvent,
+        VisualCopierStateChanged,
+    },
+    resources::VisualCopierManager,
+};
 use crate::ApiKeyDisplayStatus;
 use crate::SessionApiKey;
-use crate::visual_copier::{
-    resources::VisualCopierManager,
-    events::{
-        PickFolderRequest, QueueTopPanelCopyEvent, ReverseTopPanelFoldersEvent,
-        VisualCopierStateChanged, RequestAppExit,
-    },
-};
 
 #[derive(SystemParam)]
 pub struct SheetEventWriters<'w> {
@@ -53,6 +50,7 @@ pub struct SheetEventWriters<'w> {
     pub reorder_column: EventWriter<'w, RequestReorderColumn>,
     pub revalidate: EventWriter<'w, RequestSheetRevalidation>,
     pub open_structure: EventWriter<'w, crate::sheets::events::OpenStructureViewEvent>,
+    pub toggle_ai_row_generation: EventWriter<'w, RequestToggleAiRowGeneration>,
     // Category management
     pub create_category: EventWriter<'w, RequestCreateCategory>,
     pub delete_category: EventWriter<'w, RequestDeleteCategory>,
@@ -68,7 +66,6 @@ pub struct CopierEventWriters<'w> {
     pub state_changed: EventWriter<'w, VisualCopierStateChanged>,
 }
 
-
 #[derive(SystemParam)]
 pub struct EditorMiscParams<'w> {
     pub registry: ResMut<'w, SheetRegistry>,
@@ -81,7 +78,6 @@ pub struct EditorMiscParams<'w> {
     pub request_app_exit_writer: EventWriter<'w, RequestAppExit>,
     pub close_structure_writer: EventWriter<'w, CloseStructureViewEvent>,
 }
-
 
 #[allow(clippy::too_many_arguments)]
 pub fn generic_sheet_editor_ui(
@@ -96,7 +92,9 @@ pub fn generic_sheet_editor_ui(
     keys: Res<ButtonInput<KeyCode>>,
 ) {
     // Guard: If all windows are closed (app shutting down) skip egui usage to avoid panic
-    if window_query.is_empty() { return; }
+    if window_query.is_empty() {
+        return;
+    }
     let ctx = contexts.ctx_mut();
     let initial_selected_category = state.selected_category.clone();
     let initial_selected_sheet_name = state.selected_sheet_name.clone();
@@ -115,11 +113,11 @@ pub fn generic_sheet_editor_ui(
         ctx,
         &mut state,
         &mut sheet_writers,
-    &mut misc.registry,
+        &mut misc.registry,
         &misc.ui_feedback,
         &mut misc.api_key_status_res,
         &mut misc.session_api_key_res,
-    &mut misc.copier_manager,
+        &mut misc.copier_manager,
         &mut copier_writers.pick_folder,
         &mut copier_writers.queue_top_panel_copy,
         &mut copier_writers.reverse_folders,
@@ -147,8 +145,8 @@ pub fn generic_sheet_editor_ui(
         if keys.just_pressed(KeyCode::Escape) && !state.virtual_structure_stack.is_empty() {
             misc.close_structure_writer.write(CloseStructureViewEvent);
         }
-    // Fix row height to the checkbox/interact size so cell height never changes when the left checkbox appears
-    let row_height = ui.style().spacing.interact_size.y;
+        // Fix row height to the checkbox/interact size so cell height never changes when the left checkbox appears
+        let row_height = ui.style().spacing.interact_size.y;
 
         // Keep the top panel minimal (Back + App Exit + toolbars) and move category/sheet row down
         show_top_panel_orchestrator(
@@ -163,14 +161,16 @@ pub fn generic_sheet_editor_ui(
             &mut commands,
         );
 
-    ui.add_space(10.0);
+        ui.add_space(10.0);
 
         let current_category_clone = state.selected_category.clone();
         let current_sheet_name_clone = state.selected_sheet_name.clone();
 
-    // Mode panels are now drawn inline in the top controls (above the delimiter)
+        // Mode panels are now drawn inline in the top controls (above the delimiter)
 
-    if !(state.current_interaction_mode == SheetInteractionState::AiModeActive && state.ai_mode == AiModeState::Reviewing) {
+        if !(state.current_interaction_mode == SheetInteractionState::AiModeActive
+            && state.ai_mode == AiModeState::Reviewing)
+        {
             editor_sheet_display::show_sheet_table(
                 ui,
                 ctx,
@@ -198,7 +198,7 @@ pub fn generic_sheet_editor_ui(
             ui.add_space(5.0);
         }
 
-    // (moved to a global bottom panel below this CentralPanel block)
+        // (moved to a global bottom panel below this CentralPanel block)
 
         // AI output bottom panel rendered after main content outside this closure
     });

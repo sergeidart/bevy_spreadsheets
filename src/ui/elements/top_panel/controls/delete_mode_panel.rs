@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 
 use crate::sheets::events::{RequestDeleteColumns, RequestDeleteRows};
-use crate::ui::elements::editor::state::EditorWindowState; 
+use crate::ui::elements::editor::state::EditorWindowState;
 
 // MODIFIED: Helper struct generic over borrow lifetime 'a, and EventWriter world lifetime 'w
 pub(crate) struct DeleteModeEventWriters<'a, 'w> {
@@ -14,7 +14,7 @@ pub(crate) struct DeleteModeEventWriters<'a, 'w> {
 // MODIFIED: Function generic over 'a and 'w. Make it `pub` to be callable from main_editor.
 pub fn show_delete_mode_active_controls<'a, 'w>(
     ui: &mut egui::Ui,
-    state: &mut EditorWindowState, 
+    state: &mut EditorWindowState,
     event_writers: DeleteModeEventWriters<'a, 'w>,
 ) {
     ui.horizontal_wrapped(|ui| {
@@ -34,8 +34,10 @@ pub fn show_delete_mode_active_controls<'a, 'w>(
 
         let mut button_text = "Delete Selected".to_string();
         if rows_selected_count > 0 && cols_selected_count > 0 {
-            button_text =
-                format!("Delete ({} Rows, {} Cols)", rows_selected_count, cols_selected_count);
+            button_text = format!(
+                "Delete ({} Rows, {} Cols)",
+                rows_selected_count, cols_selected_count
+            );
         } else if rows_selected_count > 0 {
             button_text = format!("Delete {} Row(s)", rows_selected_count);
         } else if cols_selected_count > 0 {
@@ -47,7 +49,11 @@ pub fn show_delete_mode_active_controls<'a, 'w>(
             .clicked()
         {
             // Determine effective target sheet (virtual if structure view active)
-            let effective_sheet_name = if let Some(vctx) = state.virtual_structure_stack.last() { &vctx.virtual_sheet_name } else { state.selected_sheet_name.as_ref().unwrap() };
+            let effective_sheet_name = if let Some(vctx) = state.virtual_structure_stack.last() {
+                &vctx.virtual_sheet_name
+            } else {
+                state.selected_sheet_name.as_ref().unwrap()
+            };
             if state.selected_sheet_name.is_some() {
                 if rows_selected_count > 0 {
                     event_writers
@@ -69,8 +75,8 @@ pub fn show_delete_mode_active_controls<'a, 'w>(
                 }
 
                 // Always exit Delete Mode after a delete action is performed
-                    state.reset_interaction_modes_and_selections();
-                    state.show_edit_mode_panel = false;
+                state.reset_interaction_modes_and_selections();
+                state.show_edit_mode_panel = false;
                 state.force_filter_recalculation = true;
             }
         }

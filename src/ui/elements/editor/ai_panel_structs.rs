@@ -3,7 +3,8 @@ use serde::{Deserialize, Serialize};
 
 // ++ Make structs pub(crate) or pub if not already ++
 #[derive(Serialize, Deserialize, Debug)]
-pub(crate) struct AiColumnContext { // Changed to pub(crate)
+pub(crate) struct AiColumnContext {
+    // Changed to pub(crate)
     pub header: String,
     pub original_value: String,
     pub data_type: String,
@@ -12,7 +13,8 @@ pub(crate) struct AiColumnContext { // Changed to pub(crate)
 }
 
 #[derive(Serialize, Deserialize, Debug)]
-pub(crate) struct AiPromptPayload { // Changed to pub(crate)
+pub(crate) struct AiPromptPayload {
+    // Changed to pub(crate)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub general_sheet_rule: Option<String>,
     pub columns_to_process: Vec<AiColumnContext>,

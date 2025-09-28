@@ -1,27 +1,46 @@
 // src/ui/elements/editor/structure_navigation.rs
+use crate::sheets::definitions::{
+    ColumnDataType, ColumnDefinition, ColumnValidator, SheetGridData, SheetMetadata,
+};
+use crate::sheets::{
+    events::{CloseStructureViewEvent, OpenStructureViewEvent, SheetDataModifiedInRegistryEvent},
+    resources::{SheetRegistry, SheetRenderCache},
+};
+use crate::ui::elements::editor::state::{
+    EditorWindowState, StructureParentContext, VirtualStructureContext,
+};
 use bevy::prelude::*;
-use crate::sheets::{resources::{SheetRegistry, SheetRenderCache}, events::{OpenStructureViewEvent, CloseStructureViewEvent, SheetDataModifiedInRegistryEvent}};
-use crate::ui::elements::editor::state::{EditorWindowState, StructureParentContext, VirtualStructureContext};
-use crate::sheets::definitions::{SheetMetadata, ColumnDefinition, ColumnDataType, SheetGridData, ColumnValidator};
 
 // Parse JSON object string into headers + single row
 fn parse_structure_cell(json_str: &str) -> (Vec<String>, Vec<String>) {
-    let parsed: serde_json::Value = serde_json::from_str(json_str).unwrap_or_else(|_| serde_json::Value::Object(Default::default()));
+    let parsed: serde_json::Value = serde_json::from_str(json_str)
+        .unwrap_or_else(|_| serde_json::Value::Object(Default::default()));
     if let serde_json::Value::Object(map) = parsed {
         let mut headers: Vec<String> = map.keys().cloned().collect();
         headers.sort();
         let mut row: Vec<String> = Vec::with_capacity(headers.len());
         for h in &headers {
-            let cell_str = map.get(h).map(|v| match v { serde_json::Value::String(s) => s.clone(), _ => v.to_string() }).unwrap_or_default();
+            let cell_str = map
+                .get(h)
+                .map(|v| match v {
+                    serde_json::Value::String(s) => s.clone(),
+                    _ => v.to_string(),
+                })
+                .unwrap_or_default();
             row.push(cell_str);
         }
         (headers, row)
-    } else { (Vec::new(), Vec::new()) }
+    } else {
+        (Vec::new(), Vec::new())
+    }
 }
 
 // Build a virtual sheet name based on parent context & nesting depth
 fn make_virtual_sheet_name(parent: &StructureParentContext, depth: usize) -> String {
-    format!("__virtual__{}__r{}c{}__lvl{}", parent.parent_sheet, parent.parent_row, parent.parent_col, depth)
+    format!(
+        "__virtual__{}__r{}c{}__lvl{}",
+        parent.parent_sheet, parent.parent_row, parent.parent_col, depth
+    )
 }
 
 pub fn handle_open_structure_view(
@@ -38,11 +57,16 @@ pub fn handle_open_structure_view(
                 if let Some(row) = sheet.grid.get(ev.row_index) {
                     if let Some(cell) = row.get(ev.col_index) {
                         let parent_col = meta.columns.get(ev.col_index);
-                        let (headers, all_rows, schema_defs) = if let Some(parent_col_def) = parent_col {
-                            if matches!(parent_col_def.validator, Some(ColumnValidator::Structure)) {
+                        let (headers, all_rows, schema_defs) = if let Some(parent_col_def) =
+                            parent_col
+                        {
+                            if matches!(parent_col_def.validator, Some(ColumnValidator::Structure))
+                            {
                                 if let Some(schema) = &parent_col_def.structure_schema {
-                                    let parsed: serde_json::Value = serde_json::from_str(cell).unwrap_or(serde_json::Value::Null);
-                                    let headers: Vec<String> = schema.iter().map(|f| f.header.clone()).collect();
+                                    let parsed: serde_json::Value = serde_json::from_str(cell)
+                                        .unwrap_or(serde_json::Value::Null);
+                                    let headers: Vec<String> =
+                                        schema.iter().map(|f| f.header.clone()).collect();
                                     let mut rows: Vec<Vec<String>> = Vec::new();
                                     match parsed {
                                         serde_json::Value::Array(arr) => {
@@ -50,31 +74,59 @@ pub fn handle_open_structure_view(
                                                 // Legacy object form (array of objects)
                                                 for obj_val in arr.iter() {
                                                     let obj = obj_val.as_object();
-                                                    let mut row_vals: Vec<String> = Vec::with_capacity(headers.len());
+                                                    let mut row_vals: Vec<String> =
+                                                        Vec::with_capacity(headers.len());
                                                     for h in headers.iter() {
-                                                        let val = obj.and_then(|m| m.get(h)).cloned().unwrap_or(serde_json::Value::String(String::new()));
-                                                        row_vals.push(match val { serde_json::Value::String(s) => s, other => other.to_string() });
+                                                        let val = obj
+                                                            .and_then(|m| m.get(h))
+                                                            .cloned()
+                                                            .unwrap_or(serde_json::Value::String(
+                                                                String::new(),
+                                                            ));
+                                                        row_vals.push(match val {
+                                                            serde_json::Value::String(s) => s,
+                                                            other => other.to_string(),
+                                                        });
                                                     }
                                                     rows.push(row_vals);
                                                 }
                                             } else if arr.iter().all(|v| v.is_array()) {
                                                 // New multi-row positional format: [[..],[..]]
                                                 for inner in arr.iter() {
-                                                    if let serde_json::Value::Array(inner_vals) = inner {
-                                                        let mut row_vals: Vec<String> = Vec::with_capacity(headers.len());
+                                                    if let serde_json::Value::Array(inner_vals) =
+                                                        inner
+                                                    {
+                                                        let mut row_vals: Vec<String> =
+                                                            Vec::with_capacity(headers.len());
                                                         for (i, _h) in headers.iter().enumerate() {
-                                                            let val = inner_vals.get(i).cloned().unwrap_or(serde_json::Value::String(String::new()));
-                                                            row_vals.push(match val { serde_json::Value::String(s) => s, other => other.to_string() });
+                                                            let val = inner_vals
+                                                                .get(i)
+                                                                .cloned()
+                                                                .unwrap_or(
+                                                                    serde_json::Value::String(
+                                                                        String::new(),
+                                                                    ),
+                                                                );
+                                                            row_vals.push(match val {
+                                                                serde_json::Value::String(s) => s,
+                                                                other => other.to_string(),
+                                                            });
                                                         }
                                                         rows.push(row_vals);
                                                     }
                                                 }
                                             } else if arr.iter().all(|v| v.is_string()) {
                                                 // New single-row positional format: [..]
-                                                let mut row_vals: Vec<String> = Vec::with_capacity(headers.len());
+                                                let mut row_vals: Vec<String> =
+                                                    Vec::with_capacity(headers.len());
                                                 for (i, _h) in headers.iter().enumerate() {
-                                                    let val = arr.get(i).cloned().unwrap_or(serde_json::Value::String(String::new()));
-                                                    row_vals.push(match val { serde_json::Value::String(s) => s, other => other.to_string() });
+                                                    let val = arr.get(i).cloned().unwrap_or(
+                                                        serde_json::Value::String(String::new()),
+                                                    );
+                                                    row_vals.push(match val {
+                                                        serde_json::Value::String(s) => s,
+                                                        other => other.to_string(),
+                                                    });
                                                 }
                                                 rows.push(row_vals);
                                             } else {
@@ -84,73 +136,155 @@ pub fn handle_open_structure_view(
                                         }
                                         serde_json::Value::Object(map) => {
                                             // Legacy single object
-                                            let mut row_vals: Vec<String> = Vec::with_capacity(headers.len());
+                                            let mut row_vals: Vec<String> =
+                                                Vec::with_capacity(headers.len());
                                             for h in headers.iter() {
-                                                let val = map.get(h).cloned().unwrap_or(serde_json::Value::String(String::new()));
-                                                row_vals.push(match val { serde_json::Value::String(s) => s, other => other.to_string() });
+                                                let val = map.get(h).cloned().unwrap_or(
+                                                    serde_json::Value::String(String::new()),
+                                                );
+                                                row_vals.push(match val {
+                                                    serde_json::Value::String(s) => s,
+                                                    other => other.to_string(),
+                                                });
                                             }
                                             rows.push(row_vals);
                                         }
                                         _ => {}
                                     }
-                                    if rows.is_empty() { rows.push(vec![String::new(); headers.len()]); }
+                                    if rows.is_empty() {
+                                        rows.push(vec![String::new(); headers.len()]);
+                                    }
                                     (headers, rows, Some(schema.clone()))
-                                } else { let (h, r) = parse_structure_cell(cell); (h, vec![r], None) }
-                            } else { let (h, r) = parse_structure_cell(cell); (h, vec![r], None) }
-                        } else { let (h, r) = parse_structure_cell(cell); (h, vec![r], None) };
-                        let parent_col_header = parent_col.map(|c| c.header.clone()).unwrap_or_else(|| "Struct".to_string());
-                        let parent_ctx = StructureParentContext { parent_category: ev.parent_category.clone(), parent_sheet: ev.parent_sheet.clone(), parent_row: ev.row_index, parent_col: ev.col_index, parent_column_header: parent_col_header };
+                                } else {
+                                    let (h, r) = parse_structure_cell(cell);
+                                    (h, vec![r], None)
+                                }
+                            } else {
+                                let (h, r) = parse_structure_cell(cell);
+                                (h, vec![r], None)
+                            }
+                        } else {
+                            let (h, r) = parse_structure_cell(cell);
+                            (h, vec![r], None)
+                        };
+                        let parent_col_header = parent_col
+                            .map(|c| c.header.clone())
+                            .unwrap_or_else(|| "Struct".to_string());
+                        let parent_ctx = StructureParentContext {
+                            parent_category: ev.parent_category.clone(),
+                            parent_sheet: ev.parent_sheet.clone(),
+                            parent_row: ev.row_index,
+                            parent_col: ev.col_index,
+                            parent_column_header: parent_col_header,
+                        };
 
                         // Build virtual sheet metadata
                         let depth = state.virtual_structure_stack.len();
                         let virtual_name = make_virtual_sheet_name(&parent_ctx, depth);
                         // Create columns from headers, copying ai_context from parent sheet columns when header matches
-                        let columns: Vec<ColumnDefinition> = headers.iter().enumerate().map(|(i, h)| {
-                            // If schema defs exist, use them
-                            if let Some(schema) = &schema_defs {
-                                if let Some(def) = schema.get(i) {
-                                    return ColumnDefinition {
-                                        header: def.header.clone(),
-                                        data_type: def.data_type,
-                                        validator: def.validator.clone(),
-                                        filter: def.filter.clone(),
-                                        width: None,
-                                        ai_context: def.ai_context.clone(),
-                                        // Preserve deeper-level nested schemas & key metadata so that deeper levels persist and render consistently
-                                        structure_schema: def.structure_schema.clone(),
-                                        structure_column_order: def.structure_column_order.clone(),
-                                        structure_key_parent_column_index: def.structure_key_parent_column_index,
-                                        structure_ancestor_key_parent_column_indices: def.structure_ancestor_key_parent_column_indices.clone(),
-                                    };
+                        let columns: Vec<ColumnDefinition> = headers
+                            .iter()
+                            .enumerate()
+                            .map(|(i, h)| {
+                                // If schema defs exist, use them
+                                if let Some(schema) = &schema_defs {
+                                    if let Some(def) = schema.get(i) {
+                                        return ColumnDefinition {
+                                            header: def.header.clone(),
+                                            data_type: def.data_type,
+                                            validator: def.validator.clone(),
+                                            filter: def.filter.clone(),
+                                            width: None,
+                                            ai_context: def.ai_context.clone(),
+                                            ai_enable_row_generation: def.ai_enable_row_generation,
+                                            // Preserve deeper-level nested schemas & key metadata so that deeper levels persist and render consistently
+                                            structure_schema: def.structure_schema.clone(),
+                                            structure_column_order: def
+                                                .structure_column_order
+                                                .clone(),
+                                            structure_key_parent_column_index: def
+                                                .structure_key_parent_column_index,
+                                            structure_ancestor_key_parent_column_indices: def
+                                                .structure_ancestor_key_parent_column_indices
+                                                .clone(),
+                                        };
+                                    }
                                 }
-                            }
-                            let ai_ctx = meta.columns.iter().find(|c| c.header == *h).and_then(|c| c.ai_context.clone());
-                            ColumnDefinition { header: h.clone(), data_type: ColumnDataType::String, validator: None, filter: None, width: None, ai_context: ai_ctx, structure_schema: None, structure_column_order: None, structure_key_parent_column_index: None, structure_ancestor_key_parent_column_indices: None }
-                        }).collect();
-                        let mut metadata = SheetMetadata::create_generic(virtual_name.clone(), format!("{}.json", virtual_name), columns.len(), ev.parent_category.clone());
-                        metadata.structure_parent = Some(crate::sheets::definitions::StructureParentLink {
-                            parent_category: ev.parent_category.clone(),
-                            parent_sheet: ev.parent_sheet.clone(),
-                            parent_column_index: ev.col_index,
-                        });
+                                let ai_ctx = meta
+                                    .columns
+                                    .iter()
+                                    .find(|c| c.header == *h)
+                                    .and_then(|c| c.ai_context.clone());
+                                ColumnDefinition {
+                                    header: h.clone(),
+                                    data_type: ColumnDataType::String,
+                                    validator: None,
+                                    filter: None,
+                                    width: None,
+                                    ai_context: ai_ctx,
+                                    ai_enable_row_generation: None,
+                                    structure_schema: None,
+                                    structure_column_order: None,
+                                    structure_key_parent_column_index: None,
+                                    structure_ancestor_key_parent_column_indices: None,
+                                }
+                            })
+                            .collect();
+                        let mut metadata = SheetMetadata::create_generic(
+                            virtual_name.clone(),
+                            format!("{}.json", virtual_name),
+                            columns.len(),
+                            ev.parent_category.clone(),
+                        );
+                        metadata.structure_parent =
+                            Some(crate::sheets::definitions::StructureParentLink {
+                                parent_category: ev.parent_category.clone(),
+                                parent_sheet: ev.parent_sheet.clone(),
+                                parent_column_index: ev.col_index,
+                            });
                         // Overwrite generated columns with detailed ones
                         metadata.columns = columns;
                         // Insert grid
                         let mut grid_data = SheetGridData::default();
                         grid_data.metadata = Some(metadata);
-                        for rv in all_rows.into_iter() { if !rv.is_empty() { grid_data.grid.push(rv); } }
-                        if grid_data.grid.is_empty() { grid_data.grid.push(vec![String::new(); headers.len()]); }
+                        for rv in all_rows.into_iter() {
+                            if !rv.is_empty() {
+                                grid_data.grid.push(rv);
+                            }
+                        }
+                        if grid_data.grid.is_empty() {
+                            grid_data.grid.push(vec![String::new(); headers.len()]);
+                        }
                         // Register or replace (always replace to refresh)
-                        registry.add_or_replace_sheet(ev.parent_category.clone(), virtual_name.clone(), grid_data);
+                        registry.add_or_replace_sheet(
+                            ev.parent_category.clone(),
+                            virtual_name.clone(),
+                            grid_data,
+                        );
                         // Clear any cached filtered indices for this virtual sheet (avoid stale row index cache leading to Row Idx Err)
-                        state.filtered_row_indices_cache.retain(|(cat, name, _), _| !(cat == &ev.parent_category && name == &virtual_name));
+                        state
+                            .filtered_row_indices_cache
+                            .retain(|(cat, name, _), _| {
+                                !(cat == &ev.parent_category && name == &virtual_name)
+                            });
                         // Push context
-                        state.virtual_structure_stack.push(VirtualStructureContext { virtual_sheet_name: virtual_name.clone(), parent: parent_ctx });
+                        state.virtual_structure_stack.push(VirtualStructureContext {
+                            virtual_sheet_name: virtual_name.clone(),
+                            parent: parent_ctx,
+                        });
                         // Do NOT change selected_sheet_name; we keep parent selected and render virtual via stack
                         // Trigger render cache rebuild
-                        data_modified_writer.write(SheetDataModifiedInRegistryEvent { category: ev.parent_category.clone(), sheet_name: virtual_name.clone() });
+                        data_modified_writer.write(SheetDataModifiedInRegistryEvent {
+                            category: ev.parent_category.clone(),
+                            sheet_name: virtual_name.clone(),
+                        });
                         // Ensure render cache entry exists (will be filled by system)
-                        let _ = render_cache.ensure_and_get_sheet_cache_mut(&ev.parent_category, &virtual_name, 1, headers.len());
+                        let _ = render_cache.ensure_and_get_sheet_cache_mut(
+                            &ev.parent_category,
+                            &virtual_name,
+                            1,
+                            headers.len(),
+                        );
                     }
                 }
             }
@@ -164,7 +298,9 @@ pub fn handle_close_structure_view(
     mut registry: ResMut<SheetRegistry>,
     mut render_cache: ResMut<SheetRenderCache>,
 ) {
-    if events.is_empty() { return; }
+    if events.is_empty() {
+        return;
+    }
     events.clear();
 
     // Determine if user explicitly deselected sheet (selected_sheet_name is None). If so, pop all.
@@ -172,19 +308,29 @@ pub fn handle_close_structure_view(
 
     if pop_all {
         while let Some(popped) = state.virtual_structure_stack.pop() {
-            if let Ok(_removed) = registry.delete_sheet(&state.selected_category, &popped.virtual_sheet_name) {
-                render_cache.clear_sheet_render_data(&state.selected_category, &popped.virtual_sheet_name);
+            if let Ok(_removed) =
+                registry.delete_sheet(&state.selected_category, &popped.virtual_sheet_name)
+            {
+                render_cache
+                    .clear_sheet_render_data(&state.selected_category, &popped.virtual_sheet_name);
             }
         }
     } else {
         // Single-step pop
         if let Some(popped) = state.virtual_structure_stack.pop() {
-            if let Ok(_removed) = registry.delete_sheet(&state.selected_category, &popped.virtual_sheet_name) {
-                render_cache.clear_sheet_render_data(&state.selected_category, &popped.virtual_sheet_name);
+            if let Ok(_removed) =
+                registry.delete_sheet(&state.selected_category, &popped.virtual_sheet_name)
+            {
+                render_cache
+                    .clear_sheet_render_data(&state.selected_category, &popped.virtual_sheet_name);
             }
             // If now empty and we were viewing a virtual sheet, swap back to its parent sheet.
             if state.virtual_structure_stack.is_empty() {
-                if let Some(sel) = &state.selected_sheet_name { if sel.starts_with("__virtual__") { state.selected_sheet_name = Some(popped.parent.parent_sheet.clone()); } }
+                if let Some(sel) = &state.selected_sheet_name {
+                    if sel.starts_with("__virtual__") {
+                        state.selected_sheet_name = Some(popped.parent.parent_sheet.clone());
+                    }
+                }
             }
         }
     }

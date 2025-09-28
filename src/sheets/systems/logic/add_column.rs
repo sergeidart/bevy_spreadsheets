@@ -23,39 +23,48 @@ pub fn handle_add_column_request(
         // Determine actual target (virtual sheet if inside structure view)
         let (category, sheet_name) = if let Some(state) = editor_state.as_ref() {
             if let Some(vctx) = state.virtual_structure_stack.last() {
-                (vctx.parent.parent_category.clone(), vctx.virtual_sheet_name.clone())
-            } else { (event.category.clone(), event.sheet_name.clone()) }
-        } else { (event.category.clone(), event.sheet_name.clone()) };
+                (
+                    vctx.parent.parent_category.clone(),
+                    vctx.virtual_sheet_name.clone(),
+                )
+            } else {
+                (event.category.clone(), event.sheet_name.clone())
+            }
+        } else {
+            (event.category.clone(), event.sheet_name.clone())
+        };
 
         let mut operation_successful = false;
         let mut error_message: Option<String> = None;
         let mut metadata_cache: Option<SheetMetadata> = None;
         let mut new_column_name = "New Column".to_string();
 
-    if let Some(sheet_data) = registry.get_sheet_mut(&category, &sheet_name) {
+        if let Some(sheet_data) = registry.get_sheet_mut(&category, &sheet_name) {
             if let Some(metadata) = &mut sheet_data.metadata {
                 // Determine a unique name for the new column
                 let mut counter = 1;
-                let existing_headers: HashSet<_> = metadata.columns.iter().map(|c| &c.header).collect();
+                let existing_headers: HashSet<_> =
+                    metadata.columns.iter().map(|c| &c.header).collect();
                 while existing_headers.contains(&new_column_name) {
                     new_column_name = format!("New Column {}", counter);
                     counter += 1;
                 }
 
-                let new_col_def = ColumnDefinition::new_basic(
-                    new_column_name.clone(),
-                    ColumnDataType::String, 
-                );
+                let new_col_def =
+                    ColumnDefinition::new_basic(new_column_name.clone(), ColumnDataType::String);
                 metadata.columns.push(new_col_def);
 
                 for row in sheet_data.grid.iter_mut() {
                     row.push(String::new());
                 }
 
-                metadata.ensure_column_consistency(); 
+                metadata.ensure_column_consistency();
                 operation_successful = true;
                 metadata_cache = Some(metadata.clone());
-                data_modified_writer.write(SheetDataModifiedInRegistryEvent { category: category.clone(), sheet_name: sheet_name.clone() });
+                data_modified_writer.write(SheetDataModifiedInRegistryEvent {
+                    category: category.clone(),
+                    sheet_name: sheet_name.clone(),
+                });
             } else {
                 error_message = Some(format!(
                     "Metadata missing for sheet '{:?}/{}'. Cannot add column.",
@@ -101,10 +110,7 @@ pub fn handle_add_column_request(
     if !sheets_to_save.is_empty() {
         let registry_immut = registry.as_ref();
         for ((cat, name), metadata) in sheets_to_save {
-            info!(
-                "New column added in '{:?}/{}', triggering save.",
-                cat, name
-            );
+            info!("New column added in '{:?}/{}', triggering save.", cat, name);
             save_single_sheet(registry_immut, &metadata);
         }
     }

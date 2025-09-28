@@ -3,10 +3,9 @@
 use bevy::prelude::*;
 use rfd::FileDialog;
 
+use super::events::*;
 use super::io::save_copier_manager_to_file; // Keep save import
-use super::resources::VisualCopierManager;
-use super::events::*; // Imports all events from events.rs
-
+use super::resources::VisualCopierManager; // Imports all events from events.rs
 
 /// Handles the `AddNewCopyTaskEvent` to add a new task to the manager.
 pub(crate) fn handle_add_new_copy_task_event_system(
@@ -17,7 +16,9 @@ pub(crate) fn handle_add_new_copy_task_event_system(
     let mut changed = false;
     for _event in events.read() {
         let new_id = manager.get_next_id();
-        manager.copy_tasks.push(super::resources::CopyTask::new(new_id));
+        manager
+            .copy_tasks
+            .push(super::resources::CopyTask::new(new_id));
         info!("VisualCopier: Added new copy task with ID {}", new_id);
         changed = true;
     }
@@ -78,10 +79,10 @@ pub(crate) fn handle_folder_picked_event_system(
     mut update_top_panel_to_folder_writer: EventWriter<UpdateTopPanelToFolderEvent>,
 ) {
     for event in events.read() {
-        let path_display = event
-            .path
-            .as_ref()
-            .map_or_else(|| "None (Cancelled)".to_string(), |p| p.display().to_string());
+        let path_display = event.path.as_ref().map_or_else(
+            || "None (Cancelled)".to_string(),
+            |p| p.display().to_string(),
+        );
         info!(
             "VisualCopier: Processing FolderPickedEvent for {:?} (start: {}), path: {}",
             event.for_task_id, event.is_start_folder, path_display
@@ -124,7 +125,11 @@ pub(crate) fn apply_task_start_folder_update_system(
 ) {
     let mut changed = false;
     for event in events.read() {
-        if let Some(task) = manager.copy_tasks.iter_mut().find(|t| t.id == event.task_id) {
+        if let Some(task) = manager
+            .copy_tasks
+            .iter_mut()
+            .find(|t| t.id == event.task_id)
+        {
             if task.start_folder != event.path {
                 task.start_folder = event.path.clone();
                 task.status = if event.path.is_some() {
@@ -132,11 +137,17 @@ pub(crate) fn apply_task_start_folder_update_system(
                 } else {
                     "Start folder selection cancelled/cleared.".to_string()
                 };
-                info!("VisualCopier: Task {} start folder updated: {:?}", event.task_id, event.path);
+                info!(
+                    "VisualCopier: Task {} start folder updated: {:?}",
+                    event.task_id, event.path
+                );
                 changed = true;
             }
         } else {
-            warn!("VisualCopier: Task {} not found for start folder update.", event.task_id);
+            warn!(
+                "VisualCopier: Task {} not found for start folder update.",
+                event.task_id
+            );
         }
     }
     if changed {
@@ -152,19 +163,29 @@ pub(crate) fn apply_task_end_folder_update_system(
 ) {
     let mut changed = false;
     for event in events.read() {
-        if let Some(task) = manager.copy_tasks.iter_mut().find(|t| t.id == event.task_id) {
-             if task.end_folder != event.path {
+        if let Some(task) = manager
+            .copy_tasks
+            .iter_mut()
+            .find(|t| t.id == event.task_id)
+        {
+            if task.end_folder != event.path {
                 task.end_folder = event.path.clone();
                 task.status = if event.path.is_some() {
                     "End folder set.".to_string()
                 } else {
                     "End folder selection cancelled/cleared.".to_string()
                 };
-                info!("VisualCopier: Task {} end folder updated: {:?}", event.task_id, event.path);
+                info!(
+                    "VisualCopier: Task {} end folder updated: {:?}",
+                    event.task_id, event.path
+                );
                 changed = true;
             }
         } else {
-            warn!("VisualCopier: Task {} not found for end folder update.", event.task_id);
+            warn!(
+                "VisualCopier: Task {} not found for end folder update.",
+                event.task_id
+            );
         }
     }
     if changed {
@@ -187,7 +208,10 @@ pub(crate) fn apply_top_panel_from_folder_update_system(
             } else {
                 "Top panel 'From' folder selection cancelled/cleared.".to_string()
             };
-            info!("VisualCopier: Top panel 'From' folder updated: {:?}", event.path);
+            info!(
+                "VisualCopier: Top panel 'From' folder updated: {:?}",
+                event.path
+            );
             changed = true;
         }
     }
@@ -211,7 +235,10 @@ pub(crate) fn apply_top_panel_to_folder_update_system(
             } else {
                 "Top panel 'To' folder selection cancelled/cleared.".to_string()
             };
-            info!("VisualCopier: Top panel 'To' folder updated: {:?}", event.path);
+            info!(
+                "VisualCopier: Top panel 'To' folder updated: {:?}",
+                event.path
+            );
             changed = true;
         }
     }
@@ -221,7 +248,6 @@ pub(crate) fn apply_top_panel_to_folder_update_system(
 }
 
 // --- End Mutator Systems ---
-
 
 /// Handles the `ReverseTopPanelFoldersEvent`.
 pub(crate) fn handle_reverse_top_panel_folders_event_system(
@@ -263,7 +289,10 @@ pub(crate) fn handle_queue_copy_task_event_system(
                 }
             } else {
                 task.status = "Error: Both folders must be set to queue.".to_string();
-                warn!("VisualCopier: Cannot queue Task {}: Folders not set.", task_id);
+                warn!(
+                    "VisualCopier: Cannot queue Task {}: Folders not set.",
+                    task_id
+                );
             }
         } else {
             warn!("VisualCopier: Cannot queue Task {}: Not found.", task_id);
@@ -348,7 +377,10 @@ pub(crate) fn handle_copy_operation_result_event_system(
                             Err(e) => {
                                 let error_string = e.to_string();
                                 task.status = format!("Error: {}", error_string);
-                                error!("VisualCopier: Error copying task {}: {}", task.id, error_string);
+                                error!(
+                                    "VisualCopier: Error copying task {}: {}",
+                                    task.id, error_string
+                                );
                             }
                         }
                     } else {
@@ -364,9 +396,10 @@ pub(crate) fn handle_copy_operation_result_event_system(
                     );
                 }
             }
-            None => { // This is for the Top Panel Copy
+            None => {
+                // This is for the Top Panel Copy
                 if manager.top_panel_copy_status.starts_with("Copying...") {
-                     match &event.result {
+                    match &event.result {
                         Ok(success_msg) => manager.top_panel_copy_status = success_msg.clone(),
                         Err(e) => {
                             let error_string = e.to_string();
@@ -395,7 +428,10 @@ pub(crate) fn handle_visual_copier_state_change_and_save_system(
         info!("VisualCopier: State changed, attempting immediate save...");
         match save_copier_manager_to_file(&manager) {
             Ok(_) => info!("VisualCopier: Successfully saved copier state after change."),
-            Err(e) => error!("VisualCopier: Failed to save copier state after change: {}", e),
+            Err(e) => error!(
+                "VisualCopier: Failed to save copier state after change: {}",
+                e
+            ),
         }
     }
 }

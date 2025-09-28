@@ -20,8 +20,14 @@ pub fn handle_delete_columns_request(
 
     for event in events.read() {
         let (category, sheet_name) = if let Some(state) = editor_state.as_ref() {
-            if let Some(vctx) = state.virtual_structure_stack.last() { (&event.category, &vctx.virtual_sheet_name) } else { (&event.category, &event.sheet_name) }
-        } else { (&event.category, &event.sheet_name) };
+            if let Some(vctx) = state.virtual_structure_stack.last() {
+                (&event.category, &vctx.virtual_sheet_name)
+            } else {
+                (&event.category, &event.sheet_name)
+            }
+        } else {
+            (&event.category, &event.sheet_name)
+        };
         let indices_to_delete = &event.column_indices;
 
         if indices_to_delete.is_empty() {
@@ -56,7 +62,6 @@ pub fn handle_delete_columns_request(
                         // metadata.column_filters.remove(col_idx_to_remove);
                         // metadata.column_ai_contexts.remove(col_idx_to_remove);
                         // metadata.column_widths.remove(col_idx_to_remove);
-
 
                         // Remove from grid data
                         for row in sheet_data.grid.iter_mut() {
@@ -142,10 +147,7 @@ pub fn handle_delete_columns_request(
     if !sheets_to_save.is_empty() {
         let registry_immut = registry.as_ref();
         for ((cat, name), metadata) in sheets_to_save {
-            info!(
-                "Columns deleted in '{:?}/{}', triggering save.",
-                cat, name
-            );
+            info!("Columns deleted in '{:?}/{}', triggering save.", cat, name);
             save_single_sheet(registry_immut, &metadata);
         }
     }

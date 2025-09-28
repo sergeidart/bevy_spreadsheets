@@ -1,5 +1,5 @@
 // src/ui/elements/editor/prefs.rs
-use bevy::log::{info, warn, error};
+use bevy::log::{error, info, warn};
 use directories_next::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use std::{fs, io, path::PathBuf};
@@ -23,7 +23,10 @@ fn get_prefs_path() -> io::Result<PathBuf> {
         fs::create_dir_all(cfg_dir)?;
         Ok(cfg_dir.join(CONFIG_FILE))
     } else {
-        Err(io::Error::new(io::ErrorKind::NotFound, "No project dirs for UI prefs"))
+        Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "No project dirs for UI prefs",
+        ))
     }
 }
 

@@ -1,15 +1,15 @@
 // src/sheets/systems/io/mod.rs
 
+use crate::sheets::definitions::SheetMetadata;
 use bevy::prelude::{error, trace};
 use std::path::{Path, PathBuf};
-use crate::sheets::definitions::SheetMetadata;
 
 // --- Submodule Declarations ---
 pub mod load; // Runtime uploads
-pub mod save;
-pub mod validator;
 pub mod parsers;
-pub mod startup; // <-- ADDED new startup submodule
+pub mod save;
+pub mod startup;
+pub mod validator; // <-- ADDED new startup submodule
 
 // --- Shared Constants ---
 pub const DEFAULT_DATA_DIR: &str = "data_sheets";
@@ -23,7 +23,9 @@ pub fn get_default_data_base_path() -> PathBuf {
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| PathBuf::from("."))
     } else {
-        error!("Failed to get current executable path, using current working directory '.' instead.");
+        error!(
+            "Failed to get current executable path, using current working directory '.' instead."
+        );
         PathBuf::from(".")
     };
     let data_path = base_dir.join(DEFAULT_DATA_DIR);
@@ -48,10 +50,10 @@ pub fn get_full_metadata_path(base_data_path: &Path, metadata: &SheetMetadata) -
 }
 
 pub use load::{
-    handle_json_sheet_upload, handle_initiate_file_upload,
-    handle_process_upload_request,
+    handle_initiate_file_upload, handle_json_sheet_upload, handle_process_upload_request,
 };
 // Save systems (from save.rs)
 pub use save::{
-    handle_delete_sheet_file_request, handle_rename_sheet_file_request, handle_create_category_directory_request, handle_rename_category_directory_request
+    handle_create_category_directory_request, handle_delete_sheet_file_request,
+    handle_rename_category_directory_request, handle_rename_sheet_file_request,
 };

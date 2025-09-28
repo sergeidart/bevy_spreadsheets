@@ -27,7 +27,11 @@ pub(super) fn show_random_picker_window_ui(
         if let Some(meta) = &sheet.metadata {
             if let Some(rp) = &meta.random_picker {
                 // Detect empty runtime state (no real weights yet)
-                let empty_runtime = state.random_picker_weight_columns.iter().all(|o| o.is_none()) && state.random_picker_weight_columns.len() <= 2;
+                let empty_runtime = state
+                    .random_picker_weight_columns
+                    .iter()
+                    .all(|o| o.is_none())
+                    && state.random_picker_weight_columns.len() <= 2;
                 if empty_runtime && !rp.weight_columns.is_empty() {
                     state.random_picker_weight_columns.clear();
                     state.random_picker_weight_exponents.clear();
@@ -45,17 +49,27 @@ pub(super) fn show_random_picker_window_ui(
                     state.random_picker_weight_multipliers.push(1.0);
                 }
                 // Hydrate summarizers similarly if empty
-                let empty_summ = state.summarizer_selected_columns.iter().all(|o| o.is_none()) || state.summarizer_selected_columns.is_empty();
+                let empty_summ = state
+                    .summarizer_selected_columns
+                    .iter()
+                    .all(|o| o.is_none())
+                    || state.summarizer_selected_columns.is_empty();
                 if empty_summ && !rp.summarizer_columns.is_empty() {
                     state.summarizer_selected_columns.clear();
-                    for &ci in rp.summarizer_columns.iter() { state.summarizer_selected_columns.push(Some(ci)); }
+                    for &ci in rp.summarizer_columns.iter() {
+                        state.summarizer_selected_columns.push(Some(ci));
+                    }
                     state.summarizer_selected_columns.push(None);
                 }
                 // Result column hydration
-                if matches!(rp.mode, crate::sheets::definitions::RandomPickerMode::Simple) {
+                if matches!(
+                    rp.mode,
+                    crate::sheets::definitions::RandomPickerMode::Simple
+                ) {
                     state.random_simple_result_col = rp.simple_result_col_index;
                 } else {
-                    state.random_simple_result_col = rp.complex_result_col_index; // fallback
+                    state.random_simple_result_col = rp.complex_result_col_index;
+                    // fallback
                 }
             }
         }
@@ -323,5 +337,9 @@ pub(super) fn show_random_picker_window_ui(
         });
 
     let close_via_x = state.show_random_picker_panel && !popup_open;
-    RandomPickerUiResult { apply_clicked, cancel_clicked, close_via_x }
+    RandomPickerUiResult {
+        apply_clicked,
+        cancel_clicked,
+        close_via_x,
+    }
 }

@@ -1,9 +1,9 @@
 // src/sheets/events.rs
 use bevy::prelude::Event;
-use std::path::PathBuf;
 use std::collections::HashSet;
+use std::path::PathBuf;
 
-use super::definitions::ColumnValidator; 
+use super::definitions::ColumnValidator;
 
 // NEW: Event for creating a new sheet
 #[derive(Event, Debug, Clone)]
@@ -137,7 +137,7 @@ pub struct RequestDeleteColumns {
 #[derive(Event, Debug, Clone)]
 pub struct AiTaskResult {
     pub original_row_index: usize,
-    pub result: Result<Vec<String>, String>, 
+    pub result: Result<Vec<String>, String>,
     pub raw_response: Option<String>,
     // Mapping snapshot for this row at send time (non-structure columns actually included)
     pub included_non_structure_columns: Vec<usize>,
@@ -147,7 +147,7 @@ pub struct AiTaskResult {
 
 #[derive(Event, Debug, Clone)]
 pub struct AiBatchTaskResult {
-    pub original_row_indices: Vec<usize>, // order sent
+    pub original_row_indices: Vec<usize>,         // order sent
     pub result: Result<Vec<Vec<String>>, String>, // first N correspond to originals, extra rows are additions
     pub raw_response: Option<String>,
     pub included_non_structure_columns: Vec<usize>,
@@ -167,6 +167,11 @@ pub struct RequestToggleAiRowGeneration {
     pub category: Option<String>,
     pub sheet_name: String,
     pub enabled: bool,
+    /// When Some, identifies the nested structure path starting at the root sheet column index.
+    /// Empty path (None) targets the root sheet itself. Nested indices drill into structure schemas.
+    pub structure_path: Option<Vec<usize>>,
+    /// For structure toggles, Some(value) applies an override, None reverts to general/default behavior.
+    pub structure_override: Option<bool>,
 }
 
 #[derive(Event, Debug, Clone)]

@@ -1,35 +1,55 @@
 // src/sheets/plugin.rs
 use bevy::prelude::*;
 
-use super::resources::{SheetRegistry, SheetRenderCache}; 
 use super::events::{
-    AddSheetRowRequest, AiTaskResult, AiBatchTaskResult, JsonSheetUploaded, RequestDeleteRows,
-    RequestDeleteSheet, RequestDeleteSheetFile, RequestInitiateFileUpload,
-    RequestProcessUpload, RequestRenameSheet, RequestRenameSheetFile,
-    RequestUpdateColumnName, RequestUpdateColumnValidator,
-    SheetOperationFeedback, UpdateCellEvent,
-    SheetDataModifiedInRegistryEvent, RequestSheetRevalidation,
-    RequestDeleteColumns, RequestAddColumn, RequestReorderColumn,
-    // NEW: Import RequestCreateNewSheet
-    RequestCreateNewSheet, RequestToggleAiRowGeneration,
+    AddSheetRowRequest,
+    AiBatchTaskResult,
+    AiTaskResult,
+    JsonSheetUploaded,
+    RequestAddColumn,
     // Category events
-    RequestCreateCategory, RequestDeleteCategory, RequestCreateCategoryDirectory, RequestRenameCategory, RequestRenameCategoryDirectory, RequestMoveSheetToCategory,
+    RequestCreateCategory,
+    RequestCreateCategoryDirectory,
+    // NEW: Import RequestCreateNewSheet
+    RequestCreateNewSheet,
+    RequestDeleteCategory,
+    RequestDeleteColumns,
+    RequestDeleteRows,
+    RequestDeleteSheet,
+    RequestDeleteSheetFile,
+    RequestInitiateFileUpload,
+    RequestMoveSheetToCategory,
+    RequestProcessUpload,
+    RequestRenameCategory,
+    RequestRenameCategoryDirectory,
+    RequestRenameSheet,
+    RequestRenameSheetFile,
+    RequestReorderColumn,
+    RequestSheetRevalidation,
+    RequestToggleAiRowGeneration,
+    RequestUpdateColumnName,
+    RequestUpdateColumnValidator,
+    SheetDataModifiedInRegistryEvent,
+    SheetOperationFeedback,
+    UpdateCellEvent,
 };
-use super::systems; 
-use crate::ui::systems::{handle_ai_task_results, handle_ai_batch_results}; 
-use crate::ui::systems::apply_throttled_ai_changes; 
-use crate::ui::systems::forward_events; 
-use crate::ui::systems::apply_pending_structure_key_selection;
+use super::resources::{SheetRegistry, SheetRenderCache};
+use super::systems;
 use super::systems::logic::handle_sheet_render_cache_update;
-use super::systems::logic::sync_structure::{PendingStructureCascade, handle_emit_structure_cascade_events};
-
+use super::systems::logic::sync_structure::{
+    handle_emit_structure_cascade_events, PendingStructureCascade,
+};
+use crate::ui::systems::apply_pending_structure_key_selection;
+use crate::ui::systems::apply_throttled_ai_changes;
+use crate::ui::systems::forward_events;
+use crate::ui::systems::{handle_ai_batch_results, handle_ai_task_results};
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 enum SheetSystemSet {
     UserInput,
-    ApplyChanges, 
-    ProcessAsyncResults, 
-    UpdateCaches, 
+    ApplyChanges,
+    ProcessAsyncResults,
+    UpdateCaches,
     FileOperations,
 }
 
@@ -43,14 +63,14 @@ impl Plugin for SheetsPlugin {
                 SheetSystemSet::UserInput,
                 SheetSystemSet::ApplyChanges.after(SheetSystemSet::UserInput),
                 SheetSystemSet::ProcessAsyncResults.after(SheetSystemSet::ApplyChanges),
-                SheetSystemSet::UpdateCaches.after(SheetSystemSet::ProcessAsyncResults), 
+                SheetSystemSet::UpdateCaches.after(SheetSystemSet::ProcessAsyncResults),
                 SheetSystemSet::FileOperations.after(SheetSystemSet::UpdateCaches),
             ),
         );
 
-    app.init_resource::<SheetRegistry>();
+        app.init_resource::<SheetRegistry>();
         app.init_resource::<SheetRenderCache>();
-    app.init_resource::<PendingStructureCascade>();
+        app.init_resource::<PendingStructureCascade>();
 
         app.add_event::<AddSheetRowRequest>()
             .add_event::<RequestAddColumn>()
@@ -87,30 +107,28 @@ impl Plugin for SheetsPlugin {
             Startup,
             (
                 systems::io::startup::register_default_sheets_if_needed,
-                ApplyDeferred, 
+                ApplyDeferred,
                 systems::io::startup::load_data_for_registered_sheets,
-                ApplyDeferred, 
+                ApplyDeferred,
                 systems::io::startup::scan_filesystem_for_unregistered_sheets,
-                ApplyDeferred, 
-                handle_sheet_render_cache_update, 
-                ApplyDeferred, 
+                ApplyDeferred,
+                handle_sheet_render_cache_update,
+                ApplyDeferred,
             )
                 .chain(),
         );
 
         app.add_systems(
             Update,
-            (systems::io::handle_initiate_file_upload,)
-                .in_set(SheetSystemSet::UserInput),
+            (systems::io::handle_initiate_file_upload,).in_set(SheetSystemSet::UserInput),
         );
 
         app.add_systems(
             Update,
             (
                 systems::io::handle_process_upload_request,
-                ApplyDeferred, 
-                systems::io::handle_json_sheet_upload, 
-
+                ApplyDeferred,
+                systems::io::handle_json_sheet_upload,
                 systems::logic::handle_rename_request,
                 systems::logic::handle_delete_request,
                 systems::logic::handle_add_row_request,
@@ -128,12 +146,12 @@ impl Plugin for SheetsPlugin {
                 systems::logic::handle_delete_columns_request,
                 systems::logic::handle_update_column_name,
                 systems::logic::handle_update_column_validator,
-                systems::logic::handle_cell_update, 
+                systems::logic::handle_cell_update,
             )
-                .chain() 
+                .chain()
                 .in_set(SheetSystemSet::ApplyChanges),
         );
-        
+
         app.add_systems(
             Update,
             (
@@ -145,8 +163,8 @@ impl Plugin for SheetsPlugin {
                 handle_ai_batch_results,
                 apply_throttled_ai_changes,
             )
-            .chain() 
-            .in_set(SheetSystemSet::ProcessAsyncResults)
+                .chain()
+                .in_set(SheetSystemSet::ProcessAsyncResults),
         );
 
         app.add_systems(
@@ -156,7 +174,7 @@ impl Plugin for SheetsPlugin {
                 systems::logic::handle_sync_virtual_structure_sheet,
                 handle_emit_structure_cascade_events,
             )
-            .in_set(SheetSystemSet::UpdateCaches)
+                .in_set(SheetSystemSet::UpdateCaches),
         );
 
         app.add_systems(

@@ -1,7 +1,7 @@
 // src/sheets/systems/logic/update_column_name.rs
 use crate::sheets::{
     definitions::SheetMetadata, // Need metadata for saving
-    events::{RequestUpdateColumnName, SheetOperationFeedback, SheetDataModifiedInRegistryEvent},
+    events::{RequestUpdateColumnName, SheetDataModifiedInRegistryEvent, SheetOperationFeedback},
     resources::SheetRegistry,
     systems::io::save::save_single_sheet,
 };
@@ -16,8 +16,7 @@ pub fn handle_update_column_name(
     mut data_modified_writer: EventWriter<SheetDataModifiedInRegistryEvent>,
 ) {
     // Use map to track sheets needing save
-    let mut changed_sheets: HashMap<(Option<String>, String), SheetMetadata> =
-        HashMap::new();
+    let mut changed_sheets: HashMap<(Option<String>, String), SheetMetadata> = HashMap::new();
 
     for event in events.read() {
         let category = &event.category; // Get category
@@ -41,13 +40,15 @@ pub fn handle_update_column_name(
         }
         // Basic filename character check (optional, but good practice)
         if new_name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|']) {
-             feedback_writer.write(SheetOperationFeedback{
-                 message: format!("Failed column rename in '{:?}/{}': New name '{}' contains invalid characters.", category, sheet_name, new_name),
-                 is_error: true
-             });
-             continue;
+            feedback_writer.write(SheetOperationFeedback {
+                message: format!(
+                    "Failed column rename in '{:?}/{}': New name '{}' contains invalid characters.",
+                    category, sheet_name, new_name
+                ),
+                is_error: true,
+            });
+            continue;
         }
-
 
         // --- Apply Update (Mutable Borrow) ---
         // Get sheet using category
@@ -60,9 +61,10 @@ pub fn handle_update_column_name(
                         .columns // Iterate over columns
                         .iter()
                         .enumerate()
-                        .any(|(idx, c)| { // c is &ColumnDefinition
-                            idx != col_index
-                                && c.header.eq_ignore_ascii_case(new_name) // Access header field
+                        .any(|(idx, c)| {
+                            // c is &ColumnDefinition
+                            idx != col_index && c.header.eq_ignore_ascii_case(new_name)
+                            // Access header field
                         })
                     {
                         feedback_writer.write(SheetOperationFeedback {
@@ -94,7 +96,10 @@ pub fn handle_update_column_name(
                         });
                         success = true;
                         // Emit data modified event so virtual structure sheets trigger parent schema sync
-                        data_modified_writer.write(SheetDataModifiedInRegistryEvent { category: category.clone(), sheet_name: sheet_name.clone() });
+                        data_modified_writer.write(SheetDataModifiedInRegistryEvent {
+                            category: category.clone(),
+                            sheet_name: sheet_name.clone(),
+                        });
                         metadata_cache = Some(metadata.clone()); // Cache metadata for saving
                     }
                 } else {

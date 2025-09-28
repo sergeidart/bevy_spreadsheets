@@ -20,8 +20,14 @@ pub fn handle_reorder_column_request(
 
     for event in events.read() {
         let (category, sheet_name) = if let Some(state) = editor_state.as_ref() {
-            if let Some(vctx) = state.virtual_structure_stack.last() { (&event.category, &vctx.virtual_sheet_name) } else { (&event.category, &event.sheet_name) }
-        } else { (&event.category, &event.sheet_name) };
+            if let Some(vctx) = state.virtual_structure_stack.last() {
+                (&event.category, &vctx.virtual_sheet_name)
+            } else {
+                (&event.category, &event.sheet_name)
+            }
+        } else {
+            (&event.category, &event.sheet_name)
+        };
         let old_index = event.old_index;
         let new_index = event.new_index;
 
@@ -50,13 +56,14 @@ pub fn handle_reorder_column_request(
 
                     // Reorder cells in each row of the grid
                     for row in sheet_data.grid.iter_mut() {
-                        if old_index < row.len() { // Should always be true if data is consistent
+                        if old_index < row.len() {
+                            // Should always be true if data is consistent
                             let cell_to_move = row.remove(old_index);
                             // new_index might need adjustment if row.len() was less than metadata.columns.len()
                             // However, assuming consistent data, direct insertion is fine.
                             row.insert(new_index, cell_to_move);
                         } else {
-                             warn!("Row in sheet '{:?}/{}' has fewer cells than expected during column reorder. Row len: {}, old_index: {}. Skipping reorder for this row.", category, sheet_name, row.len(), old_index);
+                            warn!("Row in sheet '{:?}/{}' has fewer cells than expected during column reorder. Row len: {}, old_index: {}. Skipping reorder for this row.", category, sheet_name, row.len(), old_index);
                         }
                     }
 
@@ -117,10 +124,7 @@ pub fn handle_reorder_column_request(
     if !sheets_to_save.is_empty() {
         let registry_immut = registry.as_ref();
         for ((cat, name), metadata) in sheets_to_save {
-            info!(
-                "Column reordered in '{:?}/{}', triggering save.",
-                cat, name
-            );
+            info!("Column reordered in '{:?}/{}', triggering save.", cat, name);
             save_single_sheet(registry_immut, &metadata);
         }
     }

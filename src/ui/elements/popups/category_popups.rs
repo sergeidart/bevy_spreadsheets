@@ -1,15 +1,17 @@
 // src/ui/elements/popups/category_popups.rs
+use crate::sheets::events::{RequestCreateCategory, RequestDeleteCategory};
+use crate::ui::elements::editor::state::EditorWindowState;
 use bevy::prelude::*;
 use bevy_egui::egui;
-use crate::ui::elements::editor::state::EditorWindowState;
-use crate::sheets::events::{RequestCreateCategory, RequestDeleteCategory};
 
 pub fn show_new_category_popup(
     ctx: &egui::Context,
     state: &mut EditorWindowState,
     create_category_writer: &mut EventWriter<RequestCreateCategory>,
 ) {
-    if !state.show_new_category_popup { return; }
+    if !state.show_new_category_popup {
+        return;
+    }
     let mut open = state.show_new_category_popup;
     let mut create_clicked = false;
     let mut cancel_clicked = false;
@@ -21,21 +23,35 @@ pub fn show_new_category_popup(
         .open(&mut open)
         .show(ctx, |ui| {
             ui.label("Enter a category (folder) name:");
-            let resp = ui.add(egui::TextEdit::singleline(&mut state.new_category_name_input).desired_width(220.0));
+            let resp = ui.add(
+                egui::TextEdit::singleline(&mut state.new_category_name_input).desired_width(220.0),
+            );
             if resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                 create_clicked = true;
             }
             ui.separator();
             ui.horizontal(|ui_h| {
-                if ui_h.add_enabled(!state.new_category_name_input.trim().is_empty(), egui::Button::new("Create")).clicked() { create_clicked = true; }
-                if ui_h.button("Cancel").clicked() { cancel_clicked = true; }
+                if ui_h
+                    .add_enabled(
+                        !state.new_category_name_input.trim().is_empty(),
+                        egui::Button::new("Create"),
+                    )
+                    .clicked()
+                {
+                    create_clicked = true;
+                }
+                if ui_h.button("Cancel").clicked() {
+                    cancel_clicked = true;
+                }
             });
         });
 
     if create_clicked {
         let name = state.new_category_name_input.trim();
         if !name.is_empty() {
-            create_category_writer.write(RequestCreateCategory { name: name.to_string() });
+            create_category_writer.write(RequestCreateCategory {
+                name: name.to_string(),
+            });
             // Immediately switch selection to the new category
             state.selected_category = Some(name.to_string());
             state.selected_sheet_name = None;
@@ -68,18 +84,33 @@ pub fn show_delete_category_confirm_popups(
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .open(&mut open)
             .show(ctx, |ui| {
-                ui.colored_label(egui::Color32::YELLOW, format!("You're about to delete the category '{}' and all its sheets.", name));
+                ui.colored_label(
+                    egui::Color32::YELLOW,
+                    format!(
+                        "You're about to delete the category '{}' and all its sheets.",
+                        name
+                    ),
+                );
                 ui.label("This will remove:");
                 ui.label(" • All sheets under this category from the registry");
                 ui.label(" • All associated JSON files on disk (grid and metadata)");
                 ui.label(" • Any nested structure references within those sheets");
                 ui.separator();
                 ui.horizontal(|ui_h| {
-                    if ui_h.add(egui::Button::new("Proceed").fill(egui::Color32::DARK_RED)).clicked() { proceed = true; }
-                    if ui_h.button("Cancel").clicked() { cancel = true; }
+                    if ui_h
+                        .add(egui::Button::new("Proceed").fill(egui::Color32::DARK_RED))
+                        .clicked()
+                    {
+                        proceed = true;
+                    }
+                    if ui_h.button("Cancel").clicked() {
+                        cancel = true;
+                    }
                 });
             });
-        if cancel || !open { state.show_delete_category_confirm_popup = false; }
+        if cancel || !open {
+            state.show_delete_category_confirm_popup = false;
+        }
         if proceed {
             state.show_delete_category_confirm_popup = false;
             state.show_delete_category_double_confirm_popup = true;
@@ -98,12 +129,25 @@ pub fn show_delete_category_confirm_popups(
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
             .open(&mut open)
             .show(ctx, |ui| {
-                ui.colored_label(egui::Color32::RED, format!("This is permanent: '{}' and all its sheets will be deleted.", name));
+                ui.colored_label(
+                    egui::Color32::RED,
+                    format!(
+                        "This is permanent: '{}' and all its sheets will be deleted.",
+                        name
+                    ),
+                );
                 ui.label("Are you REALLY sure?");
                 ui.separator();
                 ui.horizontal(|ui_h| {
-                    if ui_h.add(egui::Button::new("YES, DELETE ALL").fill(egui::Color32::RED)).clicked() { really_delete = true; }
-                    if ui_h.button("Cancel").clicked() { cancel = true; }
+                    if ui_h
+                        .add(egui::Button::new("YES, DELETE ALL").fill(egui::Color32::RED))
+                        .clicked()
+                    {
+                        really_delete = true;
+                    }
+                    if ui_h.button("Cancel").clicked() {
+                        cancel = true;
+                    }
                 });
             });
         if really_delete {

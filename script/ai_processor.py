@@ -68,7 +68,7 @@ def execute_ai_query(api_key: str, payload_json: str) -> str:  # noqa: D401
         except Exception as e:  # pragma: no cover
             return make_err(f"Invalid payload JSON: {e}")
 
-        model_id = payload.get("ai_model_id", "gemini-2.5-pro-preview-06-05")
+        model_id = payload.get("ai_model_id", "gemini-flash-latest")
         system_instruction = payload.get("general_sheet_rule")
         rows_data: List[List[Any]] = payload.get("rows_data") or []
         legacy_single = False

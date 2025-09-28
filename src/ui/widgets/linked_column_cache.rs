@@ -70,7 +70,9 @@ pub(crate) fn get_or_populate_linked_options<'a>(
                         .map(|v| normalize_for_link_cmp(v))
                         .collect();
 
-                    state.linked_column_cache.insert(cache_key.clone(), unique_values);
+                    state
+                        .linked_column_cache
+                        .insert(cache_key.clone(), unique_values);
                     state
                         .linked_column_cache_normalized
                         .insert(cache_key.clone(), normalized_values);

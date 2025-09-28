@@ -2,9 +2,7 @@
 use crate::{
     sheets::{
         definitions::{SheetGridData, SheetMetadata},
-        events::{
-            RequestCreateNewSheet, SheetDataModifiedInRegistryEvent, SheetOperationFeedback,
-        },
+        events::{RequestCreateNewSheet, SheetDataModifiedInRegistryEvent, SheetOperationFeedback},
         resources::SheetRegistry,
         systems::io::{
             save::save_single_sheet,
@@ -30,9 +28,15 @@ pub fn handle_create_new_sheet_request(
         // Validate name (using existing validator logic if possible, or a new one)
         // For now, using a simple check similar to startup scan validation
         if let Err(e) = validator::validate_derived_sheet_name(desired_name) {
-            let msg = format!("Failed to create sheet: Invalid name '{}'. {}", desired_name, e);
+            let msg = format!(
+                "Failed to create sheet: Invalid name '{}'. {}",
+                desired_name, e
+            );
             error!("{}", msg);
-            feedback_writer.write(SheetOperationFeedback { message: msg, is_error: true });
+            feedback_writer.write(SheetOperationFeedback {
+                message: msg,
+                is_error: true,
+            });
             continue;
         }
 
@@ -43,7 +47,10 @@ pub fn handle_create_new_sheet_request(
                 desired_name, category
             );
             warn!("{}", msg);
-            feedback_writer.write(SheetOperationFeedback { message: msg, is_error: true });
+            feedback_writer.write(SheetOperationFeedback {
+                message: msg,
+                is_error: true,
+            });
             continue;
         }
 
@@ -62,11 +69,7 @@ pub fn handle_create_new_sheet_request(
         };
 
         // Add to registry
-        registry.add_or_replace_sheet(
-            category.clone(),
-            desired_name.to_string(),
-            new_sheet_data,
-        );
+        registry.add_or_replace_sheet(category.clone(), desired_name.to_string(), new_sheet_data);
 
         info!(
             "Successfully created new sheet '{:?}/{}' in registry.",
@@ -78,7 +81,6 @@ pub fn handle_create_new_sheet_request(
         let registry_immut = registry.as_ref();
         save_single_sheet(registry_immut, &new_metadata);
         info!("Saved new sheet '{:?}/{}' to disk.", category, desired_name);
-
 
         feedback_writer.write(SheetOperationFeedback {
             message: format!("Sheet '{:?}/{}' created.", category, desired_name),
@@ -96,8 +98,11 @@ pub fn handle_create_new_sheet_request(
             editor_state.selected_sheet_name = Some(desired_name.to_string());
             editor_state.reset_interaction_modes_and_selections(); // Reset modes
             editor_state.force_filter_recalculation = true; // Ensure UI updates
-            // Legacy AI config popup removed; no init flag needed
-            info!("Set newly created sheet '{:?}/{}' as active.", category, desired_name);
+                                                            // Legacy AI config popup removed; no init flag needed
+            info!(
+                "Set newly created sheet '{:?}/{}' as active.",
+                category, desired_name
+            );
         }
     }
 }

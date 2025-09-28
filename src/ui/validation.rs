@@ -3,10 +3,7 @@
 use bevy::prelude::*;
 use std::collections::HashSet;
 
-use crate::sheets::{
-    definitions::ColumnDataType,
-    resources::SheetRegistry,
-};
+use crate::sheets::{definitions::ColumnDataType, resources::SheetRegistry};
 // IMPORTANT: EditorWindowState is needed here ONLY for the linked cache access
 // If we refactor cache access later, this dependency might be removed from validation itself.
 use crate::ui::elements::editor::state::EditorWindowState;
@@ -34,7 +31,8 @@ pub(crate) enum ValidationState {
 pub(crate) fn validate_basic_cell(
     current_cell_string: &str,
     basic_type: ColumnDataType,
-) -> (ValidationState, bool) { // Return type is ValidationState
+) -> (ValidationState, bool) {
+    // Return type is ValidationState
     if current_cell_string.is_empty() {
         let state = if matches!(basic_type, ColumnDataType::String) {
             ValidationState::Empty // empty string allowed only for String columns
@@ -46,14 +44,26 @@ pub(crate) fn validate_basic_cell(
 
     let mut parse_error = false;
     match basic_type {
-    ColumnDataType::String => {}
+        ColumnDataType::String => {}
         ColumnDataType::Bool => {
-             if !matches!(current_cell_string.to_lowercase().as_str(), "true" | "1" | "false" | "0") { parse_error = true; }
+            if !matches!(
+                current_cell_string.to_lowercase().as_str(),
+                "true" | "1" | "false" | "0"
+            ) {
+                parse_error = true;
+            }
         }
-        ColumnDataType::I64 => { if current_cell_string.parse::<i64>().is_err() { parse_error = true; } },
-        ColumnDataType::F64 => { if current_cell_string.parse::<f64>().is_err() { parse_error = true; } },
+        ColumnDataType::I64 => {
+            if current_cell_string.parse::<i64>().is_err() {
+                parse_error = true;
+            }
+        }
+        ColumnDataType::F64 => {
+            if current_cell_string.parse::<f64>().is_err() {
+                parse_error = true;
+            }
+        }
     }
-
 
     let state = if parse_error {
         ValidationState::Invalid
@@ -84,7 +94,10 @@ pub(crate) fn validate_linked_cell<'a>(
         registry,
         state, // Pass mutable state for cache population
     ) {
-        CacheResult::Success { raw: allowed_values, normalized } => {
+        CacheResult::Success {
+            raw: allowed_values,
+            normalized,
+        } => {
             // Compare using normalized strings (case-insensitive, ignoring CR/LF)
             let needle = normalize_for_link_cmp(current_cell_string);
             let exists = normalized.contains(&needle);

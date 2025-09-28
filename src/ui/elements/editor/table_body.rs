@@ -1,12 +1,12 @@
 // src/ui/elements/editor/table_body.rs
 use crate::sheets::{
     definitions::{ColumnValidator, SheetMetadata},
-    events::{UpdateCellEvent, OpenStructureViewEvent},
+    events::{OpenStructureViewEvent, UpdateCellEvent},
     resources::{SheetRegistry, SheetRenderCache},
 };
 // MODIFIED: Import SheetInteractionState
-use crate::ui::elements::editor::state::{AiModeState, EditorWindowState, SheetInteractionState};
 use crate::ui::common::edit_cell_widget;
+use crate::ui::elements::editor::state::{AiModeState, EditorWindowState, SheetInteractionState};
 use bevy::log::{debug, error, warn};
 use bevy::prelude::*;
 use bevy_egui::egui;
@@ -25,8 +25,7 @@ fn get_filtered_row_indices_internal(
     grid: &Vec<Vec<String>>,
     metadata: &SheetMetadata,
 ) -> Vec<usize> {
-    let filters: Vec<Option<String>> =
-        metadata.columns.iter().map(|c| c.filter.clone()).collect();
+    let filters: Vec<Option<String>> = metadata.columns.iter().map(|c| c.filter.clone()).collect();
     if filters.iter().all(Option::is_none) {
         return (0..grid.len()).collect();
     }
@@ -43,7 +42,9 @@ fn get_filtered_row_indices_internal(
                                 .map(|s| s.trim())
                                 .filter(|s| !s.is_empty())
                                 .collect();
-                            if terms.is_empty() { return true; }
+                            if terms.is_empty() {
+                                return true;
+                            }
                             row.get(col_idx).map_or(false, |cell_text| {
                                 let cell_lower = cell_text.to_lowercase();
                                 terms.iter().any(|t| {
@@ -62,7 +63,6 @@ fn get_filtered_row_indices_internal(
         .collect()
 }
 
-
 #[allow(clippy::too_many_arguments)]
 #[allow(dead_code)]
 pub fn sheet_table_body(
@@ -76,12 +76,18 @@ pub fn sheet_table_body(
     state: &mut EditorWindowState,
     open_structure_events: &mut EventWriter<OpenStructureViewEvent>,
 ) -> bool {
-
     let sheet_data_ref = match registry.get_sheet(category, sheet_name) {
         Some(data) => data,
         None => {
-            warn!("Sheet '{:?}/{}' not found in registry for table_body.", category, sheet_name);
-            body.row(row_height, |mut row| { row.col(|ui| { ui.label("Sheet missing"); }); });
+            warn!(
+                "Sheet '{:?}/{}' not found in registry for table_body.",
+                category, sheet_name
+            );
+            body.row(row_height, |mut row| {
+                row.col(|ui| {
+                    ui.label("Sheet missing");
+                });
+            });
             return true;
         }
     };
@@ -89,49 +95,86 @@ pub fn sheet_table_body(
     let metadata_ref = match &sheet_data_ref.metadata {
         Some(meta) => meta,
         None => {
-            warn!("Sheet '{:?}/{}' found but metadata missing in table_body", category, sheet_name);
-            body.row(row_height, |mut row| { row.col(|ui| { ui.label("Metadata missing"); }); });
+            warn!(
+                "Sheet '{:?}/{}' found but metadata missing in table_body",
+                category, sheet_name
+            );
+            body.row(row_height, |mut row| {
+                row.col(|ui| {
+                    ui.label("Metadata missing");
+                });
+            });
             return true;
         }
     };
 
     let grid_data = &sheet_data_ref.grid;
     let num_cols = metadata_ref.columns.len();
-    let validators: Vec<Option<ColumnValidator>> = metadata_ref.columns.iter().map(|c| c.validator.clone()).collect();
+    let validators: Vec<Option<ColumnValidator>> = metadata_ref
+        .columns
+        .iter()
+        .map(|c| c.validator.clone())
+        .collect();
 
     let active_filters = metadata_ref.get_filters();
     let filters_hash = calculate_filters_hash(&active_filters);
     let cache_key = (category.clone(), sheet_name.to_string(), filters_hash);
 
-    let filtered_indices = if !state.force_filter_recalculation && state.filtered_row_indices_cache.contains_key(&cache_key) {
-        state.filtered_row_indices_cache.get(&cache_key).cloned().unwrap_or_else(|| {
-             debug!("Cache key found but get failed for '{:?}/{}'. Recalculating.", category, sheet_name);
-             let indices = get_filtered_row_indices_internal(grid_data, metadata_ref);
-             state.filtered_row_indices_cache.insert(cache_key.clone(), indices.clone());
-             indices
-        })
+    let filtered_indices = if !state.force_filter_recalculation
+        && state.filtered_row_indices_cache.contains_key(&cache_key)
+    {
+        state
+            .filtered_row_indices_cache
+            .get(&cache_key)
+            .cloned()
+            .unwrap_or_else(|| {
+                debug!(
+                    "Cache key found but get failed for '{:?}/{}'. Recalculating.",
+                    category, sheet_name
+                );
+                let indices = get_filtered_row_indices_internal(grid_data, metadata_ref);
+                state
+                    .filtered_row_indices_cache
+                    .insert(cache_key.clone(), indices.clone());
+                indices
+            })
     } else {
-        debug!("Recalculating filtered indices for '{:?}/{}' (hash: {}, force_recalc: {})", category, sheet_name, filters_hash, state.force_filter_recalculation);
+        debug!(
+            "Recalculating filtered indices for '{:?}/{}' (hash: {}, force_recalc: {})",
+            category, sheet_name, filters_hash, state.force_filter_recalculation
+        );
         let indices = get_filtered_row_indices_internal(grid_data, metadata_ref);
-        state.filtered_row_indices_cache.insert(cache_key.clone(), indices.clone());
+        state
+            .filtered_row_indices_cache
+            .insert(cache_key.clone(), indices.clone());
         if state.force_filter_recalculation {
             state.force_filter_recalculation = false;
         }
         indices
     };
 
-
     if num_cols == 0 && !grid_data.is_empty() {
-        body.row(row_height, |mut row| { row.col(|ui| { ui.label("(No columns)"); }); });
+        body.row(row_height, |mut row| {
+            row.col(|ui| {
+                ui.label("(No columns)");
+            });
+        });
         return false;
     } else if filtered_indices.is_empty() && !grid_data.is_empty() {
-        body.row(row_height, |mut row| { row.col(|ui| { ui.label("(No rows match filter)"); }); });
+        body.row(row_height, |mut row| {
+            row.col(|ui| {
+                ui.label("(No rows match filter)");
+            });
+        });
         return false;
     } else if grid_data.is_empty() {
-        body.row(row_height, |mut row| { row.col(|ui| { ui.label("(Sheet is empty)"); }); });
+        body.row(row_height, |mut row| {
+            row.col(|ui| {
+                ui.label("(Sheet is empty)");
+            });
+        });
         return false;
     }
-
 
     let num_filtered_rows = filtered_indices.len();
 

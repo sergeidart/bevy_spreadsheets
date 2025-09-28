@@ -1,14 +1,14 @@
 // src/ui/elements/editor/state.rs
 use crate::sheets::definitions::ColumnDataType;
 use bevy::prelude::Resource;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AiModeState {
     #[default]
     Idle,
-    Preparing, 
+    Preparing,
     Submitting,
     ResultsReady,
     Reviewing,
@@ -17,7 +17,7 @@ pub enum AiModeState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SheetInteractionState {
     #[default]
-    Idle, 
+    Idle,
     AiModeActive,
     DeleteModeActive,
 }
@@ -51,20 +51,27 @@ pub enum FpsSetting {
 }
 
 impl Default for FpsSetting {
-    fn default() -> Self { FpsSetting::Sixty }
+    fn default() -> Self {
+        FpsSetting::Sixty
+    }
 }
 
 #[derive(Debug, Clone)]
 pub enum ThrottledAiAction {
-    UpdateCell { row_index: usize, col_index: usize, value: String },
-    AddRow { initial_values: Vec<(usize, String)> },
+    UpdateCell {
+        row_index: usize,
+        col_index: usize,
+        value: String,
+    },
+    AddRow {
+        initial_values: Vec<(usize, String)>,
+    },
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct ColumnDragState {
-    pub source_index: Option<usize>, 
+    pub source_index: Option<usize>,
 }
-
 
 #[derive(Resource)]
 #[allow(dead_code)]
@@ -76,17 +83,17 @@ pub struct EditorWindowState {
     // Stack of active virtual structure sheets (each represents a nested structure view)
     // Top of stack is current virtual sheet. Empty means not in structure view.
     pub virtual_structure_stack: Vec<VirtualStructureContext>,
-    
+
     // Popups related to selected sheet
     pub show_rename_popup: bool,
     pub rename_target_category: Option<String>,
     pub rename_target_sheet: String,
     pub new_name_input: String, // Used by rename sheet and new sheet
-    
+
     pub show_delete_confirm_popup: bool,
     pub delete_target_category: Option<String>,
     pub delete_target_sheet: String,
-    
+
     pub show_column_options_popup: bool,
     pub options_column_target_category: Option<String>,
     pub options_column_target_sheet: String,
@@ -120,27 +127,25 @@ pub struct EditorWindowState {
     pub delete_category_name: Option<String>,
     pub show_delete_category_double_confirm_popup: bool,
 
-
     // AI Mode specific state
     pub ai_mode: AiModeState,
-    pub ai_selected_rows: HashSet<usize>, 
+    pub ai_selected_rows: HashSet<usize>,
     pub ai_batch_review_active: bool, // unified batch review flag
     // Unified snapshot model
     pub ai_row_reviews: Vec<RowReview>,
     pub ai_new_row_reviews: Vec<NewRowReview>,
     // New unified review model
     // (legacy single-row review fields removed)
-
     pub ai_model_id_input: String,
     pub ai_general_rule_input: String,
-    
+
     pub ai_raw_output_display: String,
     // Bottom AI output panel visibility & context tracking
     pub ai_output_panel_visible: bool,
     pub ai_output_panel_last_context: Option<(Option<String>, String, bool)>, // (category, sheet, in_structure)
 
     // General Settings Popup
-    pub show_settings_popup: bool, 
+    pub show_settings_popup: bool,
     pub settings_new_api_key_input: String,
     pub was_settings_popup_open: bool, // Tracks previous state of settings popup
 
@@ -157,7 +162,7 @@ pub struct EditorWindowState {
     pub force_filter_recalculation: bool,
     pub request_scroll_to_new_row: bool,
     pub scroll_to_row_index: Option<usize>,
-    
+
     // UI Toggles
     pub show_quick_copy_bar: bool,
 
@@ -167,8 +172,6 @@ pub struct EditorWindowState {
     pub column_drag_state: ColumnDragState,
     // Drag-and-drop of sheets between categories
     pub dragged_sheet: Option<(Option<String>, String)>,
-
-    
 
     // NEW: Random Picker UI state (per-session)
     pub show_random_picker_panel: bool,
@@ -212,10 +215,6 @@ pub struct EditorWindowState {
     pub pending_structure_key_apply: Option<(Option<String>, String, usize, Option<usize>)>,
     // Stored context-only prefix values per row (for review UI display): Vec of (header, value)
     pub ai_context_prefix_by_row: HashMap<usize, Vec<(String, String)>>,
-        // Removed per-sheet override cache: flag now read directly from persisted metadata.
-        pub effective_ai_can_add_rows: Option<bool>,
-    // Optimistic pending toggle for AI row generation (root sheet) to avoid UI flicker while event processes
-    pub pending_ai_row_generation_toggle: Option<(Option<String>, String, bool)>, // (root_category, root_sheet, desired_flag)
 
     // UI layout prefs (persisted): expand/collapse of pickers
     pub category_picker_expanded: bool,
@@ -292,7 +291,7 @@ impl Default for EditorWindowState {
             ai_new_row_reviews: Vec::new(),
             ai_model_id_input: String::new(),
             ai_general_rule_input: String::new(),
-            
+
             ai_raw_output_display: String::new(),
             ai_output_panel_visible: false,
             ai_output_panel_last_context: None,
@@ -313,7 +312,7 @@ impl Default for EditorWindowState {
             selected_columns_for_deletion: HashSet::new(),
             column_drag_state: ColumnDragState::default(),
             dragged_sheet: None,
-            
+
             show_random_picker_panel: false,
             random_picker_mode_is_complex: false,
             random_simple_result_col: 0,
@@ -339,8 +338,6 @@ impl Default for EditorWindowState {
             ai_context_only_prefix_count: 0,
             pending_structure_key_apply: None,
             ai_context_prefix_by_row: HashMap::new(),
-            effective_ai_can_add_rows: None,
-            pending_ai_row_generation_toggle: None,
             category_picker_expanded: true,
             sheet_picker_expanded: true,
             show_edit_mode_panel: false,
@@ -410,17 +407,23 @@ impl EditorWindowState {
     // Otherwise returns the user's selected (category, sheet) pair.
     pub fn current_sheet_context(&self) -> (Option<String>, Option<String>) {
         if let Some(vctx) = self.virtual_structure_stack.last() {
-            return (vctx.parent.parent_category.clone(), Some(vctx.virtual_sheet_name.clone()));
+            return (
+                vctx.parent.parent_category.clone(),
+                Some(vctx.virtual_sheet_name.clone()),
+            );
         }
-        (self.selected_category.clone(), self.selected_sheet_name.clone())
+        (
+            self.selected_category.clone(),
+            self.selected_sheet_name.clone(),
+        )
     }
 
     pub fn reset_interaction_modes_and_selections(&mut self) {
         self.current_interaction_mode = SheetInteractionState::Idle;
-        self.ai_mode = AiModeState::Idle; 
+        self.ai_mode = AiModeState::Idle;
         self.ai_selected_rows.clear();
         self.selected_columns_for_deletion.clear();
-    // Legacy single-row / multi-map AI review fields removed.
+        // Legacy single-row / multi-map AI review fields removed.
 
         self.column_drag_state = ColumnDragState::default();
 
@@ -429,38 +432,57 @@ impl EditorWindowState {
             self.options_structure_source_columns.push(None);
         }
 
-    self.pending_validator_change_requires_confirmation = false;
-    self.pending_validator_new_validator_summary = None;
-    self.pending_validator_target_is_structure = false;
+        self.pending_validator_change_requires_confirmation = false;
+        self.pending_validator_new_validator_summary = None;
+        self.pending_validator_target_is_structure = false;
 
-    // NOTE: virtual structure stack intentionally preserved so user can back out after mode changes
+        // NOTE: virtual structure stack intentionally preserved so user can back out after mode changes
 
-    // Keep random picker visible state as-is across mode changes.
+        // Keep random picker visible state as-is across mode changes.
     }
 
     /// Resolve ultimate root sheet (category, sheet) for current view (following structure parents).
-    pub fn resolve_root_sheet(&self, registry: &crate::sheets::resources::SheetRegistry) -> (Option<String>, Option<String>) {
+    pub fn resolve_root_sheet(
+        &self,
+        registry: &crate::sheets::resources::SheetRegistry,
+    ) -> (Option<String>, Option<String>) {
         if let Some(vctx) = self.virtual_structure_stack.last() {
             let mut current_category = self.selected_category.clone();
             let mut current_sheet = vctx.virtual_sheet_name.clone();
             let mut safety = 0;
             while safety < 32 {
                 safety += 1;
-                if let Some(meta) = registry.get_sheet(&current_category, &current_sheet).and_then(|s| s.metadata.as_ref()) {
-                    if let Some(parent) = &meta.structure_parent { current_category = parent.parent_category.clone(); current_sheet = parent.parent_sheet.clone(); continue; }
+                if let Some(meta) = registry
+                    .get_sheet(&current_category, &current_sheet)
+                    .and_then(|s| s.metadata.as_ref())
+                {
+                    if let Some(parent) = &meta.structure_parent {
+                        current_category = parent.parent_category.clone();
+                        current_sheet = parent.parent_sheet.clone();
+                        continue;
+                    }
                 }
                 break;
             }
             return (current_category, Some(current_sheet));
         }
-        (self.selected_category.clone(), self.selected_sheet_name.clone())
+        (
+            self.selected_category.clone(),
+            self.selected_sheet_name.clone(),
+        )
     }
 
     /// Compute effective AI row-generation permission (root sheet meta + override). Returns None if no meta.
-    pub fn effective_ai_add_rows(&self, registry: &crate::sheets::resources::SheetRegistry) -> Option<bool> {
+    pub fn effective_ai_add_rows(
+        &self,
+        registry: &crate::sheets::resources::SheetRegistry,
+    ) -> Option<bool> {
         let (cat, sheet_opt) = self.resolve_root_sheet(registry);
         let sheet = sheet_opt?;
-    registry.get_sheet(&cat, &sheet).and_then(|s| s.metadata.as_ref()).map(|m| m.ai_enable_row_generation)
+        registry
+            .get_sheet(&cat, &sheet)
+            .and_then(|s| s.metadata.as_ref())
+            .map(|m| m.ai_enable_row_generation)
     }
 }
 

@@ -3,25 +3,26 @@ use bevy::prelude::*;
 use bevy_egui::EguiContextPass;
 
 // Declare UI element modules
-pub mod elements;
 pub mod common;
-pub mod validation;
+pub mod elements;
 pub mod systems;
+pub mod validation;
 pub mod widgets;
 pub mod elements_persist_support {}
 
 // Import the editor UI system from its new location
 use elements::editor::generic_sheet_editor_ui;
 // --- MODIFIED: Import EditorWindowState to initialize it ---
-use elements::editor::state::EditorWindowState;
+use crate::sheets::events::{CloseStructureViewEvent, OpenStructureViewEvent};
 use elements::editor::prefs::{load_prefs, save_prefs, UiPrefs};
-use crate::sheets::events::{OpenStructureViewEvent, CloseStructureViewEvent};
-use elements::editor::structure_navigation::{handle_open_structure_view, handle_close_structure_view};
+use elements::editor::state::EditorWindowState;
+use elements::editor::structure_navigation::{
+    handle_close_structure_view, handle_open_structure_view,
+};
 // --- END MODIFIED ---
 // Import the new feedback handling system
-use systems::handle_ui_feedback;
 use systems::clear_ui_feedback_on_sheet_change;
-
+use systems::handle_ui_feedback;
 
 #[derive(Resource, Default, Debug, Clone)]
 pub struct UiFeedbackState {
@@ -34,18 +35,17 @@ pub struct EditorUiPlugin;
 
 impl Plugin for EditorUiPlugin {
     fn build(&self, app: &mut App) {
-        app
-            .init_resource::<UiFeedbackState>()
+        app.init_resource::<UiFeedbackState>()
             // --- MODIFIED: Initialize EditorWindowState as a resource ---
             .init_resource::<EditorWindowState>()
             // Load UI prefs on startup
             .add_systems(Startup, load_ui_prefs_startup)
             .add_event::<OpenStructureViewEvent>()
             .add_event::<CloseStructureViewEvent>()
-            .add_systems(Update, (
-                handle_open_structure_view,
-                handle_close_structure_view,
-            ))
+            .add_systems(
+                Update,
+                (handle_open_structure_view, handle_close_structure_view),
+            )
             // --- END MODIFIED ---
             // Ensure we clear transient feedback on sheet changes before processing new feedback events
             .add_systems(Update, clear_ui_feedback_on_sheet_change)
@@ -64,10 +64,7 @@ fn load_ui_prefs_startup(mut state: ResMut<EditorWindowState>) {
     state.sheet_picker_expanded = prefs.sheet_picker_expanded;
 }
 
-fn persist_ui_prefs_if_changed(
-    state: Res<EditorWindowState>,
-    mut last: Local<Option<UiPrefs>>,
-) {
+fn persist_ui_prefs_if_changed(state: Res<EditorWindowState>, mut last: Local<Option<UiPrefs>>) {
     // Initialize on first run
     if last.is_none() {
         *last = Some(UiPrefs {

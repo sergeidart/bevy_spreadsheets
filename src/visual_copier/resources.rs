@@ -72,7 +72,6 @@ impl From<fs_extra::error::Error> for CopyError {
     }
 }
 
-
 /// Main resource holding the state of the Visual Copier.
 #[derive(Resource, Debug, Default, Serialize, Deserialize, Reflect)]
 #[reflect(Resource, Default, Serialize, Deserialize)]
@@ -97,7 +96,6 @@ fn default_status_string() -> String {
     "Idle".to_string()
 }
 
-
 impl VisualCopierManager {
     /// Gets the next available ID for a new copy task.
     pub fn get_next_id(&mut self) -> usize {
@@ -108,19 +106,27 @@ impl VisualCopierManager {
 
     /// Recalculates the next_id based on the highest existing ID in copy_tasks.
     pub fn recalculate_next_id(&mut self) {
-        self.next_id = self.copy_tasks.iter()
+        self.next_id = self
+            .copy_tasks
+            .iter()
             .map(|task| task.id)
             .max()
             .map_or(0, |max_id| max_id + 1);
-        debug!("VisualCopierManager: Recalculated next_id to {}", self.next_id);
+        debug!(
+            "VisualCopierManager: Recalculated next_id to {}",
+            self.next_id
+        );
     }
 
     /// Resets transient status fields after loading.
     pub fn reset_transient_state(&mut self) {
         self.top_panel_copy_status = default_status_string();
         for task in self.copy_tasks.iter_mut() {
-            if task.status.starts_with("Copying...") || task.status.starts_with("Queued...") || task.status.starts_with("Error:") {
-                 task.status = "Idle".to_string();
+            if task.status.starts_with("Copying...")
+                || task.status.starts_with("Queued...")
+                || task.status.starts_with("Error:")
+            {
+                task.status = "Idle".to_string();
             }
         }
         self.is_saving_on_exit = false;
