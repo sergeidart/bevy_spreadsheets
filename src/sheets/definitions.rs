@@ -4,7 +4,7 @@ use serde::{
     de::{self, Deserializer},
     Deserialize, Serialize,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Default)]
@@ -180,6 +180,23 @@ pub struct RandomPickerSettings {
     pub summarizer_columns: Vec<usize>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AiSchemaGroup {
+    pub name: String,
+    #[serde(default)]
+    pub included_columns: Vec<usize>,
+    #[serde(default)]
+    pub allow_add_rows: bool,
+    #[serde(default)]
+    pub structure_row_generation_overrides: Vec<AiSchemaGroupStructureOverride>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AiSchemaGroupStructureOverride {
+    pub path: Vec<usize>,
+    pub allow_add_rows: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ColumnDefinition {
     pub header: String,
@@ -352,6 +369,10 @@ pub struct SheetMetadata {
     // NEW: Allow AI to generate additional rows (persisted per sheet)
     #[serde(default)]
     pub ai_enable_row_generation: bool,
+    #[serde(default)]
+    pub ai_schema_groups: Vec<AiSchemaGroup>,
+    #[serde(default)]
+    pub ai_active_schema_group: Option<String>,
 
     // NEW: Optional per-sheet Random Picker settings
     #[serde(default)]
@@ -410,6 +431,10 @@ impl<'de> Deserialize<'de> for SheetMetadata {
             #[serde(default)]
             ai_enable_row_generation: bool,
             #[serde(default)]
+            ai_schema_groups: Vec<AiSchemaGroup>,
+            #[serde(default)]
+            ai_active_schema_group: Option<String>,
+            #[serde(default)]
             random_picker: Option<RandomPickerSettings>,
             #[serde(default)]
             structure_parent: Option<StructureParentLink>,
@@ -453,6 +478,8 @@ impl<'de> Deserialize<'de> for SheetMetadata {
                 ai_top_p: cur.ai_top_p,
                 requested_grounding_with_google_search: cur.requested_grounding_with_google_search,
                 ai_enable_row_generation: cur.ai_enable_row_generation,
+                ai_schema_groups: cur.ai_schema_groups,
+                ai_active_schema_group: cur.ai_active_schema_group,
                 random_picker: cur.random_picker,
                 structure_parent: cur.structure_parent,
             };
@@ -492,6 +519,7 @@ impl<'de> Deserialize<'de> for SheetMetadata {
                 col.width = None; // discard legacy width
             }
             meta.ensure_column_consistency();
+            meta.ensure_ai_schema_groups_initialized();
             return Ok(meta);
         }
 
@@ -559,6 +587,8 @@ impl<'de> Deserialize<'de> for SheetMetadata {
                 .requested_grounding_with_google_search
                 .or_else(default_grounding_with_google_search),
             ai_enable_row_generation: false,
+            ai_schema_groups: Vec::new(),
+            ai_active_schema_group: None,
             random_picker: legacy.random_picker,
             structure_parent: None,
         };
@@ -574,6 +604,7 @@ impl<'de> Deserialize<'de> for SheetMetadata {
             meta.ai_top_p = None;
         }
         meta.ensure_column_consistency();
+        meta.ensure_ai_schema_groups_initialized();
         info!(
             "Loaded legacy metadata for sheet '{}': {} columns",
             meta.sheet_name,
@@ -644,7 +675,7 @@ impl SheetMetadata {
             })
             .collect();
 
-        SheetMetadata {
+        let mut meta = SheetMetadata {
             sheet_name: name,
             category,
             data_filename: filename,
@@ -657,9 +688,13 @@ impl SheetMetadata {
             // Call the defined function for initialization
             requested_grounding_with_google_search: default_grounding_with_google_search(),
             ai_enable_row_generation: false,
+            ai_schema_groups: Vec::new(),
+            ai_active_schema_group: None,
             random_picker: None,
             structure_parent: None,
-        }
+        };
+        meta.ensure_ai_schema_groups_initialized();
+        meta
     }
 
     pub fn ensure_column_consistency(&mut self) -> bool {
@@ -691,6 +726,529 @@ impl SheetMetadata {
     pub fn get_filters(&self) -> Vec<Option<String>> {
         self.columns.iter().map(|c| c.filter.clone()).collect()
     }
+}
+
+impl SheetMetadata {
+    pub fn ai_included_column_indices(&self) -> Vec<usize> {
+        self.columns
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, column)| {
+                if matches!(column.validator, Some(ColumnValidator::Structure)) {
+                    return None;
+                }
+                if matches!(column.ai_include_in_send, Some(false)) {
+                    None
+                } else {
+                    Some(idx)
+                }
+            })
+            .collect()
+    }
+
+    pub fn ensure_ai_schema_groups_initialized(&mut self) {
+        let column_count = self.columns.len();
+        let valid_structure_paths = collect_all_structure_paths(&self.columns);
+        for group in self.ai_schema_groups.iter_mut() {
+            group.included_columns.retain(|idx| {
+                *idx < column_count
+                    && !matches!(
+                        self.columns[*idx].validator,
+                        Some(ColumnValidator::Structure)
+                    )
+            });
+            group.included_columns.sort_unstable();
+            group.included_columns.dedup();
+            group
+                .structure_row_generation_overrides
+                .retain(|override_entry| valid_structure_paths.contains(&override_entry.path));
+            group
+                .structure_row_generation_overrides
+                .sort_by(|a, b| a.path.cmp(&b.path));
+        }
+
+        if self.ai_schema_groups.is_empty() {
+            let default_name = "Default".to_string();
+            self.ai_schema_groups.push(AiSchemaGroup {
+                name: default_name.clone(),
+                included_columns: self.ai_included_column_indices(),
+                allow_add_rows: self.ai_enable_row_generation,
+                structure_row_generation_overrides: self
+                    .collect_structure_row_generation_overrides(),
+            });
+            self.ai_active_schema_group = Some(default_name);
+            return;
+        }
+
+        if let Some(active_name) = self.ai_active_schema_group.clone() {
+            if !self
+                .ai_schema_groups
+                .iter()
+                .any(|group| group.name == active_name)
+            {
+                self.ai_active_schema_group = None;
+            }
+        }
+
+        if self.ai_active_schema_group.is_none() {
+            if let Some(first) = self.ai_schema_groups.first() {
+                self.ai_active_schema_group = Some(first.name.clone());
+            }
+        }
+    }
+
+    pub fn set_active_ai_schema_group_included_columns(&mut self, included: &[usize]) -> bool {
+        let filtered: Vec<usize> = included
+            .iter()
+            .copied()
+            .filter(|idx| {
+                *idx < self.columns.len()
+                    && !matches!(
+                        self.columns[*idx].validator,
+                        Some(ColumnValidator::Structure)
+                    )
+            })
+            .collect();
+        if let Some(active_name) = self.ai_active_schema_group.clone() {
+            if let Some(group) = self
+                .ai_schema_groups
+                .iter_mut()
+                .find(|g| g.name == active_name)
+            {
+                if group.included_columns != filtered {
+                    group.included_columns = filtered;
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    pub fn set_active_ai_schema_group_allow_rows(&mut self, allow: bool) -> bool {
+        if let Some(active_name) = self.ai_active_schema_group.clone() {
+            if let Some(group) = self
+                .ai_schema_groups
+                .iter_mut()
+                .find(|g| g.name == active_name)
+            {
+                if group.allow_add_rows != allow {
+                    group.allow_add_rows = allow;
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    pub fn set_active_ai_schema_group_structure_override(
+        &mut self,
+        path: &[usize],
+        override_value: Option<bool>,
+    ) -> bool {
+        if path.is_empty() || !self.structure_path_exists(path) {
+            return false;
+        }
+
+        let Some(active_name) = self.ai_active_schema_group.clone() else {
+            return false;
+        };
+
+        let Some(group) = self
+            .ai_schema_groups
+            .iter_mut()
+            .find(|g| g.name == active_name)
+        else {
+            return false;
+        };
+
+        if let Some(value) = override_value {
+            if let Some(entry) = group
+                .structure_row_generation_overrides
+                .iter_mut()
+                .find(|entry| entry.path == path)
+            {
+                if entry.allow_add_rows != value {
+                    entry.allow_add_rows = value;
+                    return true;
+                }
+                return false;
+            }
+
+            group
+                .structure_row_generation_overrides
+                .push(AiSchemaGroupStructureOverride {
+                    path: path.to_vec(),
+                    allow_add_rows: value,
+                });
+            group
+                .structure_row_generation_overrides
+                .sort_by(|a, b| a.path.cmp(&b.path));
+            true
+        } else {
+            let original_len = group.structure_row_generation_overrides.len();
+            group
+                .structure_row_generation_overrides
+                .retain(|entry| entry.path != path);
+            original_len != group.structure_row_generation_overrides.len()
+        }
+    }
+
+    pub fn collect_structure_row_generation_overrides(
+        &self,
+    ) -> Vec<AiSchemaGroupStructureOverride> {
+        let mut overrides: Vec<AiSchemaGroupStructureOverride> = Vec::new();
+        for (column_index, column) in self.columns.iter().enumerate() {
+            collect_structure_row_overrides_from_column(column, column_index, &mut overrides);
+        }
+        overrides.sort_by(|a, b| a.path.cmp(&b.path));
+        overrides
+    }
+
+    pub fn apply_structure_row_generation_overrides(
+        &mut self,
+        overrides: &[AiSchemaGroupStructureOverride],
+    ) -> bool {
+        use std::collections::HashMap;
+
+        let mut desired: HashMap<Vec<usize>, bool> = overrides
+            .iter()
+            .filter_map(|entry| {
+                if self.structure_path_exists(&entry.path) {
+                    Some((entry.path.clone(), entry.allow_add_rows))
+                } else {
+                    warn!(
+                        "Skipping AI schema group structure override with invalid path: {:?}",
+                        entry.path
+                    );
+                    None
+                }
+            })
+            .collect();
+
+        let mut changed = false;
+
+        for (column_index, column) in self.columns.iter_mut().enumerate() {
+            let mut path = vec![column_index];
+            if reconcile_column_structure_overrides(column, &mut path, &mut desired) {
+                changed = true;
+            }
+        }
+
+        for (path, value) in desired.drain() {
+            if self.apply_structure_row_generation_override_path(&path, value) {
+                changed = true;
+            }
+        }
+
+        changed
+    }
+
+    fn structure_path_exists(&self, path: &[usize]) -> bool {
+        structure_path_exists_in_columns(&self.columns, path)
+    }
+
+    fn apply_structure_row_generation_override_path(
+        &mut self,
+        path: &[usize],
+        allow: bool,
+    ) -> bool {
+        apply_structure_row_generation_override_to_columns(&mut self.columns, path, allow)
+    }
+
+    pub fn apply_ai_schema_group(&mut self, group_name: &str) -> Result<bool, String> {
+        let group = self
+            .ai_schema_groups
+            .iter()
+            .find(|g| g.name == group_name)
+            .cloned()
+            .ok_or_else(|| format!("AI schema group '{}' not found", group_name))?;
+
+        let included_set: HashSet<usize> = group.included_columns.iter().copied().collect();
+        let mut changed = false;
+
+        for (idx, column) in self.columns.iter_mut().enumerate() {
+            if matches!(column.validator, Some(ColumnValidator::Structure)) {
+                continue;
+            }
+            let should_include = included_set.contains(&idx);
+            if should_include {
+                if column.ai_include_in_send.is_some() {
+                    column.ai_include_in_send = None;
+                    changed = true;
+                }
+            } else if column.ai_include_in_send != Some(false) {
+                column.ai_include_in_send = Some(false);
+                changed = true;
+            }
+        }
+
+        if self.ai_enable_row_generation != group.allow_add_rows {
+            self.ai_enable_row_generation = group.allow_add_rows;
+            changed = true;
+        }
+
+        if self.apply_structure_row_generation_overrides(&group.structure_row_generation_overrides)
+        {
+            changed = true;
+        }
+
+        if self.ai_active_schema_group.as_deref() != Some(group_name) {
+            self.ai_active_schema_group = Some(group_name.to_string());
+            changed = true;
+        }
+
+        Ok(changed)
+    }
+
+    pub fn ensure_unique_schema_group_name(&self, desired: &str) -> String {
+        if !self
+            .ai_schema_groups
+            .iter()
+            .any(|g| g.name.eq_ignore_ascii_case(desired))
+        {
+            return desired.to_string();
+        }
+
+        let mut counter = 2usize;
+        let base = desired.trim();
+        loop {
+            let candidate = format!("{} {}", base, counter);
+            if !self
+                .ai_schema_groups
+                .iter()
+                .any(|g| g.name.eq_ignore_ascii_case(&candidate))
+            {
+                return candidate;
+            }
+            counter += 1;
+        }
+    }
+}
+
+fn collect_structure_row_overrides_from_column(
+    column: &ColumnDefinition,
+    column_index: usize,
+    output: &mut Vec<AiSchemaGroupStructureOverride>,
+) {
+    if let Some(value) = column.ai_enable_row_generation {
+        output.push(AiSchemaGroupStructureOverride {
+            path: vec![column_index],
+            allow_add_rows: value,
+        });
+    }
+
+    if let Some(schema) = column.structure_schema.as_ref() {
+        for (field_index, field) in schema.iter().enumerate() {
+            let mut path = vec![column_index, field_index];
+            collect_structure_row_overrides_from_field(field, &mut path, output);
+        }
+    }
+}
+
+fn collect_structure_row_overrides_from_field(
+    field: &StructureFieldDefinition,
+    path: &mut Vec<usize>,
+    output: &mut Vec<AiSchemaGroupStructureOverride>,
+) {
+    if let Some(value) = field.ai_enable_row_generation {
+        output.push(AiSchemaGroupStructureOverride {
+            path: path.clone(),
+            allow_add_rows: value,
+        });
+    }
+
+    if let Some(schema) = field.structure_schema.as_ref() {
+        for (child_index, child_field) in schema.iter().enumerate() {
+            path.push(child_index);
+            collect_structure_row_overrides_from_field(child_field, path, output);
+            path.pop();
+        }
+    }
+}
+
+fn collect_all_structure_paths(columns: &[ColumnDefinition]) -> HashSet<Vec<usize>> {
+    let mut paths: HashSet<Vec<usize>> = HashSet::new();
+    for (column_index, column) in columns.iter().enumerate() {
+        if !matches!(column.validator, Some(ColumnValidator::Structure))
+            && column.structure_schema.is_none()
+        {
+            continue;
+        }
+        let mut path = vec![column_index];
+        paths.insert(path.clone());
+        if let Some(schema) = column.structure_schema.as_ref() {
+            collect_structure_paths_from_fields(schema, &mut path, &mut paths);
+        }
+    }
+    paths
+}
+
+fn collect_structure_paths_from_fields(
+    fields: &[StructureFieldDefinition],
+    path: &mut Vec<usize>,
+    output: &mut HashSet<Vec<usize>>,
+) {
+    for (index, field) in fields.iter().enumerate() {
+        path.push(index);
+        output.insert(path.clone());
+        if let Some(schema) = field.structure_schema.as_ref() {
+            collect_structure_paths_from_fields(schema, path, output);
+        }
+        path.pop();
+    }
+}
+
+fn structure_path_exists_in_columns(columns: &[ColumnDefinition], path: &[usize]) -> bool {
+    let (first, rest) = match path.split_first() {
+        Some(split) => split,
+        None => return false,
+    };
+    let Some(column) = columns.get(*first) else {
+        return false;
+    };
+
+    if rest.is_empty() {
+        matches!(column.validator, Some(ColumnValidator::Structure))
+            || column.structure_schema.is_some()
+    } else if let Some(schema) = column.structure_schema.as_ref() {
+        structure_path_exists_in_fields(schema, rest)
+    } else {
+        false
+    }
+}
+
+fn structure_path_exists_in_fields(fields: &[StructureFieldDefinition], path: &[usize]) -> bool {
+    let (first, rest) = match path.split_first() {
+        Some(split) => split,
+        None => return true,
+    };
+    let Some(field) = fields.get(*first) else {
+        return false;
+    };
+
+    if rest.is_empty() {
+        true
+    } else if let Some(schema) = field.structure_schema.as_ref() {
+        structure_path_exists_in_fields(schema, rest)
+    } else {
+        false
+    }
+}
+
+fn apply_structure_row_generation_override_to_columns(
+    columns: &mut [ColumnDefinition],
+    path: &[usize],
+    allow: bool,
+) -> bool {
+    let (first, rest) = match path.split_first() {
+        Some(split) => split,
+        None => return false,
+    };
+    let Some(column) = columns.get_mut(*first) else {
+        return false;
+    };
+
+    if rest.is_empty() {
+        if column.ai_enable_row_generation != Some(allow) {
+            column.ai_enable_row_generation = Some(allow);
+            return true;
+        }
+        return false;
+    }
+
+    let Some(schema) = column.structure_schema.as_mut() else {
+        return false;
+    };
+    apply_structure_row_generation_override_to_fields(schema, rest, allow)
+}
+
+fn apply_structure_row_generation_override_to_fields(
+    fields: &mut [StructureFieldDefinition],
+    path: &[usize],
+    allow: bool,
+) -> bool {
+    let (first, rest) = match path.split_first() {
+        Some(split) => split,
+        None => return false,
+    };
+    let Some(field) = fields.get_mut(*first) else {
+        return false;
+    };
+
+    if rest.is_empty() {
+        if field.ai_enable_row_generation != Some(allow) {
+            field.ai_enable_row_generation = Some(allow);
+            return true;
+        }
+        return false;
+    }
+
+    let Some(schema) = field.structure_schema.as_mut() else {
+        return false;
+    };
+    apply_structure_row_generation_override_to_fields(schema, rest, allow)
+}
+
+fn reconcile_column_structure_overrides(
+    column: &mut ColumnDefinition,
+    path: &mut Vec<usize>,
+    desired: &mut std::collections::HashMap<Vec<usize>, bool>,
+) -> bool {
+    let mut changed = false;
+    let key = path.clone();
+    if let Some(&target) = desired.get(&key) {
+        if column.ai_enable_row_generation != Some(target) {
+            column.ai_enable_row_generation = Some(target);
+            changed = true;
+        }
+        desired.remove(&key);
+    } else if column.ai_enable_row_generation.is_some() {
+        column.ai_enable_row_generation = None;
+        changed = true;
+    }
+
+    if let Some(schema) = column.structure_schema.as_mut() {
+        for (field_index, field) in schema.iter_mut().enumerate() {
+            path.push(field_index);
+            if reconcile_field_structure_overrides(field, path, desired) {
+                changed = true;
+            }
+            path.pop();
+        }
+    }
+
+    changed
+}
+
+fn reconcile_field_structure_overrides(
+    field: &mut StructureFieldDefinition,
+    path: &mut Vec<usize>,
+    desired: &mut std::collections::HashMap<Vec<usize>, bool>,
+) -> bool {
+    let mut changed = false;
+    let key = path.clone();
+    if let Some(&target) = desired.get(&key) {
+        if field.ai_enable_row_generation != Some(target) {
+            field.ai_enable_row_generation = Some(target);
+            changed = true;
+        }
+        desired.remove(&key);
+    } else if field.ai_enable_row_generation.is_some() {
+        field.ai_enable_row_generation = None;
+        changed = true;
+    }
+
+    if let Some(schema) = field.structure_schema.as_mut() {
+        for (child_index, child_field) in schema.iter_mut().enumerate() {
+            path.push(child_index);
+            if reconcile_field_structure_overrides(child_field, path, desired) {
+                changed = true;
+            }
+            path.pop();
+        }
+    }
+
+    changed
 }
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]

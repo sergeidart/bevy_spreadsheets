@@ -13,12 +13,13 @@ use super::editor_sheet_display;
 use super::state::{AiModeState, EditorWindowState, SheetInteractionState};
 use crate::sheets::{
     events::{
-        AddSheetRowRequest, CloseStructureViewEvent, RequestAddColumn, RequestCreateCategory,
-        RequestCreateNewSheet, RequestDeleteCategory, RequestDeleteColumns, RequestDeleteRows,
-        RequestDeleteSheet, RequestInitiateFileUpload, RequestRenameSheet, RequestReorderColumn,
-        RequestSheetRevalidation, RequestToggleAiRowGeneration, RequestUpdateAiSendSchema,
-        RequestUpdateColumnName, RequestUpdateColumnValidator, SheetDataModifiedInRegistryEvent,
-        UpdateCellEvent,
+        AddSheetRowRequest, CloseStructureViewEvent, RequestAddColumn, RequestCreateAiSchemaGroup,
+        RequestCreateCategory, RequestCreateNewSheet, RequestDeleteCategory, RequestDeleteColumns,
+        RequestDeleteRows, RequestDeleteSheet, RequestInitiateFileUpload,
+        RequestRenameAiSchemaGroup, RequestRenameSheet, RequestReorderColumn,
+        RequestSelectAiSchemaGroup, RequestSheetRevalidation, RequestToggleAiRowGeneration,
+        RequestUpdateAiSendSchema, RequestUpdateColumnName, RequestUpdateColumnValidator,
+        SheetDataModifiedInRegistryEvent, UpdateCellEvent,
     },
     resources::{SheetRegistry, SheetRenderCache},
 };
@@ -53,6 +54,9 @@ pub struct SheetEventWriters<'w> {
     pub open_structure: EventWriter<'w, crate::sheets::events::OpenStructureViewEvent>,
     pub toggle_ai_row_generation: EventWriter<'w, RequestToggleAiRowGeneration>,
     pub update_ai_send_schema: EventWriter<'w, RequestUpdateAiSendSchema>,
+    pub create_ai_schema_group: EventWriter<'w, RequestCreateAiSchemaGroup>,
+    pub rename_ai_schema_group: EventWriter<'w, RequestRenameAiSchemaGroup>,
+    pub select_ai_schema_group: EventWriter<'w, RequestSelectAiSchemaGroup>,
     // Category management
     pub create_category: EventWriter<'w, RequestCreateCategory>,
     pub delete_category: EventWriter<'w, RequestDeleteCategory>,

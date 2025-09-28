@@ -7,6 +7,7 @@ use super::events::{
     AiTaskResult,
     JsonSheetUploaded,
     RequestAddColumn,
+    RequestCreateAiSchemaGroup,
     // Category events
     RequestCreateCategory,
     RequestCreateCategoryDirectory,
@@ -20,11 +21,13 @@ use super::events::{
     RequestInitiateFileUpload,
     RequestMoveSheetToCategory,
     RequestProcessUpload,
+    RequestRenameAiSchemaGroup,
     RequestRenameCategory,
     RequestRenameCategoryDirectory,
     RequestRenameSheet,
     RequestRenameSheetFile,
     RequestReorderColumn,
+    RequestSelectAiSchemaGroup,
     RequestSheetRevalidation,
     RequestToggleAiRowGeneration,
     RequestUpdateAiSendSchema,
@@ -97,7 +100,10 @@ impl Plugin for SheetsPlugin {
             .add_event::<RequestSheetRevalidation>()
             .add_event::<RequestToggleAiRowGeneration>()
             .add_event::<RequestUpdateAiSendSchema>()
-            .add_event::<RequestMoveSheetToCategory>();
+            .add_event::<RequestMoveSheetToCategory>()
+            .add_event::<RequestCreateAiSchemaGroup>()
+            .add_event::<RequestRenameAiSchemaGroup>()
+            .add_event::<RequestSelectAiSchemaGroup>();
         // Category management events
         app.add_event::<RequestCreateCategory>()
             .add_event::<RequestDeleteCategory>()
@@ -125,31 +131,49 @@ impl Plugin for SheetsPlugin {
             (systems::io::handle_initiate_file_upload,).in_set(SheetSystemSet::UserInput),
         );
 
+        let apply_changes_stage_one = (
+            systems::io::handle_process_upload_request,
+            ApplyDeferred,
+            systems::io::handle_json_sheet_upload,
+            systems::logic::handle_rename_request,
+            systems::logic::handle_delete_request,
+            systems::logic::handle_add_row_request,
+            systems::logic::handle_toggle_ai_row_generation,
+            systems::logic::handle_update_ai_send_schema,
+            systems::logic::handle_create_ai_schema_group,
+            systems::logic::handle_rename_ai_schema_group,
+            systems::logic::handle_select_ai_schema_group,
+        )
+            .chain();
+
+        let apply_changes_stage_two = (
+            systems::logic::handle_add_column_request,
+            systems::logic::handle_reorder_column_request,
+            // NEW: Add system for creating sheets
+            systems::logic::handle_create_new_sheet_request,
+            // Category create/delete
+            systems::logic::handle_create_category_request,
+            systems::logic::handle_delete_category_request,
+            systems::logic::handle_rename_category_request,
+            systems::logic::handle_delete_rows_request,
+        )
+            .chain();
+
+        let apply_changes_stage_three = (
+            systems::logic::handle_move_sheet_to_category_request,
+            systems::logic::handle_delete_columns_request,
+            systems::logic::handle_update_column_name,
+            systems::logic::handle_update_column_validator,
+            systems::logic::handle_cell_update,
+        )
+            .chain();
+
         app.add_systems(
             Update,
             (
-                systems::io::handle_process_upload_request,
-                ApplyDeferred,
-                systems::io::handle_json_sheet_upload,
-                systems::logic::handle_rename_request,
-                systems::logic::handle_delete_request,
-                systems::logic::handle_add_row_request,
-                systems::logic::handle_toggle_ai_row_generation,
-                systems::logic::handle_update_ai_send_schema,
-                systems::logic::handle_add_column_request,
-                systems::logic::handle_reorder_column_request,
-                // NEW: Add system for creating sheets
-                systems::logic::handle_create_new_sheet_request,
-                // Category create/delete
-                systems::logic::handle_create_category_request,
-                systems::logic::handle_delete_category_request,
-                systems::logic::handle_rename_category_request,
-                systems::logic::handle_delete_rows_request,
-                systems::logic::handle_move_sheet_to_category_request,
-                systems::logic::handle_delete_columns_request,
-                systems::logic::handle_update_column_name,
-                systems::logic::handle_update_column_validator,
-                systems::logic::handle_cell_update,
+                apply_changes_stage_one,
+                apply_changes_stage_two,
+                apply_changes_stage_three,
             )
                 .chain()
                 .in_set(SheetSystemSet::ApplyChanges),

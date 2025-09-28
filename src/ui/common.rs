@@ -98,22 +98,22 @@ pub fn edit_cell_widget(
     let (frame_id, frame_rect) = ui.allocate_space(desired_size);
 
     // Determine an effective validation state: prefer the up-to-date cached linked set when present
-    let effective_validation_state = if let Some(values_norm) = prefetch_allowed_values_norm.as_ref()
-    {
-        if current_display_text.is_empty() {
-            ValidationState::Empty
-        } else {
-            let needle = normalize_for_link_cmp(current_display_text);
-            let exists = values_norm.contains(&needle);
-            if exists {
-                ValidationState::Valid
+    let effective_validation_state =
+        if let Some(values_norm) = prefetch_allowed_values_norm.as_ref() {
+            if current_display_text.is_empty() {
+                ValidationState::Empty
             } else {
-                ValidationState::Invalid
+                let needle = normalize_for_link_cmp(current_display_text);
+                let exists = values_norm.contains(&needle);
+                if exists {
+                    ValidationState::Valid
+                } else {
+                    ValidationState::Invalid
+                }
             }
-        }
-    } else {
-        cell_validation_state
-    };
+        } else {
+            cell_validation_state
+        };
 
     // Determine whether the cached AI-included column set applies to this cell
     let is_column_ai_included = if state.ai_cached_included_columns_valid

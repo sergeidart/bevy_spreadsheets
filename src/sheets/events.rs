@@ -185,6 +185,28 @@ pub struct RequestUpdateAiSendSchema {
 }
 
 #[derive(Event, Debug, Clone)]
+pub struct RequestCreateAiSchemaGroup {
+    pub category: Option<String>,
+    pub sheet_name: String,
+    pub desired_name: Option<String>,
+}
+
+#[derive(Event, Debug, Clone)]
+pub struct RequestRenameAiSchemaGroup {
+    pub category: Option<String>,
+    pub sheet_name: String,
+    pub old_name: String,
+    pub new_name: String,
+}
+
+#[derive(Event, Debug, Clone)]
+pub struct RequestSelectAiSchemaGroup {
+    pub category: Option<String>,
+    pub sheet_name: String,
+    pub group_name: String,
+}
+
+#[derive(Event, Debug, Clone)]
 pub struct RequestSheetRevalidation {
     pub category: Option<String>,
     pub sheet_name: String,

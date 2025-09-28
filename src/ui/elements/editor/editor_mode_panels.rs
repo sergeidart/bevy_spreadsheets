@@ -44,6 +44,9 @@ pub(super) fn show_active_mode_panel(
             session_api_key,
             &mut sheet_writers.toggle_ai_row_generation,
             &mut sheet_writers.update_ai_send_schema,
+            &mut sheet_writers.create_ai_schema_group,
+            &mut sheet_writers.rename_ai_schema_group,
+            &mut sheet_writers.select_ai_schema_group,
         );
         panel_shown = true;
     }

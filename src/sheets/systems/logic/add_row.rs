@@ -1,8 +1,11 @@
 // src/sheets/systems/logic/add_row.rs
 use crate::sheets::{
-    definitions::{ColumnDefinition, ColumnValidator, SheetMetadata, StructureFieldDefinition},
+    definitions::{
+        AiSchemaGroup, ColumnDefinition, ColumnValidator, SheetMetadata, StructureFieldDefinition,
+    },
     events::{
-        AddSheetRowRequest, RequestToggleAiRowGeneration, RequestUpdateAiSendSchema,
+        AddSheetRowRequest, RequestCreateAiSchemaGroup, RequestRenameAiSchemaGroup,
+        RequestSelectAiSchemaGroup, RequestToggleAiRowGeneration, RequestUpdateAiSendSchema,
         SheetDataModifiedInRegistryEvent, SheetOperationFeedback,
     },
     resources::SheetRegistry,
@@ -141,6 +144,8 @@ pub fn handle_toggle_ai_row_generation(
             continue;
         };
 
+        meta.ensure_ai_schema_groups_initialized();
+
         let outcome = match &e.structure_path {
             Some(path) if !path.is_empty() => {
                 match update_structure_row_generation(meta, path, e.structure_override) {
@@ -160,7 +165,11 @@ pub fn handle_toggle_ai_row_generation(
                                 scope_label
                             ),
                         };
-                        Some((did_change, message))
+                        let group_changed = meta.set_active_ai_schema_group_structure_override(
+                            path.as_slice(),
+                            e.structure_override,
+                        );
+                        Some((did_change || group_changed, message))
                     }
                     Err(err) => {
                         let message = format!(
@@ -176,7 +185,9 @@ pub fn handle_toggle_ai_row_generation(
                 }
             }
             _ => {
-                let changed = update_general_row_generation(meta, e.enabled);
+                let changed_setting = update_general_row_generation(meta, e.enabled);
+                let group_changed = meta.set_active_ai_schema_group_allow_rows(e.enabled);
+                let changed = changed_setting || group_changed;
                 let message = format!(
                     "AI row generation {} for {:?}/{}",
                     if e.enabled { "ENABLED" } else { "DISABLED" },
@@ -240,14 +251,22 @@ pub fn handle_update_ai_send_schema(
             continue;
         };
 
+        meta.ensure_ai_schema_groups_initialized();
+
         let included: HashSet<usize> = e.included_columns.iter().copied().collect();
         let included_count = included.len();
         let sheet_label = format!("{:?}/{}", e.category, e.sheet_name);
+        let mut group_changed = false;
 
         let outcome = match &e.structure_path {
             Some(path) if !path.is_empty() => apply_send_schema_to_structure(meta, path, &included)
                 .map(|(changed, labels)| (changed, Some(labels))),
-            _ => Ok((apply_send_schema_to_root(meta, &included), None)),
+            _ => {
+                let changed = apply_send_schema_to_root(meta, &included);
+                group_changed =
+                    meta.set_active_ai_schema_group_included_columns(&e.included_columns);
+                Ok((changed, None))
+            }
         };
 
         match outcome {
@@ -262,11 +281,16 @@ pub fn handle_update_ai_send_schema(
                     format!("AI send columns for {}", sheet_label)
                 };
 
-                if changed {
+                if changed || group_changed {
+                    let feedback_text = if changed {
+                        format!("{} updated ({} columns).", base_message, included_count)
+                    } else {
+                        format!("{} group state updated (no column changes).", base_message)
+                    };
                     let meta_clone = meta.clone();
                     save_single_sheet(registry.as_ref(), &meta_clone);
                     feedback.write(SheetOperationFeedback {
-                        message: format!("{} updated ({} columns).", base_message, included_count),
+                        message: feedback_text,
                         is_error: false,
                     });
                     data_modified_writer.write(SheetDataModifiedInRegistryEvent {
@@ -288,6 +312,245 @@ pub fn handle_update_ai_send_schema(
                     message: format!(
                         "Failed to update AI send columns for {}: {}",
                         sheet_label, err
+                    ),
+                    is_error: true,
+                });
+            }
+        }
+    }
+}
+
+pub fn handle_create_ai_schema_group(
+    mut ev: EventReader<RequestCreateAiSchemaGroup>,
+    mut registry: ResMut<SheetRegistry>,
+    mut feedback: EventWriter<SheetOperationFeedback>,
+    mut data_modified_writer: EventWriter<SheetDataModifiedInRegistryEvent>,
+) {
+    for e in ev.read() {
+        let Some(sheet) = registry.get_sheet_mut(&e.category, &e.sheet_name) else {
+            feedback.write(SheetOperationFeedback {
+                message: format!(
+                    "Sheet {:?}/{} not found when creating AI schema group",
+                    e.category, e.sheet_name
+                ),
+                is_error: true,
+            });
+            continue;
+        };
+
+        let Some(meta) = sheet.metadata.as_mut() else {
+            feedback.write(SheetOperationFeedback {
+                message: format!(
+                    "Metadata missing for {:?}/{} when creating AI schema group",
+                    e.category, e.sheet_name
+                ),
+                is_error: true,
+            });
+            continue;
+        };
+
+        meta.ensure_ai_schema_groups_initialized();
+
+        let desired = e
+            .desired_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("Group");
+        let unique_name = meta.ensure_unique_schema_group_name(desired);
+
+        let included = meta.ai_included_column_indices();
+        let allow_add = meta.ai_enable_row_generation;
+
+        meta.ai_schema_groups.push(AiSchemaGroup {
+            name: unique_name.clone(),
+            included_columns: included,
+            allow_add_rows: allow_add,
+            structure_row_generation_overrides: meta.collect_structure_row_generation_overrides(),
+        });
+        meta.ai_active_schema_group = Some(unique_name.clone());
+
+        let meta_clone = meta.clone();
+        save_single_sheet(registry.as_ref(), &meta_clone);
+        feedback.write(SheetOperationFeedback {
+            message: format!(
+                "Created AI schema group '{}' for {:?}/{}",
+                unique_name, e.category, e.sheet_name
+            ),
+            is_error: false,
+        });
+        data_modified_writer.write(SheetDataModifiedInRegistryEvent {
+            category: e.category.clone(),
+            sheet_name: e.sheet_name.clone(),
+        });
+    }
+}
+
+pub fn handle_rename_ai_schema_group(
+    mut ev: EventReader<RequestRenameAiSchemaGroup>,
+    mut registry: ResMut<SheetRegistry>,
+    mut feedback: EventWriter<SheetOperationFeedback>,
+    mut data_modified_writer: EventWriter<SheetDataModifiedInRegistryEvent>,
+) {
+    for e in ev.read() {
+        let Some(sheet) = registry.get_sheet_mut(&e.category, &e.sheet_name) else {
+            feedback.write(SheetOperationFeedback {
+                message: format!(
+                    "Sheet {:?}/{} not found when renaming AI schema group",
+                    e.category, e.sheet_name
+                ),
+                is_error: true,
+            });
+            continue;
+        };
+
+        let Some(meta) = sheet.metadata.as_mut() else {
+            feedback.write(SheetOperationFeedback {
+                message: format!(
+                    "Metadata missing for {:?}/{} when renaming AI schema group",
+                    e.category, e.sheet_name
+                ),
+                is_error: true,
+            });
+            continue;
+        };
+
+        meta.ensure_ai_schema_groups_initialized();
+
+        let Some(group_index) = meta
+            .ai_schema_groups
+            .iter()
+            .position(|g| g.name == e.old_name)
+        else {
+            feedback.write(SheetOperationFeedback {
+                message: format!(
+                    "AI schema group '{}' not found in {:?}/{}",
+                    e.old_name, e.category, e.sheet_name
+                ),
+                is_error: true,
+            });
+            continue;
+        };
+
+        let trimmed = e.new_name.trim();
+        if trimmed.is_empty() {
+            feedback.write(SheetOperationFeedback {
+                message: "AI schema group name cannot be empty.".to_string(),
+                is_error: true,
+            });
+            continue;
+        }
+
+        let conflict_exists = meta
+            .ai_schema_groups
+            .iter()
+            .enumerate()
+            .any(|(idx, g)| idx != group_index && g.name.eq_ignore_ascii_case(trimmed));
+
+        let unique_name = if conflict_exists {
+            meta.ensure_unique_schema_group_name(trimmed)
+        } else {
+            trimmed.to_string()
+        };
+
+        let current_name = meta.ai_schema_groups[group_index].name.clone();
+        if current_name == unique_name {
+            feedback.write(SheetOperationFeedback {
+                message: format!("AI schema group '{}' already has that name.", unique_name),
+                is_error: false,
+            });
+            continue;
+        }
+
+        meta.ai_schema_groups[group_index].name = unique_name.clone();
+
+        if meta
+            .ai_active_schema_group
+            .as_ref()
+            .map(|name| name == &e.old_name)
+            .unwrap_or(false)
+        {
+            meta.ai_active_schema_group = Some(unique_name.clone());
+        }
+
+        let meta_clone = meta.clone();
+        save_single_sheet(registry.as_ref(), &meta_clone);
+        feedback.write(SheetOperationFeedback {
+            message: format!(
+                "Renamed AI schema group '{}' to '{}' for {:?}/{}",
+                e.old_name, unique_name, e.category, e.sheet_name
+            ),
+            is_error: false,
+        });
+        data_modified_writer.write(SheetDataModifiedInRegistryEvent {
+            category: e.category.clone(),
+            sheet_name: e.sheet_name.clone(),
+        });
+    }
+}
+
+pub fn handle_select_ai_schema_group(
+    mut ev: EventReader<RequestSelectAiSchemaGroup>,
+    mut registry: ResMut<SheetRegistry>,
+    mut feedback: EventWriter<SheetOperationFeedback>,
+    mut data_modified_writer: EventWriter<SheetDataModifiedInRegistryEvent>,
+) {
+    for e in ev.read() {
+        let Some(sheet) = registry.get_sheet_mut(&e.category, &e.sheet_name) else {
+            feedback.write(SheetOperationFeedback {
+                message: format!(
+                    "Sheet {:?}/{} not found when selecting AI schema group",
+                    e.category, e.sheet_name
+                ),
+                is_error: true,
+            });
+            continue;
+        };
+
+        let Some(meta) = sheet.metadata.as_mut() else {
+            feedback.write(SheetOperationFeedback {
+                message: format!(
+                    "Metadata missing for {:?}/{} when selecting AI schema group",
+                    e.category, e.sheet_name
+                ),
+                is_error: true,
+            });
+            continue;
+        };
+
+        meta.ensure_ai_schema_groups_initialized();
+
+        match meta.apply_ai_schema_group(&e.group_name) {
+            Ok(changed) => {
+                let meta_clone = meta.clone();
+                save_single_sheet(registry.as_ref(), &meta_clone);
+                if changed {
+                    feedback.write(SheetOperationFeedback {
+                        message: format!(
+                            "Applied AI schema group '{}' to {:?}/{}",
+                            e.group_name, e.category, e.sheet_name
+                        ),
+                        is_error: false,
+                    });
+                } else {
+                    feedback.write(SheetOperationFeedback {
+                        message: format!(
+                            "AI schema group '{}' already active for {:?}/{}",
+                            e.group_name, e.category, e.sheet_name
+                        ),
+                        is_error: false,
+                    });
+                }
+                data_modified_writer.write(SheetDataModifiedInRegistryEvent {
+                    category: e.category.clone(),
+                    sheet_name: e.sheet_name.clone(),
+                });
+            }
+            Err(err) => {
+                feedback.write(SheetOperationFeedback {
+                    message: format!(
+                        "Failed to apply AI schema group '{}' for {:?}/{}: {}",
+                        e.group_name, e.category, e.sheet_name, err
                     ),
                     is_error: true,
                 });

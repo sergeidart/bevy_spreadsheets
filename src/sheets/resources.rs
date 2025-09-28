@@ -152,6 +152,8 @@ impl SheetRegistry {
             );
         }
 
+        metadata.ensure_ai_schema_groups_initialized();
+
         let category_map = self.categorized_sheets.entry(category.clone()).or_default();
 
         if !category_map.contains_key(&name) {
@@ -216,6 +218,8 @@ impl SheetRegistry {
                 );
                 meta.data_filename = filename_only;
             }
+
+            meta.ensure_ai_schema_groups_initialized();
         }
 
         // Get or create the category map and insert/replace the sheet

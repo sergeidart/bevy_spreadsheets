@@ -151,6 +151,11 @@ pub struct EditorWindowState {
     // Bottom AI output panel visibility & context tracking
     pub ai_output_panel_visible: bool,
     pub ai_output_panel_last_context: Option<(Option<String>, String, bool)>, // (category, sheet, in_structure)
+    pub ai_group_add_popup_open: bool,
+    pub ai_group_add_name_input: String,
+    pub ai_group_rename_popup_open: bool,
+    pub ai_group_rename_target: Option<String>,
+    pub ai_group_rename_input: String,
 
     // General Settings Popup
     pub show_settings_popup: bool,
@@ -309,6 +314,11 @@ impl Default for EditorWindowState {
             ai_raw_output_display: String::new(),
             ai_output_panel_visible: false,
             ai_output_panel_last_context: None,
+            ai_group_add_popup_open: false,
+            ai_group_add_name_input: String::new(),
+            ai_group_rename_popup_open: false,
+            ai_group_rename_target: None,
+            ai_group_rename_input: String::new(),
             show_settings_popup: false,
             settings_new_api_key_input: String::new(),
             was_settings_popup_open: false,
@@ -458,6 +468,12 @@ impl EditorWindowState {
 
         // NOTE: virtual structure stack intentionally preserved so user can back out after mode changes
         // Keep random picker visible state as-is across mode changes.
+
+        self.ai_group_add_popup_open = false;
+        self.ai_group_add_name_input.clear();
+        self.ai_group_rename_popup_open = false;
+        self.ai_group_rename_target = None;
+        self.ai_group_rename_input.clear();
 
         self.mark_ai_included_columns_dirty();
     }

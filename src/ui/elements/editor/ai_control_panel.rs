@@ -3,7 +3,8 @@ use super::ai_context_utils::decorate_context_with_type;
 use super::state::{AiModeState, EditorWindowState};
 use crate::sheets::definitions::{default_ai_model_id, ColumnDataType, SheetMetadata};
 use crate::sheets::events::{
-    AiBatchTaskResult, RequestToggleAiRowGeneration, RequestUpdateAiSendSchema,
+    AiBatchTaskResult, RequestCreateAiSchemaGroup, RequestRenameAiSchemaGroup,
+    RequestSelectAiSchemaGroup, RequestToggleAiRowGeneration, RequestUpdateAiSendSchema,
 };
 use crate::sheets::resources::SheetRegistry;
 use crate::ui::systems::SendEvent;
@@ -69,7 +70,10 @@ pub(crate) fn show_ai_control_panel(
     commands: &mut Commands,
     session_api_key: &SessionApiKey,
     toggle_writer: &mut EventWriter<RequestToggleAiRowGeneration>,
-    send_schema_writer: &mut EventWriter<RequestUpdateAiSendSchema>,
+    _send_schema_writer: &mut EventWriter<RequestUpdateAiSendSchema>,
+    create_group_writer: &mut EventWriter<RequestCreateAiSchemaGroup>,
+    rename_group_writer: &mut EventWriter<RequestRenameAiSchemaGroup>,
+    select_group_writer: &mut EventWriter<RequestSelectAiSchemaGroup>,
 ) {
     let selection_allowed =
         state.ai_mode == AiModeState::Preparing || state.ai_mode == AiModeState::ResultsReady;
@@ -500,6 +504,65 @@ pub(crate) fn show_ai_control_panel(
             }
         }
 
+        if structure_path.is_empty() {
+            ui.separator();
+            if let Some(meta) = root_meta.as_ref() {
+                let groups = meta.ai_schema_groups.clone();
+                let active_group = meta.ai_active_schema_group.clone();
+                ui.add_space(8.0);
+                ui.horizontal(|group_ui| {
+                    let category_for_event = root_category.clone();
+                    let sheet_for_event = root_sheet.clone();
+                    for (idx, group) in groups.iter().enumerate() {
+                        let is_active = active_group
+                            .as_deref()
+                            .map(|name| name == group.name.as_str())
+                            .unwrap_or(false);
+                        let response = group_ui.selectable_label(is_active, &group.name);
+                        if response.clicked() && !is_active && !sheet_for_event.is_empty() {
+                            select_group_writer.write(RequestSelectAiSchemaGroup {
+                                category: category_for_event.clone(),
+                                sheet_name: sheet_for_event.clone(),
+                                group_name: group.name.clone(),
+                            });
+                            state.mark_ai_included_columns_dirty();
+                            group_ui.ctx().request_repaint();
+                        }
+                        if is_active {
+                            group_ui.add_space(4.0);
+                            let rename_button = egui::Button::new("✏").small();
+                            if group_ui
+                                .add(rename_button)
+                                .on_hover_text("Rename this schema group")
+                                .clicked()
+                            {
+                                state.ai_group_rename_popup_open = true;
+                                state.ai_group_rename_target = Some(group.name.clone());
+                                state.ai_group_rename_input = group.name.clone();
+                                group_ui.ctx().request_repaint();
+                            }
+                        }
+                        if idx < groups.len() - 1 {
+                            group_ui.add_space(6.0);
+                        }
+                    }
+
+                    let add_button = group_ui.add_enabled(
+                        !sheet_for_event.is_empty(),
+                        egui::Button::new("+ Group"),
+                    );
+                    if add_button
+                        .on_hover_text("Create a new schema group from the current settings")
+                        .clicked()
+                    {
+                        state.ai_group_add_popup_open = true;
+                        state.ai_group_add_name_input = meta.ensure_unique_schema_group_name("Group");
+                        group_ui.ctx().request_repaint();
+                    }
+                });
+            }
+        }
+
         if state.ai_mode == AiModeState::ResultsReady {
             let num_existing = state.ai_row_reviews.len();
             let num_new = state.ai_new_row_reviews.len();
@@ -515,6 +578,108 @@ pub(crate) fn show_ai_control_panel(
             ui.spinner();
         }
     });
+
+    if state.ai_group_add_popup_open {
+        let mut is_open = true;
+        egui::Window::new("New Schema Group")
+            .id(egui::Id::new("ai_group_add_popup_window"))
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_TOP, [0.0, 80.0])
+            .open(&mut is_open)
+            .show(ui.ctx(), |popup_ui| {
+                popup_ui.label("Group name");
+                let text_edit = popup_ui.add(
+                    egui::TextEdit::singleline(&mut state.ai_group_add_name_input)
+                        .hint_text("e.g. Draft")
+                        .desired_width(220.0),
+                );
+                let trimmed = state.ai_group_add_name_input.trim();
+                let create_enabled = !trimmed.is_empty() && !root_sheet.is_empty();
+                let create_clicked = popup_ui
+                    .add_enabled(create_enabled, egui::Button::new("Create"))
+                    .clicked();
+                let pressed_enter =
+                    text_edit.lost_focus() && popup_ui.input(|i| i.key_pressed(egui::Key::Enter));
+                let cancel_clicked = popup_ui.button("Cancel").clicked();
+
+                if (create_clicked || (pressed_enter && create_enabled)) && create_enabled {
+                    create_group_writer.write(RequestCreateAiSchemaGroup {
+                        category: root_category.clone(),
+                        sheet_name: root_sheet.clone(),
+                        desired_name: Some(trimmed.to_string()),
+                    });
+                    state.mark_ai_included_columns_dirty();
+                    state.ai_group_add_popup_open = false;
+                    state.ai_group_add_name_input.clear();
+                    popup_ui.ctx().request_repaint();
+                }
+
+                if cancel_clicked {
+                    state.ai_group_add_popup_open = false;
+                    state.ai_group_add_name_input.clear();
+                }
+            });
+        if !is_open {
+            state.ai_group_add_popup_open = false;
+            state.ai_group_add_name_input.clear();
+        }
+    }
+
+    if state.ai_group_rename_popup_open {
+        if let Some(target_name) = state.ai_group_rename_target.clone() {
+            let mut is_open = true;
+            egui::Window::new("Rename Schema Group")
+                .id(egui::Id::new("ai_group_rename_popup_window"))
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_TOP, [0.0, 120.0])
+                .open(&mut is_open)
+                .show(ui.ctx(), |popup_ui| {
+                    popup_ui.label(format!("Rename '{}' to:", target_name));
+                    let text_edit = popup_ui.add(
+                        egui::TextEdit::singleline(&mut state.ai_group_rename_input)
+                            .hint_text("Group name")
+                            .desired_width(220.0),
+                    );
+                    let trimmed = state.ai_group_rename_input.trim();
+                    let rename_enabled = !trimmed.is_empty() && !root_sheet.is_empty();
+                    let rename_clicked = popup_ui
+                        .add_enabled(rename_enabled, egui::Button::new("Rename"))
+                        .clicked();
+                    let pressed_enter = text_edit.lost_focus()
+                        && popup_ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    let cancel_clicked = popup_ui.button("Cancel").clicked();
+
+                    if (rename_clicked || (pressed_enter && rename_enabled)) && rename_enabled {
+                        rename_group_writer.write(RequestRenameAiSchemaGroup {
+                            category: root_category.clone(),
+                            sheet_name: root_sheet.clone(),
+                            old_name: target_name.clone(),
+                            new_name: trimmed.to_string(),
+                        });
+                        state.ai_group_rename_popup_open = false;
+                        state.ai_group_rename_target = None;
+                        state.ai_group_rename_input.clear();
+                        popup_ui.ctx().request_repaint();
+                    }
+
+                    if cancel_clicked {
+                        state.ai_group_rename_popup_open = false;
+                        state.ai_group_rename_target = None;
+                        state.ai_group_rename_input.clear();
+                    }
+                });
+            if !is_open {
+                state.ai_group_rename_popup_open = false;
+                state.ai_group_rename_target = None;
+                state.ai_group_rename_input.clear();
+            }
+        } else {
+            state.ai_group_rename_popup_open = false;
+            state.ai_group_rename_input.clear();
+        }
+    }
 
     // Inline Prompt Popup (simple implementation)
     if state.show_ai_prompt_popup {

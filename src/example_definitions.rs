@@ -56,6 +56,8 @@ pub fn create_example_items_metadata() -> SheetMetadata {
         ai_top_p: None,
         requested_grounding_with_google_search: Default::default(),
         ai_enable_row_generation: false,
+        ai_schema_groups: Vec::new(),
+        ai_active_schema_group: None,
         random_picker: None,
         structure_parent: None,
         // --- END MODIFIED ---
@@ -98,6 +100,8 @@ pub fn create_simple_config_metadata() -> SheetMetadata {
         ai_top_p: None,
         requested_grounding_with_google_search: Default::default(),
         ai_enable_row_generation: false,
+        ai_schema_groups: Vec::new(),
+        ai_active_schema_group: None,
         random_picker: None,
         structure_parent: None,
         // --- END MODIFIED ---
