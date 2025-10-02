@@ -189,6 +189,8 @@ pub struct AiSchemaGroup {
     pub allow_add_rows: bool,
     #[serde(default)]
     pub structure_row_generation_overrides: Vec<AiSchemaGroupStructureOverride>,
+    #[serde(default)]
+    pub included_structures: Vec<Vec<usize>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -746,6 +748,27 @@ impl SheetMetadata {
             .collect()
     }
 
+    pub fn ai_included_structure_paths(&self) -> Vec<Vec<usize>> {
+        let mut paths: Vec<Vec<usize>> = Vec::new();
+        for (column_index, column) in self.columns.iter().enumerate() {
+            if matches!(column.validator, Some(ColumnValidator::Structure)) {
+                let mut path = vec![column_index];
+                if matches!(column.ai_include_in_send, Some(true)) {
+                    paths.push(path.clone());
+                }
+                if let Some(schema) = column.structure_schema.as_ref() {
+                    collect_included_structure_paths_from_fields(schema, &mut path, &mut paths);
+                }
+            } else if let Some(schema) = column.structure_schema.as_ref() {
+                let mut path = vec![column_index];
+                collect_included_structure_paths_from_fields(schema, &mut path, &mut paths);
+            }
+        }
+        paths.sort();
+        paths.dedup();
+        paths
+    }
+
     pub fn ensure_ai_schema_groups_initialized(&mut self) {
         let column_count = self.columns.len();
         let valid_structure_paths = collect_all_structure_paths(&self.columns);
@@ -765,6 +788,11 @@ impl SheetMetadata {
             group
                 .structure_row_generation_overrides
                 .sort_by(|a, b| a.path.cmp(&b.path));
+            group
+                .included_structures
+                .retain(|path| valid_structure_paths.contains(path));
+            group.included_structures.sort();
+            group.included_structures.dedup();
         }
 
         if self.ai_schema_groups.is_empty() {
@@ -775,6 +803,7 @@ impl SheetMetadata {
                 allow_add_rows: self.ai_enable_row_generation,
                 structure_row_generation_overrides: self
                     .collect_structure_row_generation_overrides(),
+                included_structures: self.ai_included_structure_paths(),
             });
             self.ai_active_schema_group = Some(default_name);
             return;
@@ -824,6 +853,34 @@ impl SheetMetadata {
         false
     }
 
+    pub fn set_active_ai_schema_group_included_structures(
+        &mut self,
+        included_paths: &[Vec<usize>],
+    ) -> bool {
+        let valid_paths = collect_all_structure_paths(&self.columns);
+        let mut filtered: Vec<Vec<usize>> = included_paths
+            .iter()
+            .filter(|path| valid_paths.contains(*path))
+            .cloned()
+            .collect();
+        filtered.sort();
+        filtered.dedup();
+
+        if let Some(active_name) = self.ai_active_schema_group.clone() {
+            if let Some(group) = self
+                .ai_schema_groups
+                .iter_mut()
+                .find(|g| g.name == active_name)
+            {
+                if group.included_structures != filtered {
+                    group.included_structures = filtered;
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
     pub fn set_active_ai_schema_group_allow_rows(&mut self, allow: bool) -> bool {
         if let Some(active_name) = self.ai_active_schema_group.clone() {
             if let Some(group) = self
@@ -838,6 +895,19 @@ impl SheetMetadata {
             }
         }
         false
+    }
+
+    pub fn apply_structure_send_inclusion(&mut self, included_paths: &[Vec<usize>]) -> bool {
+        use std::collections::HashSet;
+        let included_set: HashSet<Vec<usize>> = included_paths.iter().cloned().collect();
+        let mut changed = false;
+        for (idx, column) in self.columns.iter_mut().enumerate() {
+            let mut path = vec![idx];
+            if apply_structure_send_flag_column(column, &mut path, &included_set) {
+                changed = true;
+            }
+        }
+        changed
     }
 
     pub fn set_active_ai_schema_group_structure_override(
@@ -891,6 +961,46 @@ impl SheetMetadata {
                 .retain(|entry| entry.path != path);
             original_len != group.structure_row_generation_overrides.len()
         }
+    }
+
+    pub fn describe_structure_path(&self, path: &[usize]) -> Option<String> {
+        if path.is_empty() {
+            return None;
+        }
+        let mut names: Vec<String> = Vec::new();
+        let column = self.columns.get(path[0])?;
+        names.push(column.header.clone());
+        if path.len() == 1 {
+            return Some(names.join(" -> "));
+        }
+        let mut field = column.structure_schema.as_ref()?.get(path[1])?;
+        names.push(field.header.clone());
+        for idx in path.iter().skip(2) {
+            field = field.structure_schema.as_ref()?.get(*idx)?;
+            names.push(field.header.clone());
+        }
+        Some(names.join(" -> "))
+    }
+
+    pub fn structure_fields_for_path(
+        &self,
+        path: &[usize],
+    ) -> Option<Vec<StructureFieldDefinition>> {
+        if path.is_empty() {
+            return None;
+        }
+        let column = self.columns.get(path[0])?;
+        if path.len() == 1 {
+            return column.structure_schema.clone();
+        }
+        let mut field = column.structure_schema.as_ref()?.get(path[1])?;
+        if path.len() == 2 {
+            return field.structure_schema.clone();
+        }
+        for idx in path.iter().skip(2) {
+            field = field.structure_schema.as_ref()?.get(*idx)?;
+        }
+        field.structure_schema.clone()
     }
 
     pub fn collect_structure_row_generation_overrides(
@@ -989,6 +1099,10 @@ impl SheetMetadata {
 
         if self.apply_structure_row_generation_overrides(&group.structure_row_generation_overrides)
         {
+            changed = true;
+        }
+
+        if self.apply_structure_send_inclusion(&group.included_structures) {
             changed = true;
         }
 
@@ -1096,6 +1210,85 @@ fn collect_structure_paths_from_fields(
         }
         path.pop();
     }
+}
+
+fn collect_included_structure_paths_from_fields(
+    fields: &[StructureFieldDefinition],
+    path: &mut Vec<usize>,
+    output: &mut Vec<Vec<usize>>,
+) {
+    for (index, field) in fields.iter().enumerate() {
+        path.push(index);
+        if matches!(field.validator, Some(ColumnValidator::Structure)) {
+            if matches!(field.ai_include_in_send, Some(true)) {
+                output.push(path.clone());
+            }
+            if let Some(schema) = field.structure_schema.as_ref() {
+                collect_included_structure_paths_from_fields(schema, path, output);
+            }
+        } else if let Some(schema) = field.structure_schema.as_ref() {
+            collect_included_structure_paths_from_fields(schema, path, output);
+        }
+        path.pop();
+    }
+}
+
+fn apply_structure_send_flag_column(
+    column: &mut ColumnDefinition,
+    path: &mut Vec<usize>,
+    included: &std::collections::HashSet<Vec<usize>>,
+) -> bool {
+    let mut changed = false;
+    if matches!(column.validator, Some(ColumnValidator::Structure)) {
+        if included.contains(path) {
+            if column.ai_include_in_send != Some(true) {
+                column.ai_include_in_send = Some(true);
+                changed = true;
+            }
+        } else if column.ai_include_in_send != Some(false) {
+            column.ai_include_in_send = Some(false);
+            changed = true;
+        }
+    }
+    if let Some(schema) = column.structure_schema.as_mut() {
+        for (idx, field) in schema.iter_mut().enumerate() {
+            path.push(idx);
+            if apply_structure_send_flag_field(field, path, included) {
+                changed = true;
+            }
+            path.pop();
+        }
+    }
+    changed
+}
+
+fn apply_structure_send_flag_field(
+    field: &mut StructureFieldDefinition,
+    path: &mut Vec<usize>,
+    included: &std::collections::HashSet<Vec<usize>>,
+) -> bool {
+    let mut changed = false;
+    if matches!(field.validator, Some(ColumnValidator::Structure)) {
+        if included.contains(path) {
+            if field.ai_include_in_send != Some(true) {
+                field.ai_include_in_send = Some(true);
+                changed = true;
+            }
+        } else if field.ai_include_in_send != Some(false) {
+            field.ai_include_in_send = Some(false);
+            changed = true;
+        }
+    }
+    if let Some(schema) = field.structure_schema.as_mut() {
+        for (idx, child) in schema.iter_mut().enumerate() {
+            path.push(idx);
+            if apply_structure_send_flag_field(child, path, included) {
+                changed = true;
+            }
+            path.pop();
+        }
+    }
+    changed
 }
 
 fn structure_path_exists_in_columns(columns: &[ColumnDefinition], path: &[usize]) -> bool {

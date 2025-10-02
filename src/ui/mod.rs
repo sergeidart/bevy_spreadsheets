@@ -62,6 +62,7 @@ fn load_ui_prefs_startup(mut state: ResMut<EditorWindowState>) {
     let prefs = load_prefs();
     state.category_picker_expanded = prefs.category_picker_expanded;
     state.sheet_picker_expanded = prefs.sheet_picker_expanded;
+    state.ai_groups_expanded = prefs.ai_groups_expanded;
 }
 
 fn persist_ui_prefs_if_changed(state: Res<EditorWindowState>, mut last: Local<Option<UiPrefs>>) {
@@ -70,12 +71,14 @@ fn persist_ui_prefs_if_changed(state: Res<EditorWindowState>, mut last: Local<Op
         *last = Some(UiPrefs {
             category_picker_expanded: state.category_picker_expanded,
             sheet_picker_expanded: state.sheet_picker_expanded,
+            ai_groups_expanded: state.ai_groups_expanded,
         });
         return;
     }
     let cur = UiPrefs {
         category_picker_expanded: state.category_picker_expanded,
         sheet_picker_expanded: state.sheet_picker_expanded,
+        ai_groups_expanded: state.ai_groups_expanded,
     };
     if last.as_ref().map(|p| p != &cur).unwrap_or(true) {
         save_prefs(&cur);

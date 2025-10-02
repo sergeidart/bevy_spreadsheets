@@ -132,6 +132,12 @@ pub fn handle_update_column_validator(
                     None => ColumnDataType::String,
                 };
                 meta_mut.columns[col_index].data_type = derived_type;
+                if matches!(
+                    meta_mut.columns[col_index].validator,
+                    Some(ColumnValidator::Structure)
+                ) {
+                    meta_mut.columns[col_index].ai_include_in_send = Some(false);
+                }
                 // New Structure variant: structure schema is stored in col_def.structure_schema (not handled here yet)
 
                 // Feedback message (primary)

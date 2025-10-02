@@ -154,6 +154,25 @@ pub struct AiBatchTaskResult {
     pub key_prefix_count: usize, // number of leading key/context columns prefixed to each row in result
     // NEW: Indicates this batch was initiated from a prompt with zero selected rows
     pub prompt_only: bool,
+    pub kind: AiBatchResultKind,
+}
+
+#[derive(Debug, Clone)]
+pub enum AiBatchResultKind {
+    Root {
+        // Optional structure context for nested processing
+        structure_context: Option<StructureProcessingContext>,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct StructureProcessingContext {
+    pub root_category: Option<String>,
+    pub root_sheet: String,
+    pub structure_path: Vec<usize>,
+    pub target_rows: Vec<usize>,
+    pub row_partitions: Vec<usize>,
+    pub generation_id: u64,
 }
 
 #[derive(Event, Debug, Clone)]
@@ -185,6 +204,15 @@ pub struct RequestUpdateAiSendSchema {
 }
 
 #[derive(Event, Debug, Clone)]
+pub struct RequestUpdateAiStructureSend {
+    pub category: Option<String>,
+    pub sheet_name: String,
+    /// Path identifying the structure node to toggle (first element is root column index).
+    pub structure_path: Vec<usize>,
+    pub include: bool,
+}
+
+#[derive(Event, Debug, Clone)]
 pub struct RequestCreateAiSchemaGroup {
     pub category: Option<String>,
     pub sheet_name: String,
@@ -197,6 +225,13 @@ pub struct RequestRenameAiSchemaGroup {
     pub sheet_name: String,
     pub old_name: String,
     pub new_name: String,
+}
+
+#[derive(Event, Debug, Clone)]
+pub struct RequestDeleteAiSchemaGroup {
+    pub category: Option<String>,
+    pub sheet_name: String,
+    pub group_name: String,
 }
 
 #[derive(Event, Debug, Clone)]

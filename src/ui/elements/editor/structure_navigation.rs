@@ -167,15 +167,12 @@ pub fn handle_open_structure_view(
                             let (h, r) = parse_structure_cell(cell);
                             (h, vec![r], None)
                         };
-                        let parent_col_header = parent_col
-                            .map(|c| c.header.clone())
-                            .unwrap_or_else(|| "Struct".to_string());
+
                         let parent_ctx = StructureParentContext {
                             parent_category: ev.parent_category.clone(),
                             parent_sheet: ev.parent_sheet.clone(),
                             parent_row: ev.row_index,
                             parent_col: ev.col_index,
-                            parent_column_header: parent_col_header,
                         };
 
                         // Build virtual sheet metadata

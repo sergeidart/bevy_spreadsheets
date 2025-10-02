@@ -4,9 +4,10 @@ use crate::sheets::{
         AiSchemaGroup, ColumnDefinition, ColumnValidator, SheetMetadata, StructureFieldDefinition,
     },
     events::{
-        AddSheetRowRequest, RequestCreateAiSchemaGroup, RequestRenameAiSchemaGroup,
-        RequestSelectAiSchemaGroup, RequestToggleAiRowGeneration, RequestUpdateAiSendSchema,
-        SheetDataModifiedInRegistryEvent, SheetOperationFeedback,
+        AddSheetRowRequest, RequestCreateAiSchemaGroup, RequestDeleteAiSchemaGroup,
+        RequestRenameAiSchemaGroup, RequestSelectAiSchemaGroup, RequestToggleAiRowGeneration,
+        RequestUpdateAiSendSchema, RequestUpdateAiStructureSend, SheetDataModifiedInRegistryEvent,
+        SheetOperationFeedback,
     },
     resources::SheetRegistry,
     systems::io::save::save_single_sheet,
@@ -320,6 +321,88 @@ pub fn handle_update_ai_send_schema(
     }
 }
 
+pub fn handle_update_ai_structure_send(
+    mut ev: EventReader<RequestUpdateAiStructureSend>,
+    mut registry: ResMut<SheetRegistry>,
+    mut feedback: EventWriter<SheetOperationFeedback>,
+    mut data_modified_writer: EventWriter<SheetDataModifiedInRegistryEvent>,
+) {
+    for e in ev.read() {
+        let Some(sheet) = registry.get_sheet_mut(&e.category, &e.sheet_name) else {
+            feedback.write(SheetOperationFeedback {
+                message: format!(
+                    "Sheet {:?}/{} not found for AI structure send update",
+                    e.category, e.sheet_name
+                ),
+                is_error: true,
+            });
+            continue;
+        };
+
+        let Some(meta) = sheet.metadata.as_mut() else {
+            feedback.write(SheetOperationFeedback {
+                message: format!(
+                    "Metadata missing for {:?}/{} when updating AI structure send",
+                    e.category, e.sheet_name
+                ),
+                is_error: true,
+            });
+            continue;
+        };
+
+        meta.ensure_ai_schema_groups_initialized();
+
+        match set_structure_send_flag(meta, &e.structure_path, e.include) {
+            Ok((changed, labels)) => {
+                let include_paths = meta.ai_included_structure_paths();
+                let group_changed =
+                    meta.set_active_ai_schema_group_included_structures(&include_paths);
+                let scope_description = if labels.is_empty() {
+                    String::from("structure")
+                } else {
+                    labels.join(" -> ")
+                };
+                let base_message = format!(
+                    "AI structure send for '{}' in {:?}/{}",
+                    scope_description, e.category, e.sheet_name
+                );
+
+                if changed || group_changed {
+                    let feedback_text = if changed {
+                        format!("{} updated (include={}).", base_message, e.include)
+                    } else {
+                        format!("{} group state updated.", base_message)
+                    };
+                    let meta_clone = meta.clone();
+                    save_single_sheet(registry.as_ref(), &meta_clone);
+                    feedback.write(SheetOperationFeedback {
+                        message: feedback_text,
+                        is_error: false,
+                    });
+                    data_modified_writer.write(SheetDataModifiedInRegistryEvent {
+                        category: e.category.clone(),
+                        sheet_name: e.sheet_name.clone(),
+                    });
+                } else {
+                    feedback.write(SheetOperationFeedback {
+                        message: format!("{} already set to include={}.", base_message, e.include),
+                        is_error: false,
+                    });
+                }
+            }
+            Err(err) => {
+                feedback.write(SheetOperationFeedback {
+                    message: format!(
+                        "Failed to update AI structure send for {:?}/{}: {}",
+                        e.category, e.sheet_name, err
+                    ),
+                    is_error: true,
+                });
+            }
+        }
+    }
+}
+
 pub fn handle_create_ai_schema_group(
     mut ev: EventReader<RequestCreateAiSchemaGroup>,
     mut registry: ResMut<SheetRegistry>,
@@ -367,6 +450,7 @@ pub fn handle_create_ai_schema_group(
             included_columns: included,
             allow_add_rows: allow_add,
             structure_row_generation_overrides: meta.collect_structure_row_generation_overrides(),
+            included_structures: meta.ai_included_structure_paths(),
         });
         meta.ai_active_schema_group = Some(unique_name.clone());
 
@@ -479,6 +563,99 @@ pub fn handle_rename_ai_schema_group(
             message: format!(
                 "Renamed AI schema group '{}' to '{}' for {:?}/{}",
                 e.old_name, unique_name, e.category, e.sheet_name
+            ),
+            is_error: false,
+        });
+        data_modified_writer.write(SheetDataModifiedInRegistryEvent {
+            category: e.category.clone(),
+            sheet_name: e.sheet_name.clone(),
+        });
+    }
+}
+
+pub fn handle_delete_ai_schema_group(
+    mut ev: EventReader<RequestDeleteAiSchemaGroup>,
+    mut registry: ResMut<SheetRegistry>,
+    mut feedback: EventWriter<SheetOperationFeedback>,
+    mut data_modified_writer: EventWriter<SheetDataModifiedInRegistryEvent>,
+) {
+    for e in ev.read() {
+        let Some(sheet) = registry.get_sheet_mut(&e.category, &e.sheet_name) else {
+            feedback.write(SheetOperationFeedback {
+                message: format!(
+                    "Sheet {:?}/{} not found when deleting AI schema group",
+                    e.category, e.sheet_name
+                ),
+                is_error: true,
+            });
+            continue;
+        };
+
+        let Some(meta) = sheet.metadata.as_mut() else {
+            feedback.write(SheetOperationFeedback {
+                message: format!(
+                    "Metadata missing for {:?}/{} when deleting AI schema group",
+                    e.category, e.sheet_name
+                ),
+                is_error: true,
+            });
+            continue;
+        };
+
+        meta.ensure_ai_schema_groups_initialized();
+
+        if meta.ai_schema_groups.len() <= 1 {
+            feedback.write(SheetOperationFeedback {
+                message: format!(
+                    "Cannot delete the last AI schema group for {:?}/{}.",
+                    e.category, e.sheet_name
+                ),
+                is_error: true,
+            });
+            continue;
+        }
+
+        let Some(index) = meta
+            .ai_schema_groups
+            .iter()
+            .position(|g| g.name == e.group_name)
+        else {
+            feedback.write(SheetOperationFeedback {
+                message: format!(
+                    "AI schema group '{}' not found in {:?}/{}",
+                    e.group_name, e.category, e.sheet_name
+                ),
+                is_error: true,
+            });
+            continue;
+        };
+
+        let removed = meta.ai_schema_groups.remove(index);
+
+        meta.ensure_ai_schema_groups_initialized();
+
+        if let Some(active_name) = meta.ai_active_schema_group.clone() {
+            if let Err(err) = meta.apply_ai_schema_group(&active_name) {
+                feedback.write(SheetOperationFeedback {
+                    message: format!(
+                        "Failed to reapply AI schema group '{}' after deletion in {:?}/{}: {}",
+                        active_name, e.category, e.sheet_name, err
+                    ),
+                    is_error: true,
+                });
+                meta.ai_schema_groups
+                    .insert(index.min(meta.ai_schema_groups.len()), removed);
+                meta.ensure_ai_schema_groups_initialized();
+                continue;
+            }
+        }
+
+        let meta_clone = meta.clone();
+        save_single_sheet(registry.as_ref(), &meta_clone);
+        feedback.write(SheetOperationFeedback {
+            message: format!(
+                "Deleted AI schema group '{}' from {:?}/{}",
+                removed.name, e.category, e.sheet_name
             ),
             is_error: false,
         });
@@ -672,6 +849,79 @@ fn apply_send_schema_to_fields(
         }
     }
     changed
+}
+
+fn set_structure_send_flag(
+    meta: &mut SheetMetadata,
+    path: &[usize],
+    include: bool,
+) -> Result<(bool, Vec<String>), String> {
+    if path.is_empty() {
+        return Err("structure path missing".to_string());
+    }
+
+    let mut labels: Vec<String> = Vec::new();
+    let column_index = path[0];
+    let column = meta
+        .columns
+        .get_mut(column_index)
+        .ok_or_else(|| format!("column index {} out of bounds", column_index))?;
+    if !matches!(column.validator, Some(ColumnValidator::Structure)) {
+        return Err(format!("column '{}' is not a structure", column.header));
+    }
+    labels.push(column.header.clone());
+
+    if path.len() == 1 {
+        let changed = set_include_option(&mut column.ai_include_in_send, include);
+        return Ok((changed, labels));
+    }
+
+    let mut field = {
+        let schema = column
+            .structure_schema
+            .as_mut()
+            .ok_or_else(|| format!("structure column '{}' missing schema", column.header))?;
+        schema.get_mut(path[1]).ok_or_else(|| {
+            format!(
+                "structure column '{}' index {} out of bounds",
+                column.header, path[1]
+            )
+        })?
+    };
+    labels.push(field.header.clone());
+
+    for next_index in path.iter().skip(2) {
+        let schema = field
+            .structure_schema
+            .as_mut()
+            .ok_or_else(|| format!("nested structure '{}' missing schema", field.header))?;
+        field = schema.get_mut(*next_index).ok_or_else(|| {
+            format!(
+                "nested structure '{}' index {} out of bounds",
+                field.header, next_index
+            )
+        })?;
+        labels.push(field.header.clone());
+    }
+
+    if !matches!(field.validator, Some(ColumnValidator::Structure)) {
+        return Err(format!(
+            "path does not reference a structure node (ended at '{}')",
+            field.header
+        ));
+    }
+
+    let changed = set_include_option(&mut field.ai_include_in_send, include);
+    Ok((changed, labels))
+}
+
+fn set_include_option(flag: &mut Option<bool>, include: bool) -> bool {
+    let desired = if include { Some(true) } else { Some(false) };
+    if *flag != desired {
+        *flag = desired;
+        return true;
+    }
+    false
 }
 
 fn update_general_row_generation(meta: &mut SheetMetadata, enabled: bool) -> bool {

@@ -16,6 +16,134 @@ use crate::ui::widgets::handle_linked_column_edit;
 use crate::ui::widgets::linked_column_cache::{self, CacheResult};
 // Option widgets removed
 
+/// Generate a concise preview string for a structure cell, matching the grid view rendering.
+/// Returns a tuple of (preview_text, parse_failed_flag).
+pub fn generate_structure_preview(raw: &str) -> (String, bool) {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return (String::new(), false);
+    }
+
+    let mut out = String::new();
+    let mut multi_rows = false;
+    let mut parse_failed = false;
+
+    fn stringify_json_value(value: &serde_json::Value) -> String {
+        match value {
+            serde_json::Value::String(s) => s.to_owned(),
+            serde_json::Value::Number(n) => n.to_string(),
+            serde_json::Value::Bool(b) => b.to_string(),
+            serde_json::Value::Null => String::new(),
+            other => other.to_string(),
+        }
+    }
+
+    match serde_json::from_str::<serde_json::Value>(trimmed) {
+        Ok(val) => match val {
+            serde_json::Value::Array(arr) => {
+                if arr.iter().all(|v| v.is_string()) {
+                    let vals: Vec<String> = arr
+                        .iter()
+                        .map(stringify_json_value)
+                        .filter(|s| !s.trim().is_empty())
+                        .collect();
+                    out = vals.join(", ");
+                } else if arr.iter().all(|v| v.is_array()) {
+                    multi_rows = arr.len() > 1;
+                    if let Some(first) = arr.first().and_then(|v| v.as_array()) {
+                        let vals: Vec<String> = first
+                            .iter()
+                            .map(stringify_json_value)
+                            .filter(|s| !s.trim().is_empty())
+                            .collect();
+                        out = vals.join(", ");
+                    }
+                } else if arr.iter().all(|v| v.is_object()) {
+                    multi_rows = arr.len() > 1;
+                    if let Some(first) = arr.first().and_then(|v| v.as_object()) {
+                        let mut entries: Vec<(String, String)> = first
+                            .iter()
+                            .map(|(k, v)| (k.clone(), stringify_json_value(v)))
+                            .filter(|(k, v)| {
+                                !v.trim().is_empty()
+                                    && !k.eq_ignore_ascii_case("__parentdescriptor")
+                            })
+                            .collect();
+                        entries.sort_by(|a, b| a.0.cmp(&b.0));
+                        out = entries
+                            .into_iter()
+                            .map(|(_, v)| v)
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                    }
+                } else {
+                    let vals: Vec<String> = arr
+                        .iter()
+                        .map(stringify_json_value)
+                        .filter(|s| !s.trim().is_empty())
+                        .collect();
+                    multi_rows = arr.len() > 1;
+                    out = vals.join(", ");
+                }
+            }
+            serde_json::Value::Object(map) => {
+                let mut entries: Vec<(String, String)> = map
+                    .iter()
+                    .map(|(k, v)| (k.clone(), stringify_json_value(v)))
+                    .filter(|(k, v)| {
+                        !v.trim().is_empty() && !k.eq_ignore_ascii_case("__parentdescriptor")
+                    })
+                    .collect();
+                entries.sort_by(|a, b| a.0.cmp(&b.0));
+                out = entries
+                    .into_iter()
+                    .map(|(_, v)| v)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+            }
+            other => {
+                out = stringify_json_value(&other);
+            }
+        },
+        Err(_) => parse_failed = true,
+    }
+
+    if out.chars().count() > 64 {
+        let truncated: String = out.chars().take(64).collect();
+        out = truncated + "…";
+    }
+    if multi_rows {
+        out.push_str("...");
+    }
+    (out, parse_failed)
+}
+
+/// Generate a preview string from structure rows (Vec<Vec<String>>)
+/// Similar to generate_structure_preview but takes rows directly instead of JSON
+pub fn generate_structure_preview_from_rows(rows: &[Vec<String>]) -> String {
+    if rows.is_empty() {
+        return String::new();
+    }
+    
+    let first_row = &rows[0];
+    let values: Vec<String> = first_row
+        .iter()
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.trim().to_string())
+        .collect();
+    
+    let mut out = values.join(", ");
+    
+    if out.chars().count() > 64 {
+        let truncated: String = out.chars().take(64).collect();
+        out = truncated + "…";
+    }
+    if rows.len() > 1 {
+        out.push_str("...");
+    }
+    out
+}
+
 /// Renders interactive UI for editing a single cell based on its validator.
 /// Handles displaying the appropriate widget and visual validation state.
 /// Returns Some(new_value) if the value was changed by the user interaction *this frame*, None otherwise.
@@ -129,6 +257,27 @@ pub fn edit_cell_widget(
         false
     };
 
+    // Determine whether this is a structure column
+    let is_structure_column = validator_opt
+        .as_ref()
+        .map(|v| matches!(v, crate::sheets::definitions::ColumnValidator::Structure))
+        .unwrap_or(false);
+
+    // Determine whether selected structure columns are included in AI sends
+    let is_structure_ai_included = if is_structure_column
+        && state.ai_cached_included_columns_valid
+        && state.ai_cached_included_columns_sheet.as_deref() == Some(sheet_name)
+        && state.ai_cached_included_columns_category.as_ref() == category.as_ref()
+    {
+        state
+            .ai_cached_included_structure_columns
+            .get(col_index)
+            .copied()
+            .unwrap_or(false)
+    } else {
+        false
+    };
+
     // Determine selection-based coloring first, then fall back to validation colors
     let bg_color = {
         // Check for deletion selection (columns or rows)
@@ -142,13 +291,9 @@ pub fn edit_cell_widget(
         // Check for AI selection (rows only) - excluding structure columns
         else if is_row_selected && current_interaction_mode == SheetInteractionState::AiModeActive
         {
-            // Check if this is a structure column - if so, don't apply AI selection coloring
-            let is_structure_column = validator_opt
-                .as_ref()
-                .map(|v| matches!(v, crate::sheets::definitions::ColumnValidator::Structure))
-                .unwrap_or(false);
-
-            if is_structure_column || !is_column_ai_included {
+            if (is_structure_column && !is_structure_ai_included)
+                || (!is_structure_column && !is_column_ai_included)
+            {
                 // Fall back to validation colors for structure columns
                 match effective_validation_state {
                     ValidationState::Empty => Color32::TRANSPARENT,
@@ -263,141 +408,20 @@ pub fn edit_cell_widget(
                                 }
                             }
                             Some(ColumnValidator::Structure) => {
-                                // Multi-row aware preview: cells store positional arrays (single row: [..], multi: [[..],[..]]) or legacy JSON.
-                                // MUST parse raw cell value (not display_text which may already be a preview) to avoid false parse errors.
+                                // Parse raw structure cell (not the render cache display text) to provide consistent preview and actions.
                                 let raw_cell_json = registry
                                     .get_sheet(category, sheet_name)
                                     .and_then(|sd| sd.grid.get(row_index))
                                     .and_then(|r| r.get(col_index))
                                     .map(|s| s.as_str())
-                                    .unwrap_or(current_display_text); // fallback to display text
-                                let trimmed = raw_cell_json.trim();
-                                let mut summary: String;
-                                if trimmed.is_empty() || trimmed == "{}" || trimmed == "[]" {
-                                    summary = "(empty)".to_string();
-                                } else if let Ok(val) =
-                                    serde_json::from_str::<serde_json::Value>(trimmed)
-                                {
-                                    match val {
-                                        serde_json::Value::Array(rows) => {
-                                            let row_count = rows.len();
-                                            if row_count == 0 {
-                                                summary = "(empty)".to_string();
-                                            } else {
-                                                // Determine first row representation depending on format
-                                                let mut parts: Vec<String> = Vec::new();
-                                                if rows.iter().all(|e| e.is_string()) {
-                                                    // single-row new format
-                                                    for (_i, v) in rows.iter().enumerate().take(6) {
-                                                        let s = v.as_str().unwrap_or("");
-                                                        let mut val_c = s.to_string();
-                                                        if val_c.chars().count() > 24 {
-                                                            val_c = val_c
-                                                                .chars()
-                                                                .take(24)
-                                                                .collect::<String>()
-                                                                + "…";
-                                                        }
-                                                        parts.push(val_c);
-                                                    }
-                                                } else if rows.iter().all(|e| e.is_array()) {
-                                                    // multi-row new format
-                                                    if let Some(first_arr) =
-                                                        rows.get(0).and_then(|v| v.as_array())
-                                                    {
-                                                        for (_i, v) in
-                                                            first_arr.iter().enumerate().take(6)
-                                                        {
-                                                            let s = v.as_str().unwrap_or("");
-                                                            let mut val_c = s.to_string();
-                                                            if val_c.chars().count() > 24 {
-                                                                val_c = val_c
-                                                                    .chars()
-                                                                    .take(24)
-                                                                    .collect::<String>()
-                                                                    + "…";
-                                                            }
-                                                            parts.push(val_c);
-                                                        }
-                                                    }
-                                                } else if let Some(first_obj) =
-                                                    rows.get(0).and_then(|r| r.as_object())
-                                                {
-                                                    // legacy multi-row objects
-                                                    for (k, v) in first_obj.iter().take(6) {
-                                                        let val_str = v
-                                                            .as_str()
-                                                            .map(|s| s.to_string())
-                                                            .unwrap_or_else(|| v.to_string());
-                                                        let mut val_c = val_str;
-                                                        if val_c.chars().count() > 24 {
-                                                            val_c = val_c
-                                                                .chars()
-                                                                .take(24)
-                                                                .collect::<String>()
-                                                                + "…";
-                                                        }
-                                                        parts.push(format!("{}={}", k, val_c));
-                                                    }
-                                                }
-                                                let multi = row_count > 1;
-                                                // Use " | " delimiter and skip empty items for cleaner preview
-                                                parts.retain(|p| !p.trim().is_empty());
-                                                summary = parts.join(" | ");
-                                                if multi {
-                                                    summary.push_str("...");
-                                                }
-                                            }
-                                        }
-                                        serde_json::Value::Object(map) => {
-                                            if map.is_empty() {
-                                                summary = "(empty)".to_string();
-                                            } else {
-                                                let mut parts: Vec<String> = map
-                                                    .iter()
-                                                    .take(4)
-                                                    .map(|(k, v)| {
-                                                        let val_str = v
-                                                            .as_str()
-                                                            .map(|s| s.to_string())
-                                                            .unwrap_or_else(|| v.to_string());
-                                                        let mut val_c = val_str;
-                                                        if val_c.chars().count() > 24 {
-                                                            val_c = val_c
-                                                                .chars()
-                                                                .take(24)
-                                                                .collect::<String>()
-                                                                + "…";
-                                                        }
-                                                        format!("{}={}", k, val_c)
-                                                    })
-                                                    .collect();
-                                                parts.retain(|p| !p.ends_with('='));
-                                                let extra = if map.len() > 4 {
-                                                    format!(" (+{} more)", map.len() - 4)
-                                                } else {
-                                                    String::new()
-                                                };
-                                                summary = parts.join(" | ") + &extra;
-                                            }
-                                        }
-                                        other => {
-                                            let mut raw = other.to_string();
-                                            if raw.chars().count() > 64 {
-                                                raw =
-                                                    raw.chars().take(64).collect::<String>() + "…";
-                                            }
-                                            summary = raw;
-                                        }
-                                    }
-                                } else {
+                                    .unwrap_or(current_display_text);
+                                let (mut summary, parse_failed) =
+                                    generate_structure_preview(raw_cell_json);
+                                if parse_failed && !raw_cell_json.trim().is_empty() {
                                     summary = "(parse err)".to_string();
                                 }
                                 if summary.is_empty() {
                                     summary = "(empty)".to_string();
-                                }
-                                if summary.chars().count() > 64 {
-                                    summary = summary.chars().take(64).collect::<String>() + "…";
                                 }
                                 let structure_context =
                                     compute_structure_root_and_path(state, sheet_name, col_index);
@@ -589,21 +613,3 @@ fn resolve_structure_override_for_menu(meta: &SheetMetadata, path: &[usize]) -> 
     field.ai_enable_row_generation
 }
 
-fn describe_structure_path_for_menu(meta: &SheetMetadata, path: &[usize]) -> Option<String> {
-    if path.is_empty() {
-        return None;
-    }
-    let mut names: Vec<String> = Vec::new();
-    let column = meta.columns.get(path[0])?;
-    names.push(column.header.clone());
-    if path.len() == 1 {
-        return Some(names.join(" -> "));
-    }
-    let mut field = column.structure_schema.as_ref()?.get(path[1])?;
-    names.push(field.header.clone());
-    for idx in path.iter().skip(2) {
-        field = field.structure_schema.as_ref()?.get(*idx)?;
-        names.push(field.header.clone());
-    }
-    Some(names.join(" -> "))
-}

@@ -20,10 +20,12 @@ pub mod update_render_cache;
 pub use add_column::handle_add_column_request;
 pub use add_row::handle_add_row_request;
 pub use add_row::handle_create_ai_schema_group;
+pub use add_row::handle_delete_ai_schema_group;
 pub use add_row::handle_rename_ai_schema_group;
 pub use add_row::handle_select_ai_schema_group;
 pub use add_row::handle_toggle_ai_row_generation;
 pub use add_row::handle_update_ai_send_schema;
+pub use add_row::handle_update_ai_structure_send;
 pub use reorder_column::handle_reorder_column_request;
 // NEW: Re-export create_sheet handler
 pub use categories::{

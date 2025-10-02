@@ -14,6 +14,7 @@ pub fn handle_delete_rows_request(
     mut registry: ResMut<SheetRegistry>,
     mut feedback_writer: EventWriter<SheetOperationFeedback>,
     mut data_modified_writer: EventWriter<SheetDataModifiedInRegistryEvent>, // Added writer
+    editor_state: Option<Res<crate::ui::elements::editor::state::EditorWindowState>>, // To map virtual sheets to parent contexts
 ) {
     // Use map to track sheets needing save after deletions
     let mut sheets_to_save: HashMap<(Option<String>, String), SheetMetadata> = HashMap::new();
@@ -30,6 +31,23 @@ pub fn handle_delete_rows_request(
                 sheet_name
             );
             continue;
+        }
+
+        // Check if this is a virtual structure sheet
+        let mut is_virtual = false;
+        let mut parent_ctx_opt = None;
+        if let Some(state) = editor_state.as_ref() {
+            if sheet_name.starts_with("__virtual__") {
+                // Find corresponding context
+                if let Some(vctx) = state
+                    .virtual_structure_stack
+                    .iter()
+                    .find(|v| &v.virtual_sheet_name == sheet_name)
+                {
+                    is_virtual = true;
+                    parent_ctx_opt = Some(vctx.parent.clone());
+                }
+            }
         }
 
         // --- Perform Deletion (Mutable Borrow) ---
@@ -103,6 +121,88 @@ pub fn handle_delete_rows_request(
                     "Rows deleted from '{:?}/{}' but cannot save: Metadata missing.",
                     category, sheet_name
                 );
+            }
+
+            // If virtual sheet rows were deleted, propagate back to original parent cell JSON
+            if is_virtual {
+                if let Some(parent_ctx) = parent_ctx_opt.clone() {
+                    // Reconstruct JSON from virtual sheet current grid (after deletion)
+                    if let Some(vsheet) = registry.get_sheet(category, sheet_name) {
+                        if vsheet.metadata.is_some() {
+                            // Clone required virtual sheet info before mutable borrow of registry
+                            let v_rows: Vec<Vec<String>> = vsheet.grid.clone();
+                            let _ = vsheet; // release immutable borrow
+                            if let Some(parent_sheet_data) = registry
+                                .get_sheet_mut(&parent_ctx.parent_category, &parent_ctx.parent_sheet)
+                            {
+                                if parent_ctx.parent_row < parent_sheet_data.grid.len() {
+                                    if let Some(parent_row) =
+                                        parent_sheet_data.grid.get_mut(parent_ctx.parent_row)
+                                    {
+                                        if parent_ctx.parent_col < parent_row.len() {
+                                            // Build array of objects/arrays (one per virtual sheet row)
+                                            let new_json = if v_rows.is_empty() {
+                                                // All rows deleted => empty array
+                                                "[]".to_string()
+                                            } else if v_rows.len() == 1 {
+                                                // Single row => store as array of strings
+                                                let row_vals = v_rows.get(0).cloned().unwrap_or_default();
+                                                serde_json::Value::Array(
+                                                    row_vals
+                                                        .into_iter()
+                                                        .map(serde_json::Value::String)
+                                                        .collect(),
+                                                )
+                                                .to_string()
+                                            } else {
+                                                // Multi row => array of arrays
+                                                let outer: Vec<serde_json::Value> = v_rows
+                                                    .iter()
+                                                    .map(|r| {
+                                                        serde_json::Value::Array(
+                                                            r.iter()
+                                                                .cloned()
+                                                                .map(serde_json::Value::String)
+                                                                .collect(),
+                                                        )
+                                                    })
+                                                    .collect();
+                                                serde_json::Value::Array(outer).to_string()
+                                            };
+                                            if let Some(cell_ref) =
+                                                parent_row.get_mut(parent_ctx.parent_col)
+                                            {
+                                                if *cell_ref != new_json {
+                                                    *cell_ref = new_json.clone();
+                                                    info!("Propagated structure row deletion to parent cell '{:?}/{}'[{},{}]", 
+                                                          parent_ctx.parent_category, parent_ctx.parent_sheet, 
+                                                          parent_ctx.parent_row, parent_ctx.parent_col);
+                                                    if let Some(pmeta) = &parent_sheet_data.metadata {
+                                                        let key = (
+                                                            parent_ctx.parent_category.clone(),
+                                                            parent_ctx.parent_sheet.clone(),
+                                                        );
+                                                        sheets_to_save.insert(key.clone(), pmeta.clone());
+                                                        data_modified_writer.write(
+                                                            SheetDataModifiedInRegistryEvent {
+                                                                category: parent_ctx
+                                                                    .parent_category
+                                                                    .clone(),
+                                                                sheet_name: parent_ctx
+                                                                    .parent_sheet
+                                                                    .clone(),
+                                                            },
+                                                        );
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         } else if let Some(err) = error_message {
             // Only send feedback if the whole operation failed (e.g., sheet not found)

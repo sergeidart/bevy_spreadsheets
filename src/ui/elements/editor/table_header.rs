@@ -5,7 +5,9 @@ use egui_extras::TableRow;
 
 use super::state::{EditorWindowState, SheetInteractionState};
 use crate::sheets::definitions::{ColumnValidator, SheetMetadata};
-use crate::sheets::events::{RequestReorderColumn, RequestUpdateAiSendSchema};
+use crate::sheets::events::{
+    RequestReorderColumn, RequestUpdateAiSendSchema, RequestUpdateAiStructureSend,
+};
 use crate::sheets::resources::SheetRegistry;
 
 pub fn sheet_table_header(
@@ -18,6 +20,7 @@ pub fn sheet_table_header(
     state: &mut EditorWindowState,
     mut reorder_writer: EventWriter<RequestReorderColumn>,
     mut send_schema_writer: EventWriter<RequestUpdateAiSendSchema>,
+    mut structure_send_writer: EventWriter<RequestUpdateAiStructureSend>,
 ) {
     let headers = metadata.get_headers();
     let filters = metadata.get_filters();
@@ -138,6 +141,35 @@ pub fn sheet_table_header(
                                     }
                                     ui_h.add_space(2.0);
                                 } else {
+                                    let mut is_included =
+                                        matches!(col_def.ai_include_in_send, Some(true));
+                                    if ui_h.checkbox(&mut is_included, "").changed() {
+                                        if let Some((root_category, root_sheet, mut structure_path)) =
+                                            resolve_root_context_for_current_view(
+                                                registry,
+                                                category,
+                                                sheet_name,
+                                            )
+                                        {
+                                            if root_sheet.is_empty() {
+                                                warn!(
+                                                    "Skipping AI structure send update: missing root sheet for {:?}/{}",
+                                                    root_category, sheet_name
+                                                );
+                                            } else {
+                                                structure_path.push(c_idx);
+                                                structure_send_writer
+                                                    .write(RequestUpdateAiStructureSend {
+                                                        category: root_category.clone(),
+                                                        sheet_name: root_sheet.clone(),
+                                                        structure_path: structure_path.clone(),
+                                                        include: is_included,
+                                                    });
+                                                state.mark_ai_included_columns_dirty();
+                                                ui_h.ctx().request_repaint();
+                                            }
+                                        }
+                                    }
                                     ui_h.add_space(2.0);
                                 }
                             }

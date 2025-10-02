@@ -1,15 +1,17 @@
-// src/ui/elements/editor/ai_control_panel.rs
+// Moved from editor/ai_control_panel.rs
 use super::ai_context_utils::decorate_context_with_type;
-use super::state::{AiModeState, EditorWindowState};
+use super::ai_control_left_panel::draw_left_panel;
+use super::ai_group_panel::draw_group_panel;
 use crate::sheets::definitions::{default_ai_model_id, ColumnDataType, SheetMetadata};
 use crate::sheets::events::{
-    AiBatchTaskResult, RequestCreateAiSchemaGroup, RequestRenameAiSchemaGroup,
-    RequestSelectAiSchemaGroup, RequestToggleAiRowGeneration, RequestUpdateAiSendSchema,
+    AiBatchResultKind, AiBatchTaskResult, RequestCreateAiSchemaGroup, RequestDeleteAiSchemaGroup,
+    RequestRenameAiSchemaGroup, RequestSelectAiSchemaGroup, RequestToggleAiRowGeneration,
+    RequestUpdateAiSendSchema, RequestUpdateAiStructureSend,
 };
 use crate::sheets::resources::SheetRegistry;
+use crate::ui::elements::editor::state::{AiModeState, EditorWindowState};
 use crate::ui::systems::SendEvent;
 use crate::SessionApiKey;
-use bevy::log::error;
 use bevy::prelude::*;
 use bevy_egui::egui;
 use bevy_tokio_tasks::TokioTasksRuntime;
@@ -32,7 +34,6 @@ struct KeyPayload {
 #[derive(Clone)]
 struct NonStructureColumnInfo {
     index: usize,
-    header: String,
     context: Option<String>,
     data_type: ColumnDataType,
     included: bool,
@@ -71,14 +72,16 @@ pub(crate) fn show_ai_control_panel(
     session_api_key: &SessionApiKey,
     toggle_writer: &mut EventWriter<RequestToggleAiRowGeneration>,
     _send_schema_writer: &mut EventWriter<RequestUpdateAiSendSchema>,
+    _structure_send_writer: &mut EventWriter<RequestUpdateAiStructureSend>,
     create_group_writer: &mut EventWriter<RequestCreateAiSchemaGroup>,
     rename_group_writer: &mut EventWriter<RequestRenameAiSchemaGroup>,
     select_group_writer: &mut EventWriter<RequestSelectAiSchemaGroup>,
+    delete_group_writer: &mut EventWriter<RequestDeleteAiSchemaGroup>,
 ) {
     let selection_allowed =
         state.ai_mode == AiModeState::Preparing || state.ai_mode == AiModeState::ResultsReady;
     let has_api = session_api_key.0.is_some();
-    let can_send = selection_allowed && has_api;
+    let _can_send = selection_allowed && has_api; // retained for potential future logic (left panel handles send availability)
 
     let task_category = selected_category_clone.clone();
     let effective_sheet_name = if let Some(vctx) = state.virtual_structure_stack.last() {
@@ -197,7 +200,6 @@ pub(crate) fn show_ai_control_panel(
             let included = !matches!(col_def.ai_include_in_send, Some(false));
             non_structure_columns.push(NonStructureColumnInfo {
                 index: c_idx,
-                header: col_def.header.clone(),
                 context: col_def.ai_context.clone(),
                 data_type: col_def.data_type,
                 included,
@@ -225,243 +227,9 @@ pub(crate) fn show_ai_control_panel(
         .unwrap_or(false);
 
     ui.horizontal_wrapped(|ui| {
-        if state.last_ai_button_min_x > 0.0 {
-            let panel_left = ui.max_rect().min.x;
-            let indent = (state.last_ai_button_min_x - panel_left).max(0.0);
-            ui.add_space(indent);
-        }
-
-        let mut hover_text_send = "Send selected row(s) for AI processing".to_string();
-        if session_api_key.0.is_none() {
-            hover_text_send = "API Key not set. Please set it in Settings.".to_string();
-        } else if state.ai_selected_rows.is_empty() {
-            hover_text_send =
-                "No rows selected: click to send a Prompt-only AI request (will create rows)".to_string();
-        }
-
-        let send_button_text = format!("🚀 Send to AI");
-
-        if ui
-            .add_enabled(can_send, egui::Button::new(send_button_text))
-            .on_hover_text(hover_text_send)
-            .clicked()
-        {
-            rebuild_included_vectors(
-                &non_structure_columns,
-                &mut included_actual_indices,
-                &mut column_contexts,
-                &mut column_data_types,
-            );
-            // If no rows selected, open the prompt popup instead of immediate send
-            if state.ai_selected_rows.is_empty() {
-                state.show_ai_prompt_popup = true;
-                // Prefill prompt box with last input retained
-                ui.ctx().request_repaint();
-                return;
-            }
-            // BATCH SEND IMPLEMENTATION
-            state.ai_mode = AiModeState::Submitting;
-            state.ai_raw_output_display.clear();
-            state.ai_output_panel_visible = true; // show bottom panel at start
-            // Clear snapshot review data (legacy maps removed)
-            state.ai_row_reviews.clear();
-            state.ai_new_row_reviews.clear();
-            state.ai_context_prefix_by_row.clear();
-            ui.ctx().request_repaint();
-
-            let api_key_for_task = session_api_key.0.clone();
-
-            // Collect and sort selected row indices
-            let mut original_rows: Vec<usize> = state.ai_selected_rows.iter().cloned().collect();
-            original_rows.sort_unstable();
-            let model_id = root_model_id.clone();
-            let rule = root_rule.clone();
-            let grounding = root_grounding;
-
-            let included_actual_indices = included_actual_indices.clone();
-            let column_contexts = column_contexts.clone();
-            let column_type_names: Vec<String> =
-                column_data_types.iter().map(|dt| dt.to_string()).collect();
-
-            // Build rows_data (only non-structure columns)
-            let mut rows_data: Vec<Vec<String>> = Vec::new();
-            if let Some(sheet_data) = sheet_data_opt {
-                for &row_idx in &original_rows {
-                    let full_row = sheet_data.grid.get(row_idx).cloned().unwrap_or_default();
-                    let mut reduced: Vec<String> = Vec::with_capacity(included_actual_indices.len());
-                    for &col_index in &included_actual_indices { reduced.push(full_row.get(col_index).cloned().unwrap_or_default()); }
-                    rows_data.push(reduced);
-                }
-            }
-
-            #[derive(serde::Serialize)]
-            struct BatchPythonPayload {
-                ai_model_id: String,
-                general_sheet_rule: Option<String>,
-                // Contexts for ONLY non-structure columns; order matches rows_data columns
-                column_contexts: Vec<Option<String>>,
-                // Data types per non-structure column in payload order
-                column_data_types: Vec<String>,
-                // Row data for ONLY non-structure columns
-                rows_data: Vec<Vec<String>>,
-                // Normalized single key object (Context + Key). We prefer a single
-                // key instead of the legacy headers/rows block which confused the AI.
-                key: Option<KeyPayload>,
-                requested_grounding_with_google_search: bool,
-                allow_row_additions: bool,
-                // For visibility in debug payload JSON (model also receives the hint via prompt)
-                row_additions_hint: Option<String>,
-            }
-
-            // ---- Build keys context (ancestor keys only; separate from rows_data) ----
-            let mut key_chain_values_per_row: Vec<Vec<String>> = Vec::new();
-            // Build key values aligned with headers (only for ancestors that have explicit keys)
-            for &_row_idx in &original_rows {
-                let mut row_vals: Vec<String> = Vec::new();
-                for (anc_cat, anc_sheet, anc_row_idx, key_col_index) in &ancestors_with_keys {
-                    if let Some(sheet) = registry.get_sheet(anc_cat, anc_sheet) {
-                        let val = sheet
-                            .grid
-                            .get(*anc_row_idx)
-                            .and_then(|r| r.get(*key_col_index))
-                            .cloned()
-                            .unwrap_or_default();
-                        row_vals.push(val);
-                    }
-                }
-                key_chain_values_per_row.push(row_vals);
-            }
-            // Normalize keys to a single object: prefer first context and first value.
-            let key_payload_opt = if key_chain_headers.is_empty() || key_chain_contexts.is_empty() {
-                None
-            } else if !key_chain_values_per_row.is_empty() {
-                let ctx = key_chain_contexts.get(0).and_then(|c| c.clone()).unwrap_or_default();
-                let key_val = key_chain_values_per_row
-                    .get(0)
-                    .and_then(|r| r.get(0).cloned())
-                    .unwrap_or_else(|| key_chain_headers.get(0).cloned().unwrap_or_default());
-                Some(KeyPayload { context: ctx, key: key_val })
-            } else {
-                resolve_prompt_only_key(&key_chain_contexts, &key_chain_headers, &ancestors_with_keys, registry)
-                    .map(|(ctx, key)| KeyPayload { context: ctx, key })
-            };
-
-            let payload = BatchPythonPayload {
-                ai_model_id: model_id,
-                general_sheet_rule: rule,
-                column_contexts: column_contexts.clone(),
-                column_data_types: column_type_names.clone(),
-                rows_data: rows_data.clone(),
-                key: key_payload_opt,
-                requested_grounding_with_google_search: grounding,
-                allow_row_additions: allow_additions_flag,
-                row_additions_hint: if allow_additions_flag { Some(format!(
-                    "Add Rows Enabled: The model may add new rows AFTER the first {} original rows to provide similar item if any applicable here. Each new row must match column count.",
-                    original_rows.len()
-                )) } else { None },
-            };
-            let payload_json = match serde_json::to_string(&payload) { Ok(j) => j, Err(e) => { error!("Failed to serialize batch payload: {}", e); return; } };
-            // Show what is being sent in the bottom AI output panel for debugging
-            if let Ok(pretty) = serde_json::to_string_pretty(&payload) {
-                let mut dbg = String::new();
-                use std::fmt::Write as _;
-                let _ = writeln!(dbg, "--- AI Request Payload (Debug) ---");
-                let _ = writeln!(dbg, "{}", pretty);
-                let _ = writeln!(dbg, "--- Selected Original Row Indices (sheet) ---");
-                let _ = writeln!(dbg, "{:?}", original_rows);
-                let _ = writeln!(dbg, "--- Included Non-Structure Columns (payload order -> sheet col index) ---");
-                let _ = writeln!(dbg, "{:?}", included_actual_indices);
-                // Attempt to list column names for clarity
-                if let Some(sheet_meta) = metadata_opt_ref {
-                    let mut names: Vec<(usize, String)> = Vec::new();
-                    for (payload_pos, actual_idx) in included_actual_indices.iter().enumerate() {
-                        if let Some(col) = sheet_meta.columns.get(*actual_idx) { names.push((payload_pos, col.header.clone())); }
-                    }
-                    let _ = writeln!(dbg, "--- Included Column Names (payload position, name) ---");
-                    let _ = writeln!(dbg, "{:?}", names);
-                }
-                let _ = writeln!(dbg, "--- Column Data Types (payload order) ---");
-                let _ = writeln!(dbg, "{:?}", column_type_names);
-                // Show allow additions flag + its source + model id
-                let _ = writeln!(dbg, "Model: {}  AllowRowAdditions:{} ({})  Grounding:{}", payload.ai_model_id, payload.allow_row_additions, allow_additions_source, grounding);
-                if !key_chain_headers.is_empty() {
-                    let _ = writeln!(dbg, "--- Keys (separate context) ---");
-                    let _ = writeln!(dbg, "Headers: {:?}", key_chain_headers);
-                    let _ = writeln!(dbg, "Contexts: {:?}", key_chain_contexts);
-                    for (i, keys) in key_chain_values_per_row.iter().enumerate() { let _ = writeln!(dbg, "Row {} Keys: {:?}", original_rows[i], keys); }
-                }
-                if payload.allow_row_additions {
-                    let _ = writeln!(dbg, "Add Rows Enabled: The model may add new rows AFTER the first {} original rows to provide similar item if any applicable here. Each new row must match column count.", original_rows.len());
-                }
-                state.ai_raw_output_display = dbg;
-                state.ai_output_panel_visible = true;
-            }
-
-            let included_cols_clone = included_actual_indices.clone();
-            let original_rows_clone = original_rows.clone();
-            let commands_entity = commands.spawn_empty().id();
-
-        runtime.spawn_background_task(move |mut ctx| async move {
-                let api_key_value = match api_key_for_task { Some(k) if !k.is_empty() => k, _ => {
-            let err_msg = "API Key not set".to_string();
-            ctx.run_on_main_thread(move |world_ctx| { world_ctx.world.commands().entity(commands_entity).insert(SendEvent::<AiBatchTaskResult>{ event: AiBatchTaskResult { original_row_indices: original_rows_clone, result: Err(err_msg), raw_response: None, included_non_structure_columns: Vec::new(), key_prefix_count: 0, prompt_only: false } }); }).await; return; } };
-
-                let (result, raw_response) = tokio::task::spawn_blocking(move || {
-                    Python::with_gil(|py| -> PyResult<(Result<Vec<Vec<String>>, String>, Option<String>)> {
-                        let python_file_path = "script/ai_processor.py";
-                        let processor_code_string = std::fs::read_to_string(python_file_path)?;
-                        let code_c_str = CString::new(processor_code_string).map_err(|e| PyValueError::new_err(format!("CString error: {}", e)))?;
-                        let file_name_c_str = CString::new(python_file_path).map_err(|e| PyValueError::new_err(format!("File name CString error: {}", e)))?;
-                        let module_name_c_str = CString::new("ai_processor").map_err(|e| PyValueError::new_err(format!("Module name CString error: {}", e)))?;
-                        let module = PyModule::from_code(py, code_c_str.as_c_str(), file_name_c_str.as_c_str(), module_name_c_str.as_c_str())?;
-                        let binding = module.call_method1("execute_ai_query", (api_key_value, payload_json))?;
-                        let result_json_str: &str = binding.downcast::<PyString>()?.to_str()?;
-                        #[derive(serde::Deserialize)] struct PyResp { success: bool, data: Option<serde_json::Value>, error: Option<String>, raw_response: Option<String> }
-                        let resp: PyResp = serde_json::from_str(result_json_str).map_err(|e| PyValueError::new_err(format!("Parse JSON error: {}", e)))?;
-                        if resp.success {
-                            if let Some(serde_json::Value::Array(arr)) = resp.data {
-                                let mut out: Vec<Vec<String>> = Vec::new();
-                                for row_v in arr {
-                                    match row_v {
-                                        serde_json::Value::Array(cells) => {
-                                            out.push(cells.into_iter().map(|v| match v { serde_json::Value::String(s)=>s, other=>other.to_string() }).collect());
-                                        }
-                                        other => { return Ok((Err(format!("Row not an array: {}", other)), resp.raw_response)); }
-                                    }
-                                }
-                                Ok((Ok(out), resp.raw_response))
-                            } else {
-                                Ok((Err("Expected array of rows".to_string()), resp.raw_response))
-                            }
-                        } else {
-                            Ok((Err(resp.error.unwrap_or_else(|| "Unknown batch error".to_string())), resp.raw_response))
-                        }
-                    })
-                }).await.unwrap_or_else(|e| Ok((Err(format!("Tokio panic: {}", e)), None)))
-                .unwrap_or_else(|e| (Err(format!("PyO3 error: {}", e)), Some(e.to_string())));
-
-                // No key prefixes sent to AI; keep key_prefix_count=0 for downstream consumers
-                ctx.run_on_main_thread(move |world_ctx| { world_ctx.world.commands().entity(commands_entity).insert(SendEvent::<AiBatchTaskResult>{ event: AiBatchTaskResult { original_row_indices: original_rows_clone, result, raw_response, included_non_structure_columns: included_cols_clone, key_prefix_count: 0, prompt_only: false } }); }).await;
-            });
-        }
-
-        // Status label right of the send button. Include row count and remove the words "AI Mode" from the text.
-        let status_text = match state.ai_mode {
-            AiModeState::Preparing => format!("Preparing ({} Rows)", state.ai_selected_rows.len()),
-            AiModeState::Submitting => "Submitting".to_string(),
-            AiModeState::ResultsReady => "Results Ready".to_string(),
-            AiModeState::Reviewing => "Reviewing".to_string(),
-            AiModeState::Idle => "".to_string(),
-        };
-        if !status_text.is_empty() { ui.label(status_text); }
-        // Place AI Context just to the right of the status instead of far right
-        if ui.add_enabled(selected_sheet_name_clone.is_some(), egui::Button::new("⚙ AI Context")).on_hover_text("Edit per-sheet AI model and context").clicked() {
-            // Reset tracking so popup initializes for the currently selected sheet, regardless of prior context
-            state.ai_rule_popup_last_category = None;
-            state.ai_rule_popup_last_sheet = None;
-            state.ai_rule_popup_needs_init = true;
-            state.show_ai_rule_popup = true;
-        }
+        if state.last_ai_button_min_x > 0.0 { let panel_left = ui.max_rect().min.x; let indent = (state.last_ai_button_min_x - panel_left).max(0.0); ui.add_space(indent); }
+        // Left panel draw (send button + status + context)
+        draw_left_panel(ui, state, registry, selected_category_clone, selected_sheet_name_clone, session_api_key);
 
     let toggle_label = "Add Rows";
         let toggle_tooltip = if structure_path.is_empty() {
@@ -504,70 +272,13 @@ pub(crate) fn show_ai_control_panel(
             }
         }
 
-        if structure_path.is_empty() {
-            ui.separator();
-            if let Some(meta) = root_meta.as_ref() {
-                let groups = meta.ai_schema_groups.clone();
-                let active_group = meta.ai_active_schema_group.clone();
-                ui.add_space(8.0);
-                ui.horizontal(|group_ui| {
-                    let category_for_event = root_category.clone();
-                    let sheet_for_event = root_sheet.clone();
-                    for (idx, group) in groups.iter().enumerate() {
-                        let is_active = active_group
-                            .as_deref()
-                            .map(|name| name == group.name.as_str())
-                            .unwrap_or(false);
-                        let response = group_ui.selectable_label(is_active, &group.name);
-                        if response.clicked() && !is_active && !sheet_for_event.is_empty() {
-                            select_group_writer.write(RequestSelectAiSchemaGroup {
-                                category: category_for_event.clone(),
-                                sheet_name: sheet_for_event.clone(),
-                                group_name: group.name.clone(),
-                            });
-                            state.mark_ai_included_columns_dirty();
-                            group_ui.ctx().request_repaint();
-                        }
-                        if is_active {
-                            group_ui.add_space(4.0);
-                            let rename_button = egui::Button::new("✏").small();
-                            if group_ui
-                                .add(rename_button)
-                                .on_hover_text("Rename this schema group")
-                                .clicked()
-                            {
-                                state.ai_group_rename_popup_open = true;
-                                state.ai_group_rename_target = Some(group.name.clone());
-                                state.ai_group_rename_input = group.name.clone();
-                                group_ui.ctx().request_repaint();
-                            }
-                        }
-                        if idx < groups.len() - 1 {
-                            group_ui.add_space(6.0);
-                        }
-                    }
-
-                    let add_button = group_ui.add_enabled(
-                        !sheet_for_event.is_empty(),
-                        egui::Button::new("+ Group"),
-                    );
-                    if add_button
-                        .on_hover_text("Create a new schema group from the current settings")
-                        .clicked()
-                    {
-                        state.ai_group_add_popup_open = true;
-                        state.ai_group_add_name_input = meta.ensure_unique_schema_group_name("Group");
-                        group_ui.ctx().request_repaint();
-                    }
-                });
-            }
-        }
+    if structure_path.is_empty() { draw_group_panel(ui, state, &root_category, &root_sheet, root_meta.as_ref(), create_group_writer, rename_group_writer, select_group_writer, delete_group_writer); }
 
         if state.ai_mode == AiModeState::ResultsReady {
             let num_existing = state.ai_row_reviews.len();
             let num_new = state.ai_new_row_reviews.len();
             let total = num_existing + num_new;
-            if ui.add_enabled(total > 0, egui::Button::new(format!("🧐 Review Batch ({} rows)", total))).clicked() {
+            if ui.add_enabled(total > 0, egui::Button::new(format!("📋 Review Batch ({} rows)", total))).clicked() {
                 state.ai_batch_review_active = true;
                 state.ai_mode = AiModeState::Reviewing;
             }
@@ -811,6 +522,9 @@ pub(crate) fn show_ai_control_panel(
                                             included_non_structure_columns: Vec::new(),
                                             key_prefix_count: 0,
                                             prompt_only: true,
+                                            kind: AiBatchResultKind::Root {
+                                                structure_context: None,
+                                            },
                                         },
                                     },
                                 );
@@ -911,6 +625,9 @@ pub(crate) fn show_ai_control_panel(
                                 included_non_structure_columns: included_cols_clone,
                                 key_prefix_count: 0,
                                 prompt_only: true,
+                                kind: AiBatchResultKind::Root {
+                                    structure_context: None,
+                                },
                             },
                         });
                 })
@@ -963,6 +680,10 @@ fn resolve_structure_override(meta: &SheetMetadata, path: &[usize]) -> Option<bo
     }
     field.ai_enable_row_generation
 }
+
+/// Parse structure rows from a serialized cell string produced previously by serialize_structure_rows_for_review.
+/// Accepts either a JSON array of objects or legacy newline/pipe separated formats.
+// parse_structure_rows_from_cell now provided by sheets::systems::ai::utils
 
 fn describe_structure_path(meta: &SheetMetadata, path: &[usize]) -> Option<String> {
     if path.is_empty() {

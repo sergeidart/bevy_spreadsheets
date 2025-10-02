@@ -13,6 +13,7 @@ use super::events::{
     RequestCreateCategoryDirectory,
     // NEW: Import RequestCreateNewSheet
     RequestCreateNewSheet,
+    RequestDeleteAiSchemaGroup,
     RequestDeleteCategory,
     RequestDeleteColumns,
     RequestDeleteRows,
@@ -31,6 +32,7 @@ use super::events::{
     RequestSheetRevalidation,
     RequestToggleAiRowGeneration,
     RequestUpdateAiSendSchema,
+    RequestUpdateAiStructureSend,
     RequestUpdateColumnName,
     RequestUpdateColumnValidator,
     SheetDataModifiedInRegistryEvent,
@@ -43,10 +45,11 @@ use super::systems::logic::handle_sheet_render_cache_update;
 use super::systems::logic::sync_structure::{
     handle_emit_structure_cascade_events, PendingStructureCascade,
 };
+use crate::sheets::systems::ai::results::{handle_ai_batch_results, handle_ai_task_results};
+use crate::sheets::systems::ai::structure_processor::process_structure_ai_jobs;
+use crate::sheets::systems::ai::throttled::apply_throttled_ai_changes;
 use crate::ui::systems::apply_pending_structure_key_selection;
-use crate::ui::systems::apply_throttled_ai_changes;
 use crate::ui::systems::forward_events;
-use crate::ui::systems::{handle_ai_batch_results, handle_ai_task_results};
 
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 enum SheetSystemSet {
@@ -100,9 +103,11 @@ impl Plugin for SheetsPlugin {
             .add_event::<RequestSheetRevalidation>()
             .add_event::<RequestToggleAiRowGeneration>()
             .add_event::<RequestUpdateAiSendSchema>()
+            .add_event::<RequestUpdateAiStructureSend>()
             .add_event::<RequestMoveSheetToCategory>()
             .add_event::<RequestCreateAiSchemaGroup>()
             .add_event::<RequestRenameAiSchemaGroup>()
+            .add_event::<RequestDeleteAiSchemaGroup>()
             .add_event::<RequestSelectAiSchemaGroup>();
         // Category management events
         app.add_event::<RequestCreateCategory>()
@@ -140,8 +145,10 @@ impl Plugin for SheetsPlugin {
             systems::logic::handle_add_row_request,
             systems::logic::handle_toggle_ai_row_generation,
             systems::logic::handle_update_ai_send_schema,
+            systems::logic::handle_update_ai_structure_send,
             systems::logic::handle_create_ai_schema_group,
             systems::logic::handle_rename_ai_schema_group,
+            systems::logic::handle_delete_ai_schema_group,
             systems::logic::handle_select_ai_schema_group,
         )
             .chain();
@@ -186,6 +193,7 @@ impl Plugin for SheetsPlugin {
                 forward_events::<AiBatchTaskResult>,
                 ApplyDeferred,
                 apply_pending_structure_key_selection,
+                process_structure_ai_jobs,
                 handle_ai_task_results,
                 handle_ai_batch_results,
                 apply_throttled_ai_changes,

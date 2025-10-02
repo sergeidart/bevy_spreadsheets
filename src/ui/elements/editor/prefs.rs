@@ -15,6 +15,8 @@ pub struct UiPrefs {
     pub category_picker_expanded: bool,
     #[serde(default)]
     pub sheet_picker_expanded: bool,
+    #[serde(default)]
+    pub ai_groups_expanded: bool,
 }
 
 fn get_prefs_path() -> io::Result<PathBuf> {

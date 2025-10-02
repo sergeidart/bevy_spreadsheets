@@ -65,6 +65,7 @@ impl Default for FpsSetting {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum ThrottledAiAction {
     UpdateCell {
         row_index: usize,
@@ -76,18 +77,31 @@ pub enum ThrottledAiAction {
     },
 }
 
+
 #[derive(Debug, Clone, Default)]
 pub struct ColumnDragState {
     pub source_index: Option<usize>,
 }
 
+/// Log entry for a single AI call (newest entries are added to the front)
+#[derive(Debug, Clone)]
+pub struct AiCallLogEntry {
+    /// Human-readable status (e.g., "2/4 received", "Completed", "Error")
+    pub status: String,
+    /// The full response JSON (if available)
+    pub response: Option<String>,
+    /// The full request payload that was sent
+    pub request: Option<String>,
+    /// Timestamp or sequence number for ordering
+    pub timestamp: std::time::SystemTime,
+    /// Whether this is an error entry
+    pub is_error: bool,
+}
+
 #[derive(Resource)]
-#[allow(dead_code)]
 pub struct EditorWindowState {
     pub selected_category: Option<String>,
     pub selected_sheet_name: Option<String>,
-    // Stack for nested structure navigation (root at index 0)
-    pub sheet_nav_stack: Vec<(Option<String>, String)>,
     // Stack of active virtual structure sheets (each represents a nested structure view)
     // Top of stack is current virtual sheet. Empty means not in structure view.
     pub virtual_structure_stack: Vec<VirtualStructureContext>,
@@ -142,20 +156,43 @@ pub struct EditorWindowState {
     // Unified snapshot model
     pub ai_row_reviews: Vec<RowReview>,
     pub ai_new_row_reviews: Vec<NewRowReview>,
+    pub ai_structure_reviews: Vec<StructureReviewEntry>,
+    pub ai_structure_new_row_contexts: HashMap<usize, StructureNewRowContext>,
+    pub ai_structure_new_row_token_counter: usize,
     // New unified review model
     // (legacy single-row review fields removed)
     pub ai_model_id_input: String,
     pub ai_general_rule_input: String,
 
+    // Structure detail navigation context (when user dives into a structure review)
+    pub ai_structure_detail_context: Option<StructureDetailContext>,
+    
+    // Combined AI call log (chat-like format, newest first)
+    pub ai_call_log: Vec<AiCallLogEntry>,
+    // Removed dedicated structure detail view; field deleted.
     pub ai_raw_output_display: String,
     // Bottom AI output panel visibility & context tracking
     pub ai_output_panel_visible: bool,
-    pub ai_output_panel_last_context: Option<(Option<String>, String, bool)>, // (category, sheet, in_structure)
     pub ai_group_add_popup_open: bool,
     pub ai_group_add_name_input: String,
     pub ai_group_rename_popup_open: bool,
     pub ai_group_rename_target: Option<String>,
     pub ai_group_rename_input: String,
+    pub ai_group_delete_popup_open: bool,
+    pub ai_group_delete_target: Option<String>,
+    pub ai_group_delete_target_category: Option<String>,
+    pub ai_group_delete_target_sheet: Option<String>,
+    pub ai_pending_structure_jobs: VecDeque<StructureSendJob>,
+    pub ai_active_structure_job: Option<StructureSendJob>,
+    pub ai_last_send_root_rows: Vec<usize>,
+    pub ai_last_send_root_category: Option<String>,
+    pub ai_last_send_root_sheet: Option<String>,
+    pub ai_planned_structure_paths: Vec<Vec<usize>>,
+    pub ai_structure_results_expected: usize,
+    pub ai_structure_results_received: usize,
+    pub ai_waiting_for_structure_results: bool,
+    pub ai_structure_generation_counter: u64,
+    pub ai_structure_active_generation: u64,
 
     // General Settings Popup
     pub show_settings_popup: bool,
@@ -175,9 +212,6 @@ pub struct EditorWindowState {
     pub force_filter_recalculation: bool,
     pub request_scroll_to_new_row: bool,
     pub scroll_to_row_index: Option<usize>,
-
-    // UI Toggles
-    pub show_quick_copy_bar: bool,
 
     // Core Interaction Mode
     pub current_interaction_mode: SheetInteractionState,
@@ -206,7 +240,6 @@ pub struct EditorWindowState {
     pub random_picker_needs_init: bool,
 
     // NEW: Summarizer UI state (per-session, not persisted yet)
-    pub show_summarizer_panel: bool,
     pub summarizer_selected_col: usize,
     pub summarizer_last_result: String, // Prefixed with Sum:/Count:
     // Transient copy status for summarizer result
@@ -232,6 +265,7 @@ pub struct EditorWindowState {
     // UI layout prefs (persisted): expand/collapse of pickers
     pub category_picker_expanded: bool,
     pub sheet_picker_expanded: bool,
+    pub ai_groups_expanded: bool,
 
     // Edit Mode expanded row visibility (toolbar-expander)
     pub show_edit_mode_panel: bool,
@@ -257,6 +291,7 @@ pub struct EditorWindowState {
     // Marker that last AI batch send was prompt-only (no original rows) so we treat incoming rows specially
     pub last_ai_prompt_only: bool,
     pub ai_cached_included_columns: Vec<bool>,
+    pub ai_cached_included_structure_columns: Vec<bool>,
     pub ai_cached_included_columns_category: Option<String>,
     pub ai_cached_included_columns_sheet: Option<String>,
     pub ai_cached_included_columns_path: Vec<usize>,
@@ -269,7 +304,6 @@ impl Default for EditorWindowState {
         Self {
             selected_category: None,
             selected_sheet_name: None,
-            sheet_nav_stack: Vec::new(),
             virtual_structure_stack: Vec::new(),
             show_rename_popup: false,
             rename_target_category: None,
@@ -308,17 +342,36 @@ impl Default for EditorWindowState {
             ai_batch_review_active: false,
             ai_row_reviews: Vec::new(),
             ai_new_row_reviews: Vec::new(),
+            ai_structure_reviews: Vec::new(),
+            ai_structure_new_row_contexts: HashMap::new(),
+            ai_structure_new_row_token_counter: 0,
             ai_model_id_input: String::new(),
             ai_general_rule_input: String::new(),
+            ai_structure_detail_context: None,
 
+            ai_call_log: Vec::new(),
             ai_raw_output_display: String::new(),
             ai_output_panel_visible: false,
-            ai_output_panel_last_context: None,
             ai_group_add_popup_open: false,
             ai_group_add_name_input: String::new(),
             ai_group_rename_popup_open: false,
             ai_group_rename_target: None,
             ai_group_rename_input: String::new(),
+            ai_group_delete_popup_open: false,
+            ai_group_delete_target: None,
+            ai_group_delete_target_category: None,
+            ai_group_delete_target_sheet: None,
+            ai_pending_structure_jobs: VecDeque::new(),
+            ai_active_structure_job: None,
+            ai_last_send_root_rows: Vec::new(),
+            ai_last_send_root_category: None,
+            ai_last_send_root_sheet: None,
+            ai_planned_structure_paths: Vec::new(),
+            ai_structure_results_expected: 0,
+            ai_structure_results_received: 0,
+            ai_waiting_for_structure_results: false,
+            ai_structure_generation_counter: 0,
+            ai_structure_active_generation: 0,
             show_settings_popup: false,
             settings_new_api_key_input: String::new(),
             was_settings_popup_open: false,
@@ -331,7 +384,6 @@ impl Default for EditorWindowState {
             force_filter_recalculation: false,
             request_scroll_to_new_row: false,
             scroll_to_row_index: None,
-            show_quick_copy_bar: true,
             current_interaction_mode: SheetInteractionState::Idle,
             selected_columns_for_deletion: HashSet::new(),
             column_drag_state: ColumnDragState::default(),
@@ -349,7 +401,6 @@ impl Default for EditorWindowState {
             random_picker_last_value: String::new(),
             random_picker_copy_status: String::new(),
             random_picker_needs_init: true,
-            show_summarizer_panel: false,
             summarizer_selected_col: 0,
             summarizer_last_result: String::new(),
             summarizer_copy_status: String::new(),
@@ -364,6 +415,7 @@ impl Default for EditorWindowState {
             ai_context_prefix_by_row: HashMap::new(),
             category_picker_expanded: true,
             sheet_picker_expanded: true,
+            ai_groups_expanded: true,
             show_edit_mode_panel: false,
             last_ai_button_min_x: 0.0,
             last_edit_mode_button_min_x: 0.0,
@@ -377,6 +429,7 @@ impl Default for EditorWindowState {
             ai_prompt_input: String::new(),
             last_ai_prompt_only: false,
             ai_cached_included_columns: Vec::new(),
+            ai_cached_included_structure_columns: Vec::new(),
             ai_cached_included_columns_category: None,
             ai_cached_included_columns_sheet: None,
             ai_cached_included_columns_path: Vec::new(),
@@ -387,13 +440,11 @@ impl Default for EditorWindowState {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct StructureParentContext {
     pub parent_category: Option<String>,
     pub parent_sheet: String,
     pub parent_row: usize,
     pub parent_col: usize,
-    pub parent_column_header: String,
 }
 
 #[derive(Debug, Clone)]
@@ -406,22 +457,103 @@ pub struct RowReview {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct NewRowReview {
     pub ai: Vec<String>,
     pub non_structure_columns: Vec<usize>,
-    pub accept: bool,
     // If Some(row_index) then this new row's first column matches an existing row's first column
     // allowing user to choose between merging into that row or adding a separate row.
     pub duplicate_match_row: Option<usize>,
-    // Snapshot of the matched original row's values for the same non_structure_columns (only if duplicate_match_row is Some)
-    pub original_for_merge: Option<Vec<String>>,
     // Per-column review choices (only meaningful when merging). Mirrors RowReview. Length == non_structure_columns.len()
     pub choices: Option<Vec<ReviewChoice>>,
     // Whether the user currently has the Merge option selected (pre-decision). Defaults true if duplicate_match_row present.
     pub merge_selected: bool,
     // Whether the user clicked Decide (once decided Accept/Cancel replace Decide and toggle is hidden)
     pub merge_decided: bool,
+    // Original row data for the matched duplicate row (used for merge comparison)
+    pub original_for_merge: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StructureSendJob {
+    pub root_category: Option<String>,
+    pub root_sheet: String,
+    /// Identifies the nested structure (first element is root column index)
+    pub structure_path: Vec<usize>,
+    /// Optional friendly label resolved from metadata for status logs
+    pub label: Option<String>,
+    /// Snapshot of row indices (within the root sheet) that triggered this job
+    pub target_rows: Vec<usize>,
+    pub generation_id: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct StructureNewRowContext {
+    pub new_row_index: usize,
+    pub non_structure_values: Vec<(usize, String)>,
+}
+
+/// Context for navigating into structure detail view during AI review
+#[derive(Debug, Clone)]
+pub struct StructureDetailContext {
+    /// Index of parent row in ai_row_reviews (for existing rows)
+    pub parent_row_index: Option<usize>,
+    /// Index of parent row in ai_new_row_reviews (for new rows)
+    pub parent_new_row_index: Option<usize>,
+    /// Structure path to the structure being viewed
+    pub structure_path: Vec<usize>,
+    /// One-time hydration flag so we don't rebuild working RowReview vectors every frame
+    pub hydrated: bool,
+    /// Saved top-level reviews from before entering structure mode (restored on exit)
+    pub saved_row_reviews: Vec<RowReview>,
+    pub saved_new_row_reviews: Vec<NewRowReview>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StructureReviewEntry {
+    pub root_category: Option<String>,
+    pub root_sheet: String,
+    pub parent_row_index: usize,
+    pub parent_new_row_index: Option<usize>,
+    /// Path from root sheet to this structure (first element is column index in root, subsequent are structure col indices)
+    pub structure_path: Vec<usize>,
+    pub has_changes: bool,
+    pub accepted: bool,
+    pub rejected: bool,
+    /// Whether all rows inside the structure have been decided (accepted or declined).
+    /// This is true when the structure review is complete, regardless of accept/reject.
+    pub decided: bool,
+    /// The original structure rows parsed from the cell
+    pub original_rows: Vec<Vec<String>>,
+    /// The AI-suggested structure rows
+    pub ai_rows: Vec<Vec<String>>,
+    /// The merged rows (combines accepted changes)
+    pub merged_rows: Vec<Vec<String>>,
+    /// Per-row, per-column difference flags
+    pub differences: Vec<Vec<bool>>,
+    /// Per-row operation flags: None = no change, Some(RowOperation) = tracked action
+    pub row_operations: Vec<RowOperation>,
+    /// Schema field headers for proper JSON serialization
+    pub schema_headers: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RowOperation {
+    /// Row was merged with AI changes
+    Merged,
+    /// Row was deleted
+    Deleted,
+    /// Row was added (new AI row)
+    Added,
+}
+
+impl StructureReviewEntry {
+    pub fn is_pending(&self) -> bool {
+        self.has_changes && !self.accepted && !self.rejected
+    }
+
+    pub fn is_undecided(&self) -> bool {
+        self.has_changes && !self.decided
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -430,7 +562,6 @@ pub struct VirtualStructureContext {
     pub parent: StructureParentContext,
 }
 
-#[allow(dead_code)]
 impl EditorWindowState {
     // Returns the currently active sheet context considering virtual structure navigation.
     // If inside a virtual structure view, returns that virtual sheet name and its parent category.
@@ -446,6 +577,23 @@ impl EditorWindowState {
             self.selected_category.clone(),
             self.selected_sheet_name.clone(),
         )
+    }
+
+    /// Add a new AI call log entry at the head of the log (newest first)
+    pub fn add_ai_call_log(&mut self, status: String, response: Option<String>, request: Option<String>, is_error: bool) {
+        let entry = AiCallLogEntry {
+            status,
+            response,
+            request,
+            timestamp: std::time::SystemTime::now(),
+            is_error,
+        };
+        // Insert at front (newest first)
+        self.ai_call_log.insert(0, entry);
+        // Optionally limit log size to prevent memory issues
+        if self.ai_call_log.len() > 100 {
+            self.ai_call_log.truncate(100);
+        }
     }
 
     pub fn reset_interaction_modes_and_selections(&mut self) {
@@ -474,6 +622,25 @@ impl EditorWindowState {
         self.ai_group_rename_popup_open = false;
         self.ai_group_rename_target = None;
         self.ai_group_rename_input.clear();
+        self.ai_group_delete_popup_open = false;
+        self.ai_group_delete_target = None;
+        self.ai_group_delete_target_category = None;
+        self.ai_group_delete_target_sheet = None;
+        // Removed ai_active_structure_review (no separate detail view)
+        self.ai_pending_structure_jobs.clear();
+        self.ai_active_structure_job = None;
+        self.ai_last_send_root_rows.clear();
+        self.ai_last_send_root_category = None;
+        self.ai_last_send_root_sheet = None;
+        self.ai_planned_structure_paths.clear();
+        self.ai_structure_reviews.clear();
+        self.ai_structure_new_row_contexts.clear();
+        self.ai_structure_new_row_token_counter = 0;
+        self.ai_structure_results_expected = 0;
+        self.ai_structure_results_received = 0;
+        self.ai_waiting_for_structure_results = false;
+        self.ai_structure_generation_counter = 0;
+        self.ai_structure_active_generation = 0;
 
         self.mark_ai_included_columns_dirty();
     }
@@ -481,6 +648,7 @@ impl EditorWindowState {
     pub fn mark_ai_included_columns_dirty(&mut self) {
         self.ai_cached_included_columns_dirty = true;
         self.ai_cached_included_columns_valid = false;
+        self.ai_cached_included_structure_columns.clear();
     }
 
     pub fn ensure_ai_included_columns_cache(
@@ -526,8 +694,39 @@ impl EditorWindowState {
             self.ai_cached_included_columns.clear();
             self.ai_cached_included_columns
                 .resize(meta.columns.len(), false);
+            self.ai_cached_included_structure_columns.clear();
+            self.ai_cached_included_structure_columns
+                .resize(meta.columns.len(), false);
+
+            use std::collections::HashSet;
+            let mut included_structures: HashSet<Vec<usize>> = HashSet::new();
+            let (root_category, root_sheet_opt) = self.resolve_root_sheet(registry);
+            if let Some(root_sheet) = root_sheet_opt {
+                if let Some(root_meta) = registry
+                    .get_sheet(&root_category, &root_sheet)
+                    .and_then(|s| s.metadata.as_ref())
+                {
+                    included_structures = root_meta
+                        .ai_included_structure_paths()
+                        .into_iter()
+                        .collect();
+                }
+            }
+
+            let mut prefix_path = self.ai_cached_included_columns_path.clone();
             for (idx, column) in meta.columns.iter().enumerate() {
                 if matches!(column.validator, Some(ColumnValidator::Structure)) {
+                    if !included_structures.is_empty() {
+                        prefix_path.push(idx);
+                        if included_structures.contains(&prefix_path) {
+                            if let Some(flag) =
+                                self.ai_cached_included_structure_columns.get_mut(idx)
+                            {
+                                *flag = true;
+                            }
+                        }
+                        prefix_path.pop();
+                    }
                     continue;
                 }
                 if !matches!(column.ai_include_in_send, Some(false)) {
@@ -539,6 +738,7 @@ impl EditorWindowState {
             self.ai_cached_included_columns_valid = true;
         } else {
             self.ai_cached_included_columns.clear();
+            self.ai_cached_included_structure_columns.clear();
         }
     }
 
@@ -573,17 +773,51 @@ impl EditorWindowState {
         )
     }
 
-    /// Compute effective AI row-generation permission (root sheet meta + override). Returns None if no meta.
-    pub fn effective_ai_add_rows(
-        &self,
-        registry: &crate::sheets::resources::SheetRegistry,
-    ) -> Option<bool> {
-        let (cat, sheet_opt) = self.resolve_root_sheet(registry);
-        let sheet = sheet_opt?;
-        registry
-            .get_sheet(&cat, &sheet)
-            .and_then(|s| s.metadata.as_ref())
-            .map(|m| m.ai_enable_row_generation)
+
+
+    pub fn mark_structure_result_received(&mut self) {
+        self.ai_structure_results_received = self.ai_structure_results_received.saturating_add(1);
+        if self.ai_structure_results_expected < self.ai_structure_results_received {
+            self.ai_structure_results_expected = self.ai_structure_results_received;
+        }
+        self.refresh_structure_waiting_state();
+    }
+
+    pub fn refresh_structure_waiting_state(&mut self) {
+        let waiting = self.ai_structure_results_received < self.ai_structure_results_expected
+            || !self.ai_pending_structure_jobs.is_empty()
+            || self.ai_active_structure_job.is_some();
+
+        if waiting {
+            self.ai_waiting_for_structure_results = true;
+            self.ai_batch_review_active = false;
+            if matches!(
+                self.ai_mode,
+                AiModeState::Idle
+                    | AiModeState::Preparing
+                    | AiModeState::ResultsReady
+                    | AiModeState::Submitting
+            ) {
+                self.ai_mode = AiModeState::Submitting;
+            }
+        } else {
+            self.ai_waiting_for_structure_results = false;
+            self.ai_batch_review_active = true;
+            if matches!(
+                self.ai_mode,
+                AiModeState::Idle | AiModeState::Preparing | AiModeState::Submitting
+            ) {
+                self.ai_mode = AiModeState::ResultsReady;
+            }
+        }
+    }
+
+    pub fn allocate_structure_new_row_token(&mut self) -> usize {
+        const NEW_ROW_TOKEN_BASE: usize = usize::MAX / 2;
+        let token = NEW_ROW_TOKEN_BASE.saturating_add(self.ai_structure_new_row_token_counter);
+        self.ai_structure_new_row_token_counter =
+            self.ai_structure_new_row_token_counter.saturating_add(1);
+        token
     }
 }
 

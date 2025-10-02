@@ -79,7 +79,7 @@ def execute_ai_query(api_key: str, payload_json: str) -> str:  # noqa: D401
                 legacy_single = True
         user_prompt: Optional[str] = payload.get("user_prompt")
         column_contexts: List[Any] = payload.get("column_contexts", [])
-        column_data_types: List[Any] = payload.get("column_data_types", [])
+    # column_data_types removed (types implied in decorated contexts)
         keys_block = payload.get("keys")
         # Build a single key payload. Prefer an explicit `payload["key"]` if callers
         # already use it. Otherwise attempt to normalize legacy `keys` which may
@@ -126,6 +126,20 @@ def execute_ai_query(api_key: str, payload_json: str) -> str:  # noqa: D401
                     # the entire legacy block which may contain multiple rows.
                     key_payload = None
         allow_row_additions: bool = payload.get("allow_row_additions", False)
+        grouping_hint: Optional[str] = payload.get("grouping_hint")
+        row_partition_hints = payload.get("row_partition_hints") or []
+        parent_descriptor_header: Optional[str] = payload.get("parent_descriptor_header")
+        parent_key_header: Optional[str] = payload.get("parent_key_header")
+        
+        # NEW: parent_groups for structure requests - array of {parent_key: {...}, rows: [[...]]}
+        parent_groups = payload.get("parent_groups") or []
+        
+        # For structure requests, flatten parent_groups into rows_data
+        if parent_groups:
+            rows_data = []
+            for group in parent_groups:
+                rows_data.extend(group.get("rows", []))
+        
         orig_n = len(rows_data)
         prompt_only_mode = bool(orig_n == 0 and not legacy_single and isinstance(user_prompt, str) and user_prompt.strip())
         if orig_n == 0 and not prompt_only_mode:
@@ -140,16 +154,44 @@ def execute_ai_query(api_key: str, payload_json: str) -> str:  # noqa: D401
                 "You may output between 1 and 25 rows. Row length must equal number of column contexts. No markdown fences."
             )
         else:
-            ordering = (
-                f"There are {orig_n} original rows. Output a JSON array of row arrays. "
-                f"First {orig_n} arrays must correspond 1:1 & in order to originals. "
-                + ("You may append new rows after originals." if allow_row_additions and not legacy_single else "Do not add extra rows.")
-                + " Row length must equal number of column contexts. No markdown fences."
+            # Structure-aware ordering when parent_groups are provided
+            if parent_groups:
+                num_parents = len(parent_groups)
+                group_sizes = [len(g.get("rows", [])) for g in parent_groups]
+                partition_desc = ", ".join(f"{size} rows for group {i}" for i, size in enumerate(group_sizes))
+                ordering = (
+                    f"There are {num_parents} parent groups with a total of {orig_n} child rows: {partition_desc}. "
+                    f"Output a JSON array of GROUP arrays. Each group is an array of row arrays. "
+                    f"Output exactly {num_parents} groups. Each group's rows must correspond to the input group in order. "
+                    + (f"You may add new rows within each group after its existing rows. "
+                       f"DO NOT add new parent groups. Each group array length can grow." 
+                       if allow_row_additions and not legacy_single 
+                       else "Do not add extra rows to any group.")
+                    + f" Format: [[group0_row0, group0_row1, ...], [group1_row0, group1_row1, ...], ...]. "
+                    + "Each row array length must equal number of column contexts. No markdown fences."
+                )
+            else:
+                ordering = (
+                    f"There are {orig_n} original rows. Output a JSON array of row arrays. "
+                    f"First {orig_n} arrays must correspond 1:1 & in order to originals. "
+                    + ("You may append new rows after originals." if allow_row_additions and not legacy_single else "Do not add extra rows.")
+                    + " Row length must equal number of column contexts. No markdown fences."
+                )
+        
+        # Update row_additions_hint to be parent-aware
+        if parent_groups and allow_row_additions and not legacy_single and not prompt_only_mode:
+            num_parents = len(parent_groups)
+            row_additions_hint = (
+                f"Add Rows Enabled: The model may add new CHILD rows WITHIN each parent's group. "
+                f"Insert new rows after existing rows for that parent, maintaining group boundaries. "
+                f"DO NOT add new parent keys. Only add child/detail rows for the {num_parents} specified parents. "
+                f"Each new row must match column count."
             )
-        row_additions_hint = (
-            f"Add Rows Enabled: The model may add new rows AFTER the first {orig_n} original rows to provide similar item if any applicable here. Each new row must match column count."
-            if allow_row_additions and not legacy_single and not prompt_only_mode else ""
-        )
+        else:
+            row_additions_hint = (
+                f"Add Rows Enabled: The model may add new rows AFTER the first {orig_n} original rows to provide similar item if any applicable here. Each new row must match column count."
+                if allow_row_additions and not legacy_single and not prompt_only_mode else ""
+            )
         grounded_search_instruction = (
             "For each row, use Google Search to verify every provided value and update it with the latest reliable data you find. "
             "If a value is missing or clearly outdated, search for it and fill it in. Prefer authoritative, recent sources. "
@@ -161,13 +203,56 @@ def execute_ai_query(api_key: str, payload_json: str) -> str:  # noqa: D401
         # key_payload was constructed above (either from payload['key'] or normalized)
         # If still None, do not send the legacy keys block to avoid confusion.
 
+        # Build parent groups section if provided (for structure requests)
+        parent_groups_text = ""
+        if parent_groups:
+            parent_groups_text = "Parent Groups (respond with SAME GROUP STRUCTURE):\n"
+            for idx, group in enumerate(parent_groups):
+                pk = group.get("parent_key", {})
+                ctx = pk.get("context", "")
+                key_val = pk.get("key", "")
+                group_rows = group.get("rows", [])
+                row_count = len(group_rows)
+                
+                if ctx:
+                    parent_groups_text += f"  Group [{idx}] {ctx}: '{key_val}' - {row_count} existing child rows\n"
+                else:
+                    parent_groups_text += f"  Group [{idx}] '{key_val}' - {row_count} existing child rows\n"
+            parent_groups_text += "\n"
+            
+            # Add grouping instruction for structure requests
+            if allow_row_additions:
+                parent_groups_text += (
+                    "IMPORTANT OUTPUT FORMAT: Return an array of GROUP arrays: [[group0_rows...], [group1_rows...], ...].\n"
+                    f"You MUST return exactly {len(parent_groups)} groups (one per parent above).\n"
+                    "Each group is an array of row arrays. You may add new rows within each group.\n"
+                    "Example: If there are 2 groups, return [[row,row,...], [row,row,...]].\n\n"
+                )
+            else:
+                parent_groups_text += (
+                    "OUTPUT FORMAT: Return an array of GROUP arrays: [[group0_rows...], [group1_rows...], ...].\n"
+                    f"Return exactly {len(parent_groups)} groups matching the input structure.\n\n"
+                )
+
         user_text = (
             ("ALLOW_ROW_ADDITIONS: true\n" if ((allow_row_additions and not legacy_single) or prompt_only_mode) else "")
             + (f"USER_PROMPT: {user_prompt.strip()}\n" if prompt_only_mode else "")
+            + parent_groups_text
             + "Column Contexts:" + json.dumps(column_contexts, ensure_ascii=False) + "\n"
-            + "Column Types:" + json.dumps(column_data_types, ensure_ascii=False) + "\n"
+            # Column Types removed from new payloads; keep only if legacy caller still provides
+            # Removed Column Types section
+            + (f"Parent Descriptor Header: {parent_descriptor_header}\n" if parent_descriptor_header else "")
+            + (f"Parent Key Header: {parent_key_header}\n" if parent_key_header else "")
+            + (grouping_hint + "\n" if grouping_hint else "")
+            + ("Row Partition Hints:" + json.dumps(row_partition_hints, ensure_ascii=False) + "\n" if row_partition_hints else "")
             + ("Key:" + json.dumps(key_payload, ensure_ascii=False) + "\n" if key_payload else "")
-            + ("Rows Data:" + json.dumps(rows_data, ensure_ascii=False) + "\n" if not prompt_only_mode else "")
+            + (
+                # For parent_groups, show the data in grouped format to make the structure clear
+                ("Grouped Rows Data (return in SAME grouped format):\n" + 
+                 json.dumps([g.get("rows", []) for g in parent_groups], ensure_ascii=False) + "\n")
+                if parent_groups and not prompt_only_mode
+                else ("Rows Data:" + json.dumps(rows_data, ensure_ascii=False) + "\n" if not prompt_only_mode else "")
+            )
             + (row_additions_hint + "\n" if row_additions_hint and not prompt_only_mode else "")
             + "Return ONLY JSON."
         )
@@ -256,6 +341,74 @@ def execute_ai_query(api_key: str, payload_json: str) -> str:  # noqa: D401
         if not isinstance(parsed, list):
             return make_err("Top-level JSON must be an array", original_raw)
 
+        # Handle grouped responses for structure requests
+        if parent_groups:
+            # Expect: [[group0_rows], [group1_rows], ...]
+            if not parsed:
+                return make_err("Empty response for grouped request", original_raw)
+            
+            # Check if it's a grouped response (array of arrays of arrays)
+            is_grouped = all(isinstance(g, list) for g in parsed) and any(
+                isinstance(g, list) and g and isinstance(g[0], list) for g in parsed
+            )
+            
+            if not is_grouped:
+                # AI returned flat array instead of grouped - try to auto-partition
+                repair_notes.append(f"AI returned flat array, partitioning into {len(parent_groups)} groups")
+                flat_rows = []
+                for r in parsed:
+                    if isinstance(r, list):
+                        flat_rows.append(r)
+                # Partition by original group sizes
+                grouped_rows = []
+                cursor = 0
+                for group in parent_groups:
+                    orig_size = len(group.get("rows", []))
+                    # Take original size or remaining rows
+                    group_slice = flat_rows[cursor:cursor + orig_size] if cursor < len(flat_rows) else []
+                    grouped_rows.append(group_slice)
+                    cursor += orig_size
+                # Add any extra rows to the last group
+                if cursor < len(flat_rows):
+                    grouped_rows[-1].extend(flat_rows[cursor:])
+                parsed = grouped_rows
+            
+            # Validate group count
+            if len(parsed) != len(parent_groups):
+                return make_err(
+                    f"Expected {len(parent_groups)} groups, got {len(parsed)}",
+                    original_raw
+                )
+            
+            # Normalize each group's rows
+            expected_len = len(column_contexts)
+            norm_groups = []
+            for group_idx, group_rows in enumerate(parsed):
+                if not isinstance(group_rows, list):
+                    return make_err(f"Group {group_idx} is not an array", original_raw)
+                
+                norm_group_rows = []
+                for r in group_rows:
+                    if not isinstance(r, list):
+                        return make_err(f"Group {group_idx} contains non-array row: {r}", original_raw)
+                    cells = ["" if c is None else str(c) for c in r]
+                    if expected_len > 0:
+                        if len(cells) < expected_len:
+                            cells.extend(["" for _ in range(expected_len - len(cells))])
+                        elif len(cells) > expected_len:
+                            cells = cells[:expected_len]
+                    norm_group_rows.append(cells)
+                norm_groups.append(norm_group_rows)
+            
+            # Return grouped structure
+            payload_out: Dict[str, Any] = {
+                "success": True,
+                "data": norm_groups,  # Array of group arrays
+                "raw_response": original_raw + (f"\n[Repairs: {'; '.join(repair_notes)}]" if repair_notes else "")
+            }
+            return json.dumps(payload_out, ensure_ascii=False)
+        
+        # Regular (non-grouped) processing
         if parsed and all(not isinstance(el, list) for el in parsed):
             parsed_rows = [parsed]
         else:

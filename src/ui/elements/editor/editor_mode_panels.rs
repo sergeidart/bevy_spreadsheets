@@ -1,8 +1,8 @@
 // src/ui/elements/editor/editor_mode_panels.rs
 use super::main_editor::SheetEventWriters; // Assuming SheetEventWriters is made public or moved
 use crate::sheets::resources::SheetRegistry;
-use crate::ui::elements::editor::ai_batch_review_ui::draw_ai_batch_review_panel;
-use crate::ui::elements::editor::ai_control_panel::show_ai_control_panel;
+use crate::ui::elements::ai_review::ai_batch_review_ui::draw_ai_batch_review_panel;
+use crate::ui::elements::ai_review::ai_panel::draw_ai_panel;
 use crate::ui::elements::editor::state::{AiModeState, EditorWindowState, SheetInteractionState};
 use crate::ui::elements::top_panel::controls::delete_mode_panel::show_delete_mode_active_controls;
 use crate::SessionApiKey;
@@ -33,7 +33,7 @@ pub(super) fn show_active_mode_panel(
         )
     {
         // No leading separator before AI panel per new design
-        show_ai_control_panel(
+        draw_ai_panel(
             ui,
             state,
             current_category_clone,
@@ -43,10 +43,10 @@ pub(super) fn show_active_mode_panel(
             commands,
             session_api_key,
             &mut sheet_writers.toggle_ai_row_generation,
-            &mut sheet_writers.update_ai_send_schema,
             &mut sheet_writers.create_ai_schema_group,
             &mut sheet_writers.rename_ai_schema_group,
             &mut sheet_writers.select_ai_schema_group,
+            &mut sheet_writers.delete_ai_schema_group,
         );
         panel_shown = true;
     }
@@ -78,6 +78,7 @@ pub(super) fn show_active_mode_panel(
                 current_category_clone,
                 current_sheet_name_clone,
                 registry,
+                &mut sheet_writers.open_structure,
                 &mut sheet_writers.cell_update,
                 &mut sheet_writers.add_row,
             );

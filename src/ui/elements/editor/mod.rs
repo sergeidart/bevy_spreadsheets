@@ -16,10 +16,7 @@ pub mod editor_sheet_display;
 pub mod prefs;
 
 // Existing AI modules
-pub mod ai_batch_review_ui;
-pub mod ai_context_utils;
-pub mod ai_control_panel;
-pub mod ai_panel_structs;
+// AI-related modules moved to ui::elements::ai_review
 
 // Re-export the main UI function and potentially the state if needed elsewhere
 pub use main_editor::generic_sheet_editor_ui;

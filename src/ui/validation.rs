@@ -7,8 +7,8 @@ use std::sync::Arc;
 use crate::sheets::{definitions::ColumnDataType, resources::SheetRegistry};
 // IMPORTANT: EditorWindowState is needed here ONLY for the linked cache access
 // If we refactor cache access later, this dependency might be removed from validation itself.
+use crate::sheets::systems::ai::cache::linked_column_cache::{self, CacheResult};
 use crate::ui::elements::editor::state::EditorWindowState;
-use crate::ui::widgets::linked_column_cache::{self, CacheResult};
 
 /// Normalizes a string for linked-column comparisons:
 /// - removes carriage returns and newlines

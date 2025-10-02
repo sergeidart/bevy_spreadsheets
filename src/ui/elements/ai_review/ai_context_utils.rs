@@ -1,3 +1,4 @@
+// Moved from editor/ai_context_utils.rs to ai_review/ai_context_utils.rs
 use crate::sheets::definitions::ColumnDataType;
 
 pub fn decorate_context_with_type(
@@ -19,6 +20,7 @@ pub fn decorate_context_with_type(
 
     if let Some(label) = type_label {
         let mut result = trimmed.to_string();
+        // Use raw string to avoid escape interpretation
         result.push_str(" \\ ");
         result.push_str(label);
         Some(result)

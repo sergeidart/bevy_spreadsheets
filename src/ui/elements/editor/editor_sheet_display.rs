@@ -2,7 +2,8 @@
 use crate::sheets::{
     events::{
         AddSheetRowRequest, OpenStructureViewEvent, RequestAddColumn, RequestReorderColumn,
-        RequestToggleAiRowGeneration, RequestUpdateAiSendSchema, UpdateCellEvent,
+        RequestToggleAiRowGeneration, RequestUpdateAiSendSchema, RequestUpdateAiStructureSend,
+        UpdateCellEvent,
     },
     resources::{SheetRegistry, SheetRenderCache},
 };
@@ -29,6 +30,7 @@ pub(super) fn show_sheet_table(
     mut open_structure_writer: EventWriter<OpenStructureViewEvent>,
     mut toggle_add_rows_writer: EventWriter<RequestToggleAiRowGeneration>,
     send_schema_writer: EventWriter<RequestUpdateAiSendSchema>,
+    structure_send_writer: EventWriter<RequestUpdateAiStructureSend>,
     mut add_row_writer: EventWriter<AddSheetRowRequest>,
     mut add_column_writer: EventWriter<RequestAddColumn>,
 ) {
@@ -206,6 +208,7 @@ pub(super) fn show_sheet_table(
                                    state,
                                    reorder_column_writer,
                                    send_schema_writer,
+                                   structure_send_writer,
                                );
                             })
                            .body(|body: TableBody| {

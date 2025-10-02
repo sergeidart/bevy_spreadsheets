@@ -8,7 +8,7 @@ use crate::ui::elements::editor::state::{
     AiModeState, EditorWindowState, SheetInteractionState, ToyboxMode,
 };
 // Import the SheetEventWriters SystemParam struct
-use crate::ui::elements::editor::ai_control_panel::show_ai_control_panel;
+use crate::ui::elements::ai_review::ai_panel::draw_ai_panel;
 use crate::ui::elements::editor::main_editor::SheetEventWriters;
 use crate::visual_copier::events::RequestAppExit;
 
@@ -260,7 +260,7 @@ mod orchestrator {
                     {
                         let current_category = state.selected_category.clone();
                         let current_sheet = state.selected_sheet_name.clone();
-                        show_ai_control_panel(
+                        draw_ai_panel(
                             ui_row,
                             state,
                             &current_category,
@@ -270,10 +270,10 @@ mod orchestrator {
                             commands,
                             session_api_key,
                             &mut sheet_writers.toggle_ai_row_generation,
-                            &mut sheet_writers.update_ai_send_schema,
                             &mut sheet_writers.create_ai_schema_group,
                             &mut sheet_writers.rename_ai_schema_group,
                             &mut sheet_writers.select_ai_schema_group,
+                            &mut sheet_writers.delete_ai_schema_group,
                         );
                     }
                     if state.current_interaction_mode == SheetInteractionState::DeleteModeActive {
