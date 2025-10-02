@@ -17,6 +17,7 @@ use crate::ui::validation::normalize_for_link_cmp;
 /// Main handler function for the linked column editor widget.
 /// Orchestrates TextEdit drawing, popup management, validation, and value commitment.
 /// Assumes allowed_values have been fetched previously.
+/// Returns (optional_new_value, text_edit_response)
 pub fn handle_linked_column_edit(
     ui: &mut egui::Ui,
     id: egui::Id,        // Base ID for the cell
@@ -26,7 +27,7 @@ pub fn handle_linked_column_edit(
     _registry: &SheetRegistry, // Mark as unused with underscore
     // state: &mut EditorWindowState, // Removed state
     allowed_values: &HashSet<String>, // Added allowed_values reference
-) -> Option<String> {
+) -> (Option<String>, egui::Response) {
     let mut final_new_value: Option<String> = None;
     // --- REMOVED: original_string = current_value.to_string(); ---
     let text_edit_id = id.with("ac_text_edit");
@@ -207,5 +208,5 @@ pub fn handle_linked_column_edit(
     // Visual validation (background color) handled by edit_cell_widget.
 
     // --- 8. Return the result ---
-    final_new_value
+    (final_new_value, text_edit_response)
 }

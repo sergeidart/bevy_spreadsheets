@@ -5,6 +5,7 @@ pub mod add_row;
 pub mod reorder_column;
 // NEW: Declare create_sheet module
 pub mod categories;
+pub mod clipboard;
 pub mod create_sheet;
 pub mod delete_columns;
 pub mod delete_rows;
@@ -31,6 +32,7 @@ pub use reorder_column::handle_reorder_column_request;
 pub use categories::{
     handle_create_category_request, handle_delete_category_request, handle_rename_category_request,
 };
+pub use clipboard::{handle_copy_cell, handle_paste_cell};
 pub use create_sheet::handle_create_new_sheet_request;
 pub use delete_columns::handle_delete_columns_request;
 pub use delete_rows::handle_delete_rows_request;

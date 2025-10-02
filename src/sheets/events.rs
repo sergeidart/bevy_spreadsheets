@@ -288,3 +288,20 @@ pub struct RequestRenameCategoryDirectory {
     pub old_name: String,
     pub new_name: String,
 }
+
+// --- Clipboard events ---
+#[derive(Event, Debug, Clone)]
+pub struct RequestCopyCell {
+    pub category: Option<String>,
+    pub sheet_name: String,
+    pub row_index: usize,
+    pub col_index: usize,
+}
+
+#[derive(Event, Debug, Clone)]
+pub struct RequestPasteCell {
+    pub category: Option<String>,
+    pub sheet_name: String,
+    pub row_index: usize,
+    pub col_index: usize,
+}

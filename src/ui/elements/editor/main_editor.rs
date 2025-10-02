@@ -13,16 +13,16 @@ use super::editor_sheet_display;
 use super::state::{AiModeState, EditorWindowState, SheetInteractionState};
 use crate::sheets::{
     events::{
-        AddSheetRowRequest, CloseStructureViewEvent, RequestAddColumn, RequestCreateAiSchemaGroup,
-        RequestCreateCategory, RequestCreateNewSheet, RequestDeleteAiSchemaGroup,
-        RequestDeleteCategory, RequestDeleteColumns, RequestDeleteRows, RequestDeleteSheet,
-        RequestInitiateFileUpload, RequestRenameAiSchemaGroup, RequestRenameSheet,
-        RequestReorderColumn, RequestSelectAiSchemaGroup, RequestSheetRevalidation,
-        RequestToggleAiRowGeneration, RequestUpdateAiSendSchema, RequestUpdateAiStructureSend,
-        RequestUpdateColumnName, RequestUpdateColumnValidator, SheetDataModifiedInRegistryEvent,
-        UpdateCellEvent,
+        AddSheetRowRequest, CloseStructureViewEvent, RequestAddColumn, RequestCopyCell,
+        RequestCreateAiSchemaGroup, RequestCreateCategory, RequestCreateNewSheet,
+        RequestDeleteAiSchemaGroup, RequestDeleteCategory, RequestDeleteColumns,
+        RequestDeleteRows, RequestDeleteSheet, RequestInitiateFileUpload, RequestPasteCell,
+        RequestRenameAiSchemaGroup, RequestRenameSheet, RequestReorderColumn,
+        RequestSelectAiSchemaGroup, RequestSheetRevalidation, RequestToggleAiRowGeneration,
+        RequestUpdateAiSendSchema, RequestUpdateAiStructureSend, RequestUpdateColumnName,
+        RequestUpdateColumnValidator, SheetDataModifiedInRegistryEvent, UpdateCellEvent,
     },
-    resources::{SheetRegistry, SheetRenderCache},
+    resources::{ClipboardBuffer, SheetRegistry, SheetRenderCache},
 };
 use crate::ui::{elements::top_panel::show_top_panel_orchestrator, UiFeedbackState};
 
@@ -64,6 +64,9 @@ pub struct SheetEventWriters<'w> {
     pub create_category: EventWriter<'w, RequestCreateCategory>,
     pub delete_category: EventWriter<'w, RequestDeleteCategory>,
     pub move_sheet_to_category: EventWriter<'w, crate::sheets::events::RequestMoveSheetToCategory>,
+    // Clipboard
+    pub copy_cell: EventWriter<'w, RequestCopyCell>,
+    pub paste_cell: EventWriter<'w, RequestPasteCell>,
 }
 
 // Quick Copy controls moved into Settings popup; no dedicated top-row event writers required here.
@@ -79,6 +82,7 @@ pub struct CopierEventWriters<'w> {
 pub struct EditorMiscParams<'w> {
     pub registry: ResMut<'w, SheetRegistry>,
     pub render_cache_res: Res<'w, SheetRenderCache>,
+    pub clipboard_buffer: Res<'w, ClipboardBuffer>,
     pub ui_feedback: Res<'w, UiFeedbackState>,
     pub runtime: Res<'w, TokioTasksRuntime>,
     pub api_key_status_res: ResMut<'w, ApiKeyDisplayStatus>,
@@ -195,6 +199,9 @@ pub fn generic_sheet_editor_ui(
                 sheet_writers.update_ai_structure_send,
                 sheet_writers.add_row,
                 sheet_writers.add_column,
+                sheet_writers.copy_cell,
+                sheet_writers.paste_cell,
+                &misc.clipboard_buffer,
             );
         } else {
             // Show review panel when in AI Reviewing state
@@ -231,6 +238,9 @@ pub fn generic_sheet_editor_ui(
                     sheet_writers.update_ai_structure_send,
                     sheet_writers.add_row,
                     sheet_writers.add_column,
+                    sheet_writers.copy_cell,
+                    sheet_writers.paste_cell,
+                    &misc.clipboard_buffer,
                 );
                 ui.add_space(5.0);
             }

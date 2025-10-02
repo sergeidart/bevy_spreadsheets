@@ -1,11 +1,11 @@
 // src/ui/elements/editor/editor_sheet_display.rs
 use crate::sheets::{
     events::{
-        AddSheetRowRequest, OpenStructureViewEvent, RequestAddColumn, RequestReorderColumn,
-        RequestToggleAiRowGeneration, RequestUpdateAiSendSchema, RequestUpdateAiStructureSend,
-        UpdateCellEvent,
+        AddSheetRowRequest, OpenStructureViewEvent, RequestAddColumn, RequestCopyCell,
+        RequestPasteCell, RequestReorderColumn, RequestToggleAiRowGeneration,
+        RequestUpdateAiSendSchema, RequestUpdateAiStructureSend, UpdateCellEvent,
     },
-    resources::{SheetRegistry, SheetRenderCache},
+    resources::{ClipboardBuffer, SheetRegistry, SheetRenderCache},
 };
 use crate::ui::elements::editor::state::{AiModeState, EditorWindowState, SheetInteractionState};
 use crate::ui::elements::editor::table_body::get_filtered_row_indices_cached;
@@ -33,6 +33,9 @@ pub(super) fn show_sheet_table(
     structure_send_writer: EventWriter<RequestUpdateAiStructureSend>,
     mut add_row_writer: EventWriter<AddSheetRowRequest>,
     mut add_column_writer: EventWriter<RequestAddColumn>,
+    mut copy_writer: EventWriter<RequestCopyCell>,
+    mut paste_writer: EventWriter<RequestPasteCell>,
+    clipboard_buffer: &ClipboardBuffer,
 ) {
     // If user picked a different real sheet while a virtual structure stack exists, exit structure view
     if !state.virtual_structure_stack.is_empty() {
@@ -274,6 +277,9 @@ pub(super) fn show_sheet_table(
                                                    state,
                                                    &mut open_structure_writer,
                                                    &mut toggle_add_rows_writer,
+                                                   &mut copy_writer,
+                                                   &mut paste_writer,
+                                                   clipboard_buffer,
                                                ) {
                                                    cell_update_writer.write(crate::sheets::events::UpdateCellEvent { category: current_category_clone.clone(), sheet_name: selected_name.to_string(), row_index: original_row_index, col_index: c_idx, new_value });
                                                }
@@ -332,6 +338,9 @@ pub(super) fn show_sheet_table(
                                                    state,
                                                    &mut open_structure_writer,
                                                    &mut toggle_add_rows_writer,
+                                                   &mut copy_writer,
+                                                   &mut paste_writer,
+                                                   clipboard_buffer,
                                                ) {
                                                    cell_update_writer.write(crate::sheets::events::UpdateCellEvent { category: original_category.clone(), sheet_name: selected_name.to_string(), row_index: original_row_index, col_index: c_idx, new_value });
                                                }

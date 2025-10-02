@@ -7,6 +7,7 @@ use super::events::{
     AiTaskResult,
     JsonSheetUploaded,
     RequestAddColumn,
+    RequestCopyCell,
     RequestCreateAiSchemaGroup,
     // Category events
     RequestCreateCategory,
@@ -21,6 +22,7 @@ use super::events::{
     RequestDeleteSheetFile,
     RequestInitiateFileUpload,
     RequestMoveSheetToCategory,
+    RequestPasteCell,
     RequestProcessUpload,
     RequestRenameAiSchemaGroup,
     RequestRenameCategory,
@@ -39,7 +41,7 @@ use super::events::{
     SheetOperationFeedback,
     UpdateCellEvent,
 };
-use super::resources::{SheetRegistry, SheetRenderCache};
+use super::resources::{ClipboardBuffer, SheetRegistry, SheetRenderCache};
 use super::systems;
 use super::systems::logic::handle_sheet_render_cache_update;
 use super::systems::logic::sync_structure::{
@@ -78,6 +80,7 @@ impl Plugin for SheetsPlugin {
         app.init_resource::<SheetRegistry>();
         app.init_resource::<SheetRenderCache>();
         app.init_resource::<PendingStructureCascade>();
+        app.init_resource::<ClipboardBuffer>();
 
         app.add_event::<AddSheetRowRequest>()
             .add_event::<RequestAddColumn>()
@@ -115,6 +118,9 @@ impl Plugin for SheetsPlugin {
             .add_event::<RequestCreateCategoryDirectory>()
             .add_event::<RequestRenameCategory>()
             .add_event::<RequestRenameCategoryDirectory>();
+        // Clipboard events
+        app.add_event::<RequestCopyCell>()
+            .add_event::<RequestPasteCell>();
 
         app.add_systems(
             Startup,
@@ -172,6 +178,9 @@ impl Plugin for SheetsPlugin {
             systems::logic::handle_update_column_name,
             systems::logic::handle_update_column_validator,
             systems::logic::handle_cell_update,
+            // Clipboard operations
+            systems::logic::handle_copy_cell,
+            systems::logic::handle_paste_cell,
         )
             .chain();
 

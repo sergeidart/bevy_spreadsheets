@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 // ADDED: Import ValidationState from ui::validation
 use crate::ui::validation::ValidationState;
 
-use super::definitions::{SheetGridData, SheetMetadata};
+use super::definitions::{SheetGridData, SheetMetadata, ColumnValidator};
 
 // --- NEW: RenderableCellData ---
 /// Holds pre-processed data for rendering a single cell.
@@ -464,4 +464,16 @@ impl SheetRegistry {
         }
         Ok(())
     }
+}
+
+// --- Clipboard Buffer Resource ---
+/// Resource for holding copied cell data, including structure content
+#[derive(Resource, Default, Debug, Clone)]
+pub struct ClipboardBuffer {
+    /// The raw cell value as a string
+    pub cell_value: Option<String>,
+    /// The validator type of the source cell (to help with paste validation)
+    pub source_validator: Option<ColumnValidator>,
+    /// For structure cells: the parsed structure rows
+    pub structure_data: Option<Vec<Vec<String>>>,
 }

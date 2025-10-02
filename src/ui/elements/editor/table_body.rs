@@ -1,8 +1,8 @@
 // src/ui/elements/editor/table_body.rs
 use crate::sheets::{
     definitions::{ColumnValidator, SheetMetadata},
-    events::{OpenStructureViewEvent, RequestToggleAiRowGeneration, UpdateCellEvent},
-    resources::{SheetRegistry, SheetRenderCache},
+    events::{OpenStructureViewEvent, RequestToggleAiRowGeneration, RequestCopyCell, RequestPasteCell, UpdateCellEvent},
+    resources::{SheetRegistry, SheetRenderCache, ClipboardBuffer},
 };
 // MODIFIED: Import SheetInteractionState
 use crate::ui::common::edit_cell_widget;
@@ -120,6 +120,9 @@ pub fn sheet_table_body(
     state: &mut EditorWindowState,
     open_structure_events: &mut EventWriter<OpenStructureViewEvent>,
     toggle_ai_events: &mut EventWriter<RequestToggleAiRowGeneration>,
+    copy_events: &mut EventWriter<RequestCopyCell>,
+    paste_events: &mut EventWriter<RequestPasteCell>,
+    clipboard_buffer: &ClipboardBuffer,
 ) -> bool {
     let sheet_data_ref = match registry.get_sheet(category, sheet_name) {
         Some(data) => data,
@@ -253,6 +256,9 @@ pub fn sheet_table_body(
                             state,
                             open_structure_events,
                             toggle_ai_events,
+                            copy_events,
+                            paste_events,
+                            clipboard_buffer,
                         ) {
                             cell_update_writer.write(UpdateCellEvent {
                                 category: category.clone(),

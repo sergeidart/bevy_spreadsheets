@@ -7,8 +7,8 @@ use std::sync::Arc;
 
 use crate::sheets::{
     definitions::{ColumnDataType, ColumnValidator, SheetMetadata},
-    events::{OpenStructureViewEvent, RequestToggleAiRowGeneration},
-    resources::{SheetRegistry, SheetRenderCache},
+    events::{OpenStructureViewEvent, RequestToggleAiRowGeneration, RequestCopyCell, RequestPasteCell},
+    resources::{SheetRegistry, SheetRenderCache, ClipboardBuffer},
 };
 use crate::ui::elements::editor::state::{EditorWindowState, SheetInteractionState};
 use crate::ui::validation::{normalize_for_link_cmp, ValidationState}; // Keep for enum access
@@ -166,6 +166,10 @@ pub fn edit_cell_widget(
     // NEW: event writer for structure navigation
     structure_open_events: &mut EventWriter<OpenStructureViewEvent>,
     toggle_ai_events: &mut EventWriter<RequestToggleAiRowGeneration>,
+    // NEW: event writers for copy/paste
+    copy_events: &mut EventWriter<RequestCopyCell>,
+    paste_events: &mut EventWriter<RequestPasteCell>,
+    clipboard_buffer: &ClipboardBuffer,
 ) -> Option<String> {
     // Return type remains Option<String> for committed changes
 
@@ -336,6 +340,27 @@ pub fn edit_cell_widget(
                             if resp.changed() {
                                 temp_new_value = Some(value_for_widget.to_string());
                             }
+                            resp.context_menu(|menu_ui| {
+                                if menu_ui.button("📋 Copy").clicked() {
+                                    copy_events.write(RequestCopyCell {
+                                        category: category.clone(),
+                                        sheet_name: sheet_name.to_string(),
+                                        row_index,
+                                        col_index,
+                                    });
+                                    menu_ui.close_menu();
+                                }
+                                let has_clipboard_data = clipboard_buffer.cell_value.is_some();
+                                if menu_ui.add_enabled(has_clipboard_data, egui::Button::new("📄 Paste")).clicked() {
+                                    paste_events.write(RequestPasteCell {
+                                        category: category.clone(),
+                                        sheet_name: sheet_name.to_string(),
+                                        row_index,
+                                        col_index,
+                                    });
+                                    menu_ui.close_menu();
+                                }
+                            });
                             response_opt = Some(resp);
                         }};
                     }
@@ -356,7 +381,7 @@ pub fn edit_cell_widget(
                                         empty_backing_local = HashSet::new();
                                         &empty_backing_local
                                     };
-                                temp_new_value = handle_linked_column_edit(
+                                let (new_val, resp) = handle_linked_column_edit(
                                     centered_widget_ui,
                                     id,
                                     current_display_text,
@@ -365,12 +390,30 @@ pub fn edit_cell_widget(
                                     registry,
                                     allowed_values,
                                 );
-                                if temp_new_value.is_none() && response_opt.is_none() {
-                                    response_opt = Some(centered_widget_ui.allocate_rect(
-                                        centered_widget_ui.available_rect_before_wrap(),
-                                        Sense::hover(),
-                                    ));
-                                }
+                                temp_new_value = new_val;
+                                // Add context menu to the linked column response
+                                resp.context_menu(|menu_ui| {
+                                    if menu_ui.button("📋 Copy").clicked() {
+                                        copy_events.write(RequestCopyCell {
+                                            category: category.clone(),
+                                            sheet_name: sheet_name.to_string(),
+                                            row_index,
+                                            col_index,
+                                        });
+                                        menu_ui.close_menu();
+                                    }
+                                    let has_clipboard_data = clipboard_buffer.cell_value.is_some();
+                                    if menu_ui.add_enabled(has_clipboard_data, egui::Button::new("📄 Paste")).clicked() {
+                                        paste_events.write(RequestPasteCell {
+                                            category: category.clone(),
+                                            sheet_name: sheet_name.to_string(),
+                                            row_index,
+                                            col_index,
+                                        });
+                                        menu_ui.close_menu();
+                                    }
+                                });
+                                response_opt = Some(resp);
                             }
                             Some(ColumnValidator::Basic(_)) | None => {
                                 // Basic or No Validator
@@ -385,6 +428,27 @@ pub fn edit_cell_widget(
                                         if resp.changed() {
                                             temp_new_value = Some(temp_string);
                                         }
+                                        resp.context_menu(|menu_ui| {
+                                            if menu_ui.button("📋 Copy").clicked() {
+                                                copy_events.write(RequestCopyCell {
+                                                    category: category.clone(),
+                                                    sheet_name: sheet_name.to_string(),
+                                                    row_index,
+                                                    col_index,
+                                                });
+                                                menu_ui.close_menu();
+                                            }
+                                            let has_clipboard_data = clipboard_buffer.cell_value.is_some();
+                                            if menu_ui.add_enabled(has_clipboard_data, egui::Button::new("📄 Paste")).clicked() {
+                                                paste_events.write(RequestPasteCell {
+                                                    category: category.clone(),
+                                                    sheet_name: sheet_name.to_string(),
+                                                    row_index,
+                                                    col_index,
+                                                });
+                                                menu_ui.close_menu();
+                                            }
+                                        });
                                         response_opt = Some(resp);
                                     }
                                     ColumnDataType::Bool => {
@@ -397,6 +461,27 @@ pub fn edit_cell_widget(
                                         if resp.changed() {
                                             temp_new_value = Some(value_for_widget.to_string());
                                         }
+                                        resp.context_menu(|menu_ui| {
+                                            if menu_ui.button("📋 Copy").clicked() {
+                                                copy_events.write(RequestCopyCell {
+                                                    category: category.clone(),
+                                                    sheet_name: sheet_name.to_string(),
+                                                    row_index,
+                                                    col_index,
+                                                });
+                                                menu_ui.close_menu();
+                                            }
+                                            let has_clipboard_data = clipboard_buffer.cell_value.is_some();
+                                            if menu_ui.add_enabled(has_clipboard_data, egui::Button::new("📄 Paste")).clicked() {
+                                                paste_events.write(RequestPasteCell {
+                                                    category: category.clone(),
+                                                    sheet_name: sheet_name.to_string(),
+                                                    row_index,
+                                                    col_index,
+                                                });
+                                                menu_ui.close_menu();
+                                            }
+                                        });
                                         response_opt = Some(resp);
                                     }
                                     ColumnDataType::I64 => {
@@ -429,6 +514,8 @@ pub fn edit_cell_widget(
                                 let clicked = response_btn.clicked();
                                 response_btn.context_menu(|menu_ui| {
                                     let mut add_rows_clicked = false;
+                                    let mut copy_clicked = false;
+                                    let mut paste_clicked = false;
                                     let mut toggle_change: Option<(
                                         Option<String>,
                                         String,
@@ -436,6 +523,17 @@ pub fn edit_cell_widget(
                                         bool,
                                         Option<bool>,
                                     )> = None;
+
+                                    // Copy button
+                                    if menu_ui.button("📋 Copy").clicked() {
+                                        copy_clicked = true;
+                                    }
+                                    
+                                    // Paste button
+                                    let has_clipboard_data = clipboard_buffer.cell_value.is_some();
+                                    if menu_ui.add_enabled(has_clipboard_data, egui::Button::new("📄 Paste")).clicked() {
+                                        paste_clicked = true;
+                                    }
 
                                     menu_ui.horizontal(|row_ui| {
                                         let add_rows_resp = row_ui.add(
@@ -496,6 +594,26 @@ pub fn edit_cell_widget(
                                             }
                                         }
                                     });
+
+                                    if copy_clicked {
+                                        copy_events.write(RequestCopyCell {
+                                            category: category.clone(),
+                                            sheet_name: sheet_name.to_string(),
+                                            row_index,
+                                            col_index,
+                                        });
+                                        menu_ui.close_menu();
+                                    }
+
+                                    if paste_clicked {
+                                        paste_events.write(RequestPasteCell {
+                                            category: category.clone(),
+                                            sheet_name: sheet_name.to_string(),
+                                            row_index,
+                                            col_index,
+                                        });
+                                        menu_ui.close_menu();
+                                    }
 
                                     if add_rows_clicked {
                                         if let Some((root_category, root_sheet, _structure_path)) =
