@@ -1,5 +1,6 @@
 use crate::sheets::resources::SheetRegistry;
 use crate::ui::elements::editor::state::{EditorWindowState, ToyboxMode};
+use crate::ui::validation::normalize_for_link_cmp;
 use bevy::prelude::*; // Keep bevy prelude
 use bevy_egui::egui;
 
@@ -153,14 +154,14 @@ pub(super) fn show_random_picker_window_ui(
                                         if resp.changed() { ui_h2.memory_mut(|mem| mem.data.insert_temp(filter_key.clone().into(), ftext.clone())); }
                                         if ui_h2.small_button("x").clicked() { ftext.clear(); ui_h2.memory_mut(|mem| mem.data.insert_temp(filter_key.clone().into(), ftext.clone())); }
                                     });
-                                    let current = ftext.to_lowercase();
+                                    let current = normalize_for_link_cmp(&ftext);
                                     egui::ScrollArea::vertical().max_height(300.0).show(popup_ui, |list_ui| {
                                         if list_ui.selectable_label(false, "--Select--").clicked() {
                                             state.random_simple_result_col = 0usize; // default to first
                                             list_ui.memory_mut(|mem| mem.close_popup());
                                         }
                                         for (idx, h) in headers.iter().enumerate() {
-                                            if !current.is_empty() && !h.to_lowercase().contains(&current) { continue; }
+                                            if !current.is_empty() && !normalize_for_link_cmp(h).contains(&current) { continue; }
                                             if list_ui.selectable_label(state.random_simple_result_col == idx, h).clicked() {
                                                 state.random_simple_result_col = idx;
                                                 list_ui.memory_mut(|mem| mem.close_popup());
@@ -213,11 +214,11 @@ pub(super) fn show_random_picker_window_ui(
                                         if resp.changed() { ui_h2.memory_mut(|mem| mem.data.insert_temp(filter_key.clone().into(), ftext.clone())); }
                                         if ui_h2.small_button("x").clicked() { ftext.clear(); ui_h2.memory_mut(|mem| mem.data.insert_temp(filter_key.clone().into(), ftext.clone())); }
                                     });
-                                    let current = ftext.to_lowercase();
+                                    let current = normalize_for_link_cmp(&ftext);
                                     egui::ScrollArea::vertical().max_height(300.0).show(popup_ui, |list_ui| {
                                         if list_ui.selectable_label(current_opt.is_none(), "(none)").clicked() { state.random_picker_weight_columns[i] = None; list_ui.memory_mut(|mem| mem.close_popup()); }
                                         for (idx, h) in headers.iter().enumerate() {
-                                            if !current.is_empty() && !h.to_lowercase().contains(&current) { continue; }
+                                            if !current.is_empty() && !normalize_for_link_cmp(h).contains(&current) { continue; }
                                             if list_ui.selectable_label(current_opt == Some(idx), h).clicked() { state.random_picker_weight_columns[i] = Some(idx); list_ui.memory_mut(|mem| mem.close_popup()); }
                                         }
                                     });
@@ -304,11 +305,11 @@ pub(super) fn show_random_picker_window_ui(
                                         if resp.changed() { ui_h2.memory_mut(|mem| mem.data.insert_temp(filter_key.clone().into(), ftext.clone())); }
                                         if ui_h2.small_button("x").clicked() { ftext.clear(); ui_h2.memory_mut(|mem| mem.data.insert_temp(filter_key.clone().into(), ftext.clone())); }
                                     });
-                                    let current = ftext.to_lowercase();
+                                    let current = normalize_for_link_cmp(&ftext);
                                     egui::ScrollArea::vertical().max_height(300.0).show(popup_ui, |list_ui| {
                                         if list_ui.selectable_label(cur.is_none(), "(none)").clicked() { state.summarizer_selected_columns[i] = None; list_ui.memory_mut(|mem| mem.close_popup()); }
                                         for (idx, h) in headers.iter().enumerate() {
-                                            if !current.is_empty() && !h.to_lowercase().contains(&current) { continue; }
+                                            if !current.is_empty() && !normalize_for_link_cmp(h).contains(&current) { continue; }
                                             if list_ui.selectable_label(cur == Some(idx), h).clicked() { state.summarizer_selected_columns[i] = Some(idx); list_ui.memory_mut(|mem| mem.close_popup()); }
                                         }
                                     });

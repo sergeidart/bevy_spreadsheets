@@ -3,6 +3,7 @@
 use bevy::prelude::*;
 use std::collections::HashSet;
 use std::sync::Arc;
+use unicode_normalization::UnicodeNormalization;
 
 use crate::sheets::{definitions::ColumnDataType, resources::SheetRegistry};
 // IMPORTANT: EditorWindowState is needed here ONLY for the linked cache access
@@ -12,10 +13,15 @@ use crate::ui::elements::editor::state::EditorWindowState;
 
 /// Normalizes a string for linked-column comparisons:
 /// - removes carriage returns and newlines
+/// - removes diacritics (é→e, ö→o, ï→i, etc.) using Unicode NFD decomposition
 /// - lowercases
 /// Note: intentionally does not trim spaces to preserve intentional spacing differences.
 pub(crate) fn normalize_for_link_cmp(s: &str) -> String {
-    s.replace(['\r', '\n'], "").to_lowercase()
+    s.replace(['\r', '\n'], "")
+        .nfd() // Decompose characters (é → e + combining acute accent)
+        .filter(|c| !unicode_normalization::char::is_combining_mark(*c)) // Remove combining marks
+        .collect::<String>()
+        .to_lowercase()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

@@ -5,6 +5,7 @@ use crate::sheets::{
     resources::SheetRegistry,
 };
 use crate::ui::elements::editor::state::{EditorWindowState, ValidatorTypeChoice};
+use crate::ui::validation::normalize_for_link_cmp;
 use bevy::prelude::*;
 use bevy_egui::egui;
 use std::collections::HashSet; // Keep HashSet for potential future use
@@ -149,7 +150,7 @@ pub(super) fn show_validator_section(
                                     }
                                     for name in all_sheet_names.iter() {
                                         if !current.is_empty()
-                                            && !name.to_lowercase().contains(&current)
+                                            && !normalize_for_link_cmp(name).contains(&normalize_for_link_cmp(&current))
                                         {
                                             continue;
                                         }
@@ -286,7 +287,7 @@ pub(super) fn show_validator_section(
                                         }
                                         for (idx, header_name) in headers.iter() {
                                             if !current.is_empty()
-                                                && !header_name.to_lowercase().contains(&current)
+                                                && !normalize_for_link_cmp(header_name).contains(&normalize_for_link_cmp(&current))
                                             {
                                                 continue;
                                             }

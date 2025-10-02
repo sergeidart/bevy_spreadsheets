@@ -5,6 +5,7 @@ use bevy_egui::egui;
 use crate::sheets::events::CloseStructureViewEvent;
 use crate::sheets::resources::SheetRegistry;
 use crate::ui::elements::editor::state::{EditorWindowState, SheetInteractionState};
+use crate::ui::validation::normalize_for_link_cmp;
 
 // Compute a fixed button width approximating `chars` visible characters for Button text
 fn fixed_button_width(ui: &egui::Ui, chars: usize) -> f32 {
@@ -134,7 +135,7 @@ pub fn show_category_picker<'a, 'w>(
                 let pointer_pos_popup = popup_ui.ctx().input(|i| i.pointer.hover_pos());
                 let current_filter = filter_text.clone();
                 let root_match = "--root--".to_string();
-                if current_filter.is_empty() || root_match.contains(&current_filter.to_lowercase()) || "root (uncategorized)".contains(&current_filter.to_lowercase()) {
+                if current_filter.is_empty() || normalize_for_link_cmp(&root_match).contains(&normalize_for_link_cmp(&current_filter)) || normalize_for_link_cmp("root (uncategorized)").contains(&normalize_for_link_cmp(&current_filter)) {
                     let root_resp = popup_ui.selectable_label(is_selected_root, "--Root--");
                     if let Some((from_cat, ref sheet_name)) = state.dragged_sheet.as_ref() {
                         if let Some(pos) = pointer_pos_popup {
@@ -187,7 +188,7 @@ pub fn show_category_picker<'a, 'w>(
 
                 for cat_opt in categories.iter() {
                     if let Some(cat_name) = cat_opt {
-                        if !current_filter.is_empty() && !cat_name.to_lowercase().contains(&current_filter.to_lowercase()) {
+                        if !current_filter.is_empty() && !normalize_for_link_cmp(cat_name).contains(&normalize_for_link_cmp(&current_filter)) {
                             continue;
                         }
                         let is_selected_cat = state.selected_category.as_deref() == Some(cat_name.as_str());
@@ -517,7 +518,7 @@ pub fn show_sheet_controls<'a, 'w>(
                                     .max()
                                     .unwrap_or(12);
                                 let mut popup_min_width =
-                                    (max_name_len.max(12) as f32) * char_w + 24.0;
+                                    (max_name_len as f32) * char_w + 24.0;
                                 if popup_min_width > 900.0 {
                                     popup_min_width = 900.0;
                                 }
@@ -563,7 +564,7 @@ pub fn show_sheet_controls<'a, 'w>(
                                 );
                                 for name in sheets_in_category.iter().filter(|n| {
                                     filter_text.is_empty()
-                                        || n.to_lowercase().contains(&filter_text.to_lowercase())
+                                        || normalize_for_link_cmp(n).contains(&normalize_for_link_cmp(&filter_text))
                                 }) {
                                     let truncated: String =
                                         name.chars().take(MAX_LABEL_CHARS).collect();

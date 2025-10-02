@@ -9,6 +9,7 @@ use crate::ui::common::edit_cell_widget;
 use crate::ui::elements::editor::state::{
     AiModeState, EditorWindowState, FilteredRowsCacheEntry, SheetInteractionState,
 };
+use crate::ui::validation::normalize_for_link_cmp;
 use bevy::log::{debug, error, warn};
 use bevy::prelude::*;
 use bevy_egui::egui;
@@ -46,10 +47,10 @@ fn get_filtered_row_indices_internal(grid: &[Vec<String>], metadata: &SheetMetad
                                 return true;
                             }
                             row.get(col_idx).map_or(false, |cell_text| {
-                                let cell_lower = cell_text.to_lowercase();
+                                let cell_normalized = normalize_for_link_cmp(cell_text);
                                 terms.iter().any(|t| {
-                                    let term_lower = t.to_lowercase();
-                                    cell_lower.contains(&term_lower)
+                                    let term_normalized = normalize_for_link_cmp(t);
+                                    cell_normalized.contains(&term_normalized)
                                 })
                             })
                         }
