@@ -16,12 +16,12 @@ pub(crate) fn draw_left_panel(
 	ui: &mut egui::Ui,
 	state: &mut EditorWindowState,
 	registry: &SheetRegistry,
-	selected_category: &Option<String>,
+	_selected_category: &Option<String>,
 	selected_sheet: &Option<String>,
 	session_api_key: &SessionApiKey,
 )
 {
-	draw_left_panel_impl(ui, state, registry, selected_category, selected_sheet, session_api_key, None, None);
+	draw_left_panel_impl(ui, state, registry, _selected_category, selected_sheet, session_api_key, None, None);
 }
 
 // Extended variant used internally when runtime/commands available for sending
@@ -30,7 +30,7 @@ pub(crate) fn draw_left_panel_impl(
 	ui: &mut egui::Ui,
 	state: &mut EditorWindowState,
 	registry: &SheetRegistry,
-	selected_category: &Option<String>,
+	_selected_category: &Option<String>,
 	selected_sheet: &Option<String>,
 	session_api_key: &SessionApiKey,
 	runtime: Option<&TokioTasksRuntime>,

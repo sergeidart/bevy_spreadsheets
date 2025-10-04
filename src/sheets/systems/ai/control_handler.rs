@@ -79,6 +79,50 @@ pub fn rebuild_included_vectors(
 	for c in columns { if c.included { indices.push(c.index); contexts.push(c.context.clone()); data_types.push(c.data_type); } }
 }
 
+/// Helper to parse Python response data - handles both flat rows and grouped parent_groups responses
+fn parse_python_response_data(data: &serde_json::Value) -> Result<Vec<Vec<String>>, String> {
+	if let serde_json::Value::Array(arr) = data {
+		let mut out = Vec::new();
+		// Check if this is grouped data (parent_groups response) - array of arrays of rows
+		let is_grouped = !arr.is_empty() && arr[0].is_array() && arr[0].as_array().map_or(false, |inner| !inner.is_empty() && inner[0].is_array());
+		
+		if is_grouped {
+			// Flatten grouped response: [[row, row], [row, row]] -> [row, row, row, row]
+			for group_v in arr {
+				if let serde_json::Value::Array(group_rows) = group_v {
+					for row_v in group_rows {
+						if let serde_json::Value::Array(cells) = row_v {
+							out.push(cells.iter().map(|v| match v {
+								serde_json::Value::String(s) => s.clone(),
+								other => other.to_string()
+							}).collect());
+						} else {
+							return Err(format!("Row in group not an array: {}", row_v));
+						}
+					}
+				} else {
+					return Err(format!("Group not an array: {}", group_v));
+				}
+			}
+		} else {
+			// Regular flat array of rows
+			for row_v in arr {
+				if let serde_json::Value::Array(cells) = row_v {
+					out.push(cells.iter().map(|v| match v {
+						serde_json::Value::String(s) => s.clone(),
+						other => other.to_string()
+					}).collect());
+				} else {
+					return Err(format!("Row not an array: {}", row_v));
+				}
+			}
+		}
+		Ok(out)
+	} else {
+		Err("Expected array of rows or groups".to_string())
+	}
+}
+
 /// Spawn a background python task for batch (selected rows) processing.
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_batch_task(
@@ -113,7 +157,17 @@ pub fn spawn_batch_task(
 				let result_json_str: &str = binding.downcast::<PyString>()?.to_str()?;
 				#[derive(serde::Deserialize)] struct PyResp { success: bool, data: Option<serde_json::Value>, error: Option<String>, raw_response: Option<String> }
 				let resp: PyResp = serde_json::from_str(result_json_str).map_err(|e| PyValueError::new_err(format!("Parse JSON error: {}", e)))?;
-				if resp.success { if let Some(serde_json::Value::Array(arr)) = resp.data { let mut out = Vec::new(); for row_v in arr { match row_v { serde_json::Value::Array(cells) => { out.push(cells.into_iter().map(|v| match v { serde_json::Value::String(s)=>s, other=>other.to_string() }).collect()); }, other => { return Ok((Err(format!("Row not an array: {}", other)), resp.raw_response)); } } } Ok((Ok(out), resp.raw_response)) } else { Ok((Err("Expected array of rows".to_string()), resp.raw_response)) } } else { Ok((Err(resp.error.unwrap_or_else(|| "Unknown batch error".to_string())), resp.raw_response)) } })
+				if resp.success {
+					if let Some(data) = resp.data {
+						let parsed_result = parse_python_response_data(&data);
+						Ok((parsed_result, resp.raw_response))
+					} else {
+						Ok((Err("No data returned".to_string()), resp.raw_response))
+					}
+				} else {
+					Ok((Err(resp.error.unwrap_or_else(|| "Unknown batch error".to_string())), resp.raw_response))
+				}
+			})
 		}).await.unwrap_or_else(|e| Ok((Err(format!("Tokio panic: {}", e)), None)))
 		.unwrap_or_else(|e| (Err(format!("PyO3 error: {}", e)), Some(e.to_string())));
 		ctx.run_on_main_thread(move |world_ctx| { world_ctx.world.commands().entity(commands_entity).insert(SendEvent::<AiBatchTaskResult>{ event: AiBatchTaskResult { original_row_indices: original_rows_clone, result, raw_response, included_non_structure_columns: included_cols_clone, key_prefix_count: key_prefix_count_clone, prompt_only: false, kind: AiBatchResultKind::Root { structure_context: None } } }); }).await;
@@ -147,7 +201,17 @@ pub fn spawn_prompt_task(
 				let result_json_str: &str = binding.downcast::<PyString>()?.to_str()?;
 				#[derive(serde::Deserialize)] struct PyResp { success: bool, data: Option<serde_json::Value>, error: Option<String>, raw_response: Option<String> }
 				let resp: PyResp = serde_json::from_str(result_json_str).map_err(|e| PyValueError::new_err(format!("Parse JSON error: {}", e)))?;
-				if resp.success { if let Some(serde_json::Value::Array(arr)) = resp.data { let mut out = Vec::new(); for row_v in arr { match row_v { serde_json::Value::Array(cells) => { out.push(cells.into_iter().map(|v| match v { serde_json::Value::String(s)=>s, other=>other.to_string() }).collect()); }, other => { return Ok((Err(format!("Row not an array: {}", other)), resp.raw_response)); } } } Ok((Ok(out), resp.raw_response)) } else { Ok((Err("Expected array of rows".to_string()), resp.raw_response)) } } else { Ok((Err(resp.error.unwrap_or_else(|| "Unknown batch error".to_string())), resp.raw_response)) } })
+				if resp.success {
+					if let Some(data) = resp.data {
+						let parsed_result = parse_python_response_data(&data);
+						Ok((parsed_result, resp.raw_response))
+					} else {
+						Ok((Err("No data returned".to_string()), resp.raw_response))
+					}
+				} else {
+					Ok((Err(resp.error.unwrap_or_else(|| "Unknown batch error".to_string())), resp.raw_response))
+				}
+			})
 		}).await.unwrap_or_else(|e| Ok((Err(format!("Tokio panic: {}", e)), None)))
 		.unwrap_or_else(|e| (Err(format!("PyO3 error: {}", e)), Some(e.to_string())));
 		ctx.run_on_main_thread(move |world_ctx| { world_ctx.world.commands().entity(commands_entity).insert(SendEvent::<AiBatchTaskResult>{ event: AiBatchTaskResult { original_row_indices: Vec::new(), result, raw_response, included_non_structure_columns: included_cols_clone, key_prefix_count: 0, prompt_only: true, kind: AiBatchResultKind::Root { structure_context: None } } }); }).await;

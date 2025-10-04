@@ -7,6 +7,9 @@ use crate::ui::elements::ai_review::handlers::{
 };
 use crate::ui::elements::ai_review::header_actions::draw_header_actions;
 use crate::ui::elements::ai_review::render::row_render::{build_blocks, render_rows, RowContext};
+use crate::ui::elements::ai_review::structure_review_helpers::{
+    build_structure_ancestor_keys, build_structure_columns, convert_structure_to_reviews,
+};
 use crate::ui::elements::editor::state::{AiModeState, EditorWindowState, NewRowReview, ReviewChoice, RowReview};
 use bevy::prelude::*;
 use bevy_egui::egui::{self, RichText};
@@ -24,6 +27,9 @@ fn cancel_batch(state: &mut EditorWindowState) {
     state.ai_new_row_reviews.clear();
     state.ai_selected_rows.clear();
     state.ai_structure_detail_context = None;
+    // Clear Phase 1/2 state
+    state.ai_phase1_intermediate = None;
+    state.ai_expecting_phase2_result = false;
     // Also reset broader interaction modes and selections so the UI returns to normal (hides "Exit AI").
     state.reset_interaction_modes_and_selections();
 }
@@ -84,7 +90,7 @@ pub fn persist_structure_detail_changes(
             // The AI row already has the correct structure for this schema
             let merged = nr.ai.clone();
             info!("persist_structure_detail: adding new row {}: len={}, data={:?}", nr_idx, merged.len(), merged);
-            let mut diff_flags = vec![true; merged.len()]; // All cells are from AI (new row)
+            let diff_flags = vec![true; merged.len()]; // All cells are from AI (new row)
             merged_rows.push(merged);
             differences.push(diff_flags);
         }
@@ -165,217 +171,6 @@ fn structure_row_apply_new(
     if target_idx < entry.differences.len() { for flag in &mut entry.differences[target_idx] { *flag = false; } }
 }
 
-/// Convert a StructureReviewEntry into temporary RowReview and NewRowReview entries
-fn convert_structure_to_reviews(
-    entry: &crate::ui::elements::editor::state::StructureReviewEntry,
-) -> (Vec<RowReview>, Vec<NewRowReview>) {
-    let mut row_reviews = Vec::new();
-    let mut new_row_reviews = Vec::new();
-
-    // Determine non-structure columns by analyzing the structure (assume all for now)
-    let num_cols = entry.original_rows.first().map(|r| r.len()).unwrap_or_else(|| {
-        entry.ai_rows.first().map(|r| r.len()).unwrap_or(0)
-    });
-    let non_structure_columns: Vec<usize> = (0..num_cols).collect();
-
-    // Build RowReview entries for matching rows
-    let min_len = entry.original_rows.len().min(entry.ai_rows.len());
-    for row_idx in 0..min_len {
-        let original_row = &entry.original_rows[row_idx];
-        let ai_row = &entry.ai_rows[row_idx];
-        let row_diffs = entry.differences.get(row_idx);
-
-        let mut choices = Vec::new();
-        for col_idx in 0..num_cols {
-            let has_diff = row_diffs.and_then(|d| d.get(col_idx)).copied().unwrap_or(false);
-            // If there's a difference, default to AI (we're reviewing AI suggestions)
-            // If no difference (original == ai), doesn't matter which we choose
-            choices.push(if has_diff {
-                ReviewChoice::AI
-            } else {
-                ReviewChoice::Original  // No difference, so Original == AI
-            });
-        }
-
-        row_reviews.push(RowReview {
-            row_index: row_idx,
-            non_structure_columns: non_structure_columns.clone(),
-            original: original_row.clone(),
-            ai: ai_row.clone(),
-            choices,
-        });
-    }
-
-    // Build NewRowReview entries for AI rows beyond original count
-    for row_idx in entry.original_rows.len()..entry.ai_rows.len() {
-        let ai_row = &entry.ai_rows[row_idx];
-        new_row_reviews.push(NewRowReview {
-            non_structure_columns: non_structure_columns.clone(),
-            ai: ai_row.clone(),
-            duplicate_match_row: None,
-            original_for_merge: None,
-            choices: None,
-            merge_selected: false,
-            merge_decided: false,
-        });
-    }
-
-    (row_reviews, new_row_reviews)
-}
-
-/// Build column list from structure schema
-fn build_structure_columns(
-    union_cols: &[usize],
-    detail_ctx: &Option<crate::ui::elements::editor::state::StructureDetailContext>,
-    _selected_category: &Option<String>,
-    registry: &SheetRegistry,
-) -> (Vec<ColumnEntry>, Vec<StructureFieldDefinition>) {
-    let detail_ctx = match detail_ctx {
-        Some(ctx) => ctx,
-        None => return (Vec::new(), Vec::new()),
-    };
-
-    // Find the structure entry to get root info - iterate through all sheets
-    let structure_entry = registry
-        .iter_sheets()
-        .filter_map(|(_, _, sheet)| sheet.metadata.as_ref())
-        .filter_map(|meta| {
-            if let Some(&first_col_idx) = detail_ctx.structure_path.first() {
-                meta.columns.get(first_col_idx).and_then(|col| {
-                    col.structure_schema.as_ref().map(|schema| (col, schema.clone()))
-                })
-            } else {
-                None
-            }
-        })
-        .next();
-
-    let mut current_schema = match structure_entry {
-        Some((_col_def, schema)) => schema,
-        None => return (Vec::new(), Vec::new()),
-    };
-
-    // Navigate through nested structures
-    for &nested_idx in detail_ctx.structure_path.iter().skip(1) {
-        let temp_schema = current_schema.clone();
-        if let Some(field) = temp_schema.get(nested_idx) {
-            if let Some(nested_schema) = &field.structure_schema {
-                current_schema = nested_schema.clone();
-            }
-        }
-    }
-
-    // Build column entries from structure schema
-    let mut result = Vec::new();
-    for (col_idx, field_def) in current_schema.iter().enumerate() {
-        let is_structure = matches!(field_def.validator, Some(ColumnValidator::Structure));
-        let is_included = !matches!(field_def.ai_include_in_send, Some(false));
-        
-        if is_structure && is_included {
-            result.push(ColumnEntry::Structure(col_idx));
-        } else if !is_structure && union_cols.contains(&col_idx) {
-            result.push(ColumnEntry::Regular(col_idx));
-        }
-    }
-
-    (result, current_schema)
-}
-
-/// Build ancestor key columns for structure detail view
-/// Gets keys from the structure schema and parent row data (from grid or reviews)
-fn build_structure_ancestor_keys(
-    detail_ctx: &crate::ui::elements::editor::state::StructureDetailContext,
-    state: &EditorWindowState,
-    _selected_category: &Option<String>,
-    registry: &SheetRegistry,
-    _saved_row_reviews: &[RowReview],
-    saved_new_row_reviews: &[NewRowReview],
-) -> Vec<(String, String)> {
-    let mut ancestor_keys = Vec::new();
-
-    // Find the structure entry to get root info
-    let structure_entry = state.ai_structure_reviews.iter().find(|sr| {
-        match (sr.parent_new_row_index, detail_ctx.parent_new_row_index) {
-            (Some(a), Some(b)) if a == b => sr.structure_path == detail_ctx.structure_path,
-            (None, None) => {
-                sr.parent_row_index == detail_ctx.parent_row_index.unwrap_or(usize::MAX)
-                    && sr.structure_path == detail_ctx.structure_path
-            }
-            _ => false,
-        }
-    });
-
-    let entry = match structure_entry {
-        Some(e) => e,
-        None => return ancestor_keys,
-    };
-
-    // Get the root sheet to access its metadata and grid
-    let root_sheet = match registry.get_sheet(&entry.root_category, &entry.root_sheet) {
-        Some(sheet) => sheet,
-        None => return ancestor_keys,
-    };
-
-    let root_meta = match &root_sheet.metadata {
-        Some(meta) => meta,
-        None => return ancestor_keys,
-    };
-
-    // Navigate to find the structure column definition
-    let mut current_schema_opt: Option<Vec<crate::sheets::definitions::StructureFieldDefinition>> = None;
-    let mut key_parent_idx_opt: Option<usize> = None;
-
-    if let Some(&first_col_idx) = entry.structure_path.first() {
-        if let Some(col_def) = root_meta.columns.get(first_col_idx) {
-            key_parent_idx_opt = col_def.structure_key_parent_column_index;
-            current_schema_opt = col_def.structure_schema.clone();
-        }
-    }
-
-    // Navigate through nested structures if needed
-    for &nested_idx in entry.structure_path.iter().skip(1) {
-        if let Some(ref current_schema) = current_schema_opt {
-            if let Some(field) = current_schema.get(nested_idx) {
-                key_parent_idx_opt = field.structure_key_parent_column_index;
-                current_schema_opt = field.structure_schema.clone();
-            }
-        }
-    }
-
-    // Now get the key column header and value
-    if let Some(key_parent_idx) = key_parent_idx_opt {
-        // Get the key column header
-        let key_header = root_meta.columns.get(key_parent_idx).map(|col| col.header.clone());
-
-        if let Some(header) = key_header {
-            // Get the key value from parent row
-            // For existing rows: get from grid directly
-            // For new rows: get from the review data
-            let key_value_opt = if detail_ctx.parent_new_row_index.is_none() {
-                // Existing row - get from grid using the row index from the entry
-                root_sheet.grid.get(entry.parent_row_index)
-                    .and_then(|row| row.get(key_parent_idx).cloned())
-            } else {
-                // New row - get from review data
-                if let Some(parent_new_row_idx) = detail_ctx.parent_new_row_index {
-                    saved_new_row_reviews.get(parent_new_row_idx).and_then(|nr| {
-                        // Find position of key_parent_idx in non_structure_columns
-                        nr.non_structure_columns.iter().position(|&col| col == key_parent_idx)
-                            .and_then(|pos| nr.ai.get(pos).cloned())
-                    })
-                } else {
-                    None
-                }
-            };
-
-            if let Some(key_value) = key_value_opt {
-                ancestor_keys.push((header, key_value));
-            }
-        }
-    }
-
-    ancestor_keys
-}
 
 pub(crate) fn draw_ai_batch_review_panel(
     ui: &mut egui::Ui,
@@ -391,8 +186,13 @@ pub(crate) fn draw_ai_batch_review_panel(
         return;
     }
 
-    // Check if we're in structure detail mode (deferred persistence model)
-    let in_structure_mode = state.ai_structure_detail_context.is_some();
+    // Detect which of the three AI review modes we're in:
+    // 1. Structure Detail Mode: drilling down into a structure from AI review (has ai_structure_detail_context)
+    // 2. Virtual Structure Review: reviewing rows from within a virtual structure sheet (has virtual_structure_stack)
+    // 3. Regular Review: reviewing rows from root sheet (neither of the above)
+    let in_structure_detail_mode = state.ai_structure_detail_context.is_some();
+    let in_virtual_structure_review = !in_structure_detail_mode && !state.virtual_structure_stack.is_empty();
+    let in_structure_mode = in_structure_detail_mode; // Keep old variable name for compatibility
     if in_structure_mode {
         // Hydrate once when entering
         if let Some(detail_ctx) = &mut state.ai_structure_detail_context {
@@ -459,20 +259,30 @@ pub(crate) fn draw_ai_batch_review_panel(
 
     // Build merged column list - different logic for structure mode vs normal mode
     let (merged_columns, structure_schema) = if in_structure_mode {
-        // In structure mode: build columns from structure schema
-        build_structure_columns(&union_cols, &state.ai_structure_detail_context, selected_category_clone, registry)
+        // In structure detail mode: build columns from structure schema
+        build_structure_columns(&union_cols, &state.ai_structure_detail_context, false, "", selected_category_clone, registry)
+    } else if in_virtual_structure_review {
+        // In virtual structure review: filter out structure columns
+        build_structure_columns(&union_cols, &None, true, &active_sheet_name, selected_category_clone, registry)
     } else {
         // Normal mode: build columns from sheet metadata
+        // IMPORTANT: Only show columns that are BOTH included in metadata AND present in union_cols (actually sent)
         let cols = if let Some(sheet) = registry.get_sheet(selected_category_clone, &active_sheet_name) {
             if let Some(metadata) = &sheet.metadata {
                 let mut result = Vec::new();
                 for (col_idx, col_def) in metadata.columns.iter().enumerate() {
                     let is_structure = matches!(col_def.validator, Some(ColumnValidator::Structure));
-                    let is_included = !matches!(col_def.ai_include_in_send, Some(false));
                     
-                    if is_structure && is_included {
-                        result.push(ColumnEntry::Structure(col_idx));
-                    } else if !is_structure && union_cols.contains(&col_idx) {
+                    // Only show columns that were actually sent
+                    if is_structure {
+                        // Structure columns: Check if this structure path was planned for sending
+                        // Structure data is sent separately via ai_planned_structure_paths
+                        let structure_path = vec![col_idx];
+                        if state.ai_planned_structure_paths.contains(&structure_path) {
+                            result.push(ColumnEntry::Structure(col_idx));
+                        }
+                    } else if union_cols.contains(&col_idx) {
+                        // Regular columns: only show if present in union_cols (actually sent to AI)
                         result.push(ColumnEntry::Regular(col_idx));
                     }
                 }
@@ -579,7 +389,9 @@ pub(crate) fn draw_ai_batch_review_panel(
         .get_sheet(selected_category_clone, &active_sheet_name)
         .map(|sheet| &sheet.grid);
 
+    // Wrap table in ScrollArea to ensure proper scrolling in all modes
     egui::ScrollArea::both()
+        .auto_shrink([false, false])
         .id_salt("ai_batch_review_table_mod")
         .show(ui, |ui| {
             use bevy_egui::egui::Align;
@@ -688,7 +500,28 @@ pub(crate) fn draw_ai_batch_review_panel(
                 // Pre-fetch all linked column options
                 use crate::ui::widgets::linked_column_cache::{self, CacheResult};
                 let mut linked_column_options = std::collections::HashMap::new();
-                if let Some(meta) = sheet_metadata {
+                
+                // For nested structures, use structure_schema; otherwise use sheet metadata columns
+                if in_structure_mode && !structure_schema.is_empty() {
+                    // In structure detail mode: get validators from structure schema
+                    for col_entry in &merged_columns {
+                        if let ColumnEntry::Regular(actual_col) = col_entry {
+                            if let Some(field_def) = structure_schema.get(*actual_col) {
+                                if let Some(ColumnValidator::Linked { target_sheet_name, target_column_index }) = &field_def.validator {
+                                    if let CacheResult::Success { raw, .. } = linked_column_cache::get_or_populate_linked_options(
+                                        target_sheet_name,
+                                        *target_column_index,
+                                        registry,
+                                        state,
+                                    ) {
+                                        linked_column_options.insert(*actual_col, raw);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else if let Some(meta) = sheet_metadata {
+                    // Normal mode or virtual structure review: get validators from sheet metadata
                     for col_entry in &merged_columns {
                         if let ColumnEntry::Regular(actual_col) = col_entry {
                             if let Some(col_def) = meta.columns.get(*actual_col) {
@@ -856,17 +689,30 @@ pub(crate) fn draw_ai_batch_review_panel(
 
                 // Handle structure navigation click
                 if let Some((parent_row_idx, parent_new_row_idx, structure_path)) = structure_nav_clicked {
-                    // Save current top-level reviews before entering structure mode
-                    let saved_row_reviews = state.ai_row_reviews.clone();
-                    let saved_new_row_reviews = state.ai_new_row_reviews.clone();
-                    state.ai_structure_detail_context = Some(crate::ui::elements::editor::state::StructureDetailContext {
-                        parent_row_index: parent_row_idx,
-                        parent_new_row_index: parent_new_row_idx,
-                        structure_path,
-                        hydrated: false,
-                        saved_row_reviews,
-                        saved_new_row_reviews,
+                    // Find the structure entry to get root sheet information
+                    let structure_entry = state.ai_structure_reviews.iter().find(|sr| {
+                        match (parent_row_idx, parent_new_row_idx) {
+                            (Some(pr), None) => sr.parent_row_index == pr && sr.parent_new_row_index.is_none() && sr.structure_path == structure_path,
+                            (None, Some(pnr)) => sr.parent_new_row_index == Some(pnr) && sr.structure_path == structure_path,
+                            _ => false,
+                        }
                     });
+                    
+                    if let Some(entry) = structure_entry {
+                        // Save current top-level reviews before entering structure mode
+                        let saved_row_reviews = state.ai_row_reviews.clone();
+                        let saved_new_row_reviews = state.ai_new_row_reviews.clone();
+                        state.ai_structure_detail_context = Some(crate::ui::elements::editor::state::StructureDetailContext {
+                            root_category: entry.root_category.clone(),
+                            root_sheet: entry.root_sheet.clone(),
+                            parent_row_index: parent_row_idx,
+                            parent_new_row_index: parent_new_row_idx,
+                            structure_path,
+                            hydrated: false,
+                            saved_row_reviews,
+                            saved_new_row_reviews,
+                        });
+                    }
                 }
             });
         });

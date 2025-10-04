@@ -98,6 +98,25 @@ pub struct AiCallLogEntry {
     pub is_error: bool,
 }
 
+/// Phase 1 intermediate data - stored after initial discovery call, before Phase 2 deep review
+#[derive(Debug, Clone)]
+pub struct Phase1IntermediateData {
+    /// All rows from Phase 1 AI response
+    pub all_ai_rows: Vec<Vec<String>>,
+    /// Indices of rows that are duplicates (in all_ai_rows, after originals)
+    pub duplicate_indices: Vec<usize>,
+    /// Number of original rows sent
+    pub original_count: usize,
+    /// Included column indices
+    pub included_columns: Vec<usize>,
+    /// Context for sending Phase 2
+    pub category: Option<String>,
+    pub sheet_name: String,
+    pub key_prefix_count: usize,
+    /// Original row indices from Phase 1 (for structure processing)
+    pub original_row_indices: Vec<usize>,
+}
+
 #[derive(Resource)]
 pub struct EditorWindowState {
     pub selected_category: Option<String>,
@@ -159,6 +178,27 @@ pub struct EditorWindowState {
     pub ai_structure_reviews: Vec<StructureReviewEntry>,
     pub ai_structure_new_row_contexts: HashMap<usize, StructureNewRowContext>,
     pub ai_structure_new_row_token_counter: usize,
+    /// Cache of original row content snapshots for rendering original previews.
+    /// 
+    /// **Design**: Single source of truth for all original row content in AI review.
+    /// - Key: `(parent_row_index, parent_new_row_index)` where exactly one is `Some`.
+    ///   - `(Some(row_idx), None)`: Existing row at `row_idx`.
+    ///   - `(None, Some(new_idx))`: New/duplicate row at `new_idx` in `ai_new_row_reviews`.
+    /// - Value: Complete grid row including raw structure cell JSON strings.
+    /// 
+    /// **Population**:
+    /// - For existing rows: Cloned from sheet grid when AI results processed.
+    /// - For duplicate rows: Cloned from matched existing row in grid.
+    /// - For truly new rows: Empty row with correct column count.
+    /// 
+    /// **Usage**:
+    /// - All original preview rendering uses this cache (no per-frame parsing).
+    /// - Structure columns: Extract JSON and parse once in helper, or use pre-parsed
+    ///   `StructureReviewEntry.original_rows` for nested structures.
+    /// - Regular columns: Already extracted into `RowReview.original` / `NewRowReview.original_for_merge`.
+    /// 
+    /// **Performance**: Eliminates repeated JSON parsing on every frame render.
+    pub ai_original_row_snapshot_cache: HashMap<(Option<usize>, Option<usize>), Vec<String>>,
     // New unified review model
     // (legacy single-row review fields removed)
     pub ai_model_id_input: String,
@@ -188,6 +228,10 @@ pub struct EditorWindowState {
     pub ai_last_send_root_category: Option<String>,
     pub ai_last_send_root_sheet: Option<String>,
     pub ai_planned_structure_paths: Vec<Vec<usize>>,
+    /// Phase 1 intermediate data - stored after initial AI call, before Phase 2 deep review
+    pub ai_phase1_intermediate: Option<Phase1IntermediateData>,
+    /// Flag indicating that the next AI result should be processed as Phase 2 deep review
+    pub ai_expecting_phase2_result: bool,
     pub ai_structure_results_expected: usize,
     pub ai_structure_results_received: usize,
     pub ai_waiting_for_structure_results: bool,
@@ -345,6 +389,7 @@ impl Default for EditorWindowState {
             ai_structure_reviews: Vec::new(),
             ai_structure_new_row_contexts: HashMap::new(),
             ai_structure_new_row_token_counter: 0,
+            ai_original_row_snapshot_cache: HashMap::new(),
             ai_model_id_input: String::new(),
             ai_general_rule_input: String::new(),
             ai_structure_detail_context: None,
@@ -367,6 +412,8 @@ impl Default for EditorWindowState {
             ai_last_send_root_category: None,
             ai_last_send_root_sheet: None,
             ai_planned_structure_paths: Vec::new(),
+            ai_phase1_intermediate: None,
+            ai_expecting_phase2_result: false,
             ai_structure_results_expected: 0,
             ai_structure_results_received: 0,
             ai_waiting_for_structure_results: false,
@@ -490,11 +537,17 @@ pub struct StructureSendJob {
 pub struct StructureNewRowContext {
     pub new_row_index: usize,
     pub non_structure_values: Vec<(usize, String)>,
+    /// Full AI row from Phase 1, including structure columns (stored as JSON strings)
+    pub full_ai_row: Option<Vec<String>>,
 }
 
 /// Context for navigating into structure detail view during AI review
 #[derive(Debug, Clone)]
 pub struct StructureDetailContext {
+    /// Root category of the sheet containing the structure
+    pub root_category: Option<String>,
+    /// Root sheet name containing the structure
+    pub root_sheet: String,
     /// Index of parent row in ai_row_reviews (for existing rows)
     pub parent_row_index: Option<usize>,
     /// Index of parent row in ai_new_row_reviews (for new rows)
@@ -534,6 +587,8 @@ pub struct StructureReviewEntry {
     pub row_operations: Vec<RowOperation>,
     /// Schema field headers for proper JSON serialization
     pub schema_headers: Vec<String>,
+    /// Number of original rows (before AI additions) - used to identify AI-added rows
+    pub original_rows_count: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

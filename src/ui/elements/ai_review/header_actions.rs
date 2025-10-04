@@ -28,7 +28,7 @@ pub fn draw_header_actions(
     }
     
     ui.horizontal(|ui| {
-        // Show back button if in structure detail mode
+        // Show back button ONLY if in structure detail mode (drill-down from AI review)
         if state.ai_structure_detail_context.is_some() {
             if ui.button(RichText::new("◀ Back").strong()).clicked() {
                 if let Some(ref detail_ctx) = state.ai_structure_detail_context.clone() {
@@ -43,11 +43,17 @@ pub fn draw_header_actions(
             ui.add_space(8.0);
             ui.label(RichText::new("AI Review - Structure Detail").heading());
         } else if !state.virtual_structure_stack.is_empty() {
-            if ui.button(RichText::new("◀ Back").strong()).clicked() { /* back handled upstream */
-            }
-            ui.add_space(8.0);
+            // Virtual structure review mode: NO back button (this is first-level review)
+            // Show context breadcrumb instead
             ui.label(RichText::new("AI Review").heading());
+            ui.add_space(4.0);
+            if let Some(vctx) = state.virtual_structure_stack.last() {
+                ui.label(RichText::new(format!("({})", vctx.virtual_sheet_name))
+                    .color(Color32::GRAY)
+                    .size(14.0));
+            }
         } else {
+            // Regular review mode: simple header
             ui.label(RichText::new("AI Review").heading());
         }
         ui.add_space(12.0);

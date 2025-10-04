@@ -52,9 +52,7 @@ pub fn handle_ui_feedback(
             state.ai_raw_output_display.push('\n');
         }
         state.ai_raw_output_display.push_str(&event.message);
-        if event.is_error {
-            state.ai_output_panel_visible = true;
-        }
+        // Don't auto-open log panel - user will open manually if needed
         if !event.is_error {
             // Stop on first success so errors from earlier events still show until a success arrives
             break;

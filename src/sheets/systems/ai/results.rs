@@ -17,8 +17,8 @@ use super::row_helpers::{
     extract_original_snapshot_for_merge, generate_review_choices, normalize_cell_value,
     skip_key_prefix,
 };
-use super::structure_jobs::enqueue_structure_jobs_for_batch;
 use super::structure_results::{handle_structure_error, process_structure_partition};
+use super::phase2_helpers;
 
 // Re-export legacy single-row handler for backwards compatibility
 pub use super::legacy::handle_ai_task_results;
@@ -29,40 +29,63 @@ pub fn handle_ai_batch_results(
     mut state: ResMut<EditorWindowState>,
     registry: Res<SheetRegistry>,
     mut feedback_writer: EventWriter<SheetOperationFeedback>,
+    mut commands: Commands,
+    runtime: Res<bevy_tokio_tasks::TokioTasksRuntime>,
+    session_api_key: Res<crate::SessionApiKey>,
 ) {
     if ev_batch.is_empty() {
         return;
     }
     
     for ev in ev_batch.read() {
-        match &ev.kind {
-            AiBatchResultKind::Root { structure_context: Some(context) } => {
-                handle_structure_batch_result(ev, context, &mut state, &registry, &mut feedback_writer);
+        // Check if we're expecting a Phase 2 result (flag-based routing)
+        if state.ai_expecting_phase2_result {
+            // Phase 2 result - extract duplicate info from stored Phase 1 data
+            if let Some(ref phase1) = state.ai_phase1_intermediate {
+                let duplicate_indices = phase1.duplicate_indices.clone();
+                let established_row_count = phase1.original_count + duplicate_indices.len();
+                state.ai_expecting_phase2_result = false;
+                phase2_helpers::handle_deep_review_result_phase2(ev, &duplicate_indices, established_row_count, &mut state, &registry, &mut feedback_writer);
+            } else {
+                error!("Phase 2 result expected but no Phase 1 data found!");
+                state.ai_expecting_phase2_result = false;
             }
-            AiBatchResultKind::Root { structure_context: None } => {
-                handle_root_batch_result(ev, &mut state, &registry, &mut feedback_writer);
+        } else {
+            match &ev.kind {
+                AiBatchResultKind::Root { structure_context: Some(context) } => {
+                    handle_structure_batch_result(ev, context, &mut state, &registry, &mut feedback_writer);
+                }
+                AiBatchResultKind::Root { structure_context: None } => {
+                    handle_root_batch_result_phase1(ev, &mut state, &registry, &mut feedback_writer, &mut commands, &runtime, &session_api_key);
+                }
+                AiBatchResultKind::DeepReview { .. } => {
+                    error!("Unexpected DeepReview result kind without flag set!");
+                }
             }
         }
         break;
     }
 }
 
-/// Handle root (non-structure) batch results
-fn handle_root_batch_result(
+/// Handle root batch results - Phase 1: Initial discovery call
+/// Detects duplicates and triggers Phase 2 deep review automatically
+fn handle_root_batch_result_phase1(
     ev: &AiBatchTaskResult,
     state: &mut EditorWindowState,
     registry: &SheetRegistry,
     feedback_writer: &mut EventWriter<SheetOperationFeedback>,
+    commands: &mut Commands,
+    runtime: &bevy_tokio_tasks::TokioTasksRuntime,
+    session_api_key: &crate::SessionApiKey,
 ) {
     match &ev.result {
         Ok(rows) => {
             let originals = ev.original_row_indices.len();
-            debug!(
-                "handle_ai_batch_results: received root batch rows={}, originals={}, key_prefix_count={}, included_non_structure_columns={}",
+            info!(
+                "PHASE 1: Received {} rows ({} originals, {} new)",
                 rows.len(),
                 originals,
-                ev.key_prefix_count,
-                ev.included_non_structure_columns.len()
+                rows.len().saturating_sub(originals)
             );
 
             if originals > 0 && rows.len() < originals {
@@ -79,41 +102,82 @@ fn handle_root_batch_result(
 
             if let Some(raw) = &ev.raw_response {
                 state.ai_raw_output_display = raw.clone();
-                let status = format!("Completed - {} row(s) received", rows.len());
+                let status = format!("Phase 1 complete - {} row(s) received, analyzing...", rows.len());
                 state.add_ai_call_log(status, Some(raw.clone()), None, false);
             }
 
-            let (orig_slice, extra_slice) = if originals == 0 {
+            // Detect duplicates in new rows
+            let (_orig_slice, extra_slice) = if originals == 0 {
                 (&[][..], &rows[..])
             } else {
                 rows.split_at(originals)
             };
 
-            setup_context_prefixes(state, registry, ev);
-            process_original_rows(state, registry, ev, orig_slice);
-            process_new_rows(state, registry, ev, extra_slice);
-
-            let expected_structure_jobs = enqueue_structure_jobs_for_batch(state, &registry);
-
-            state.ai_batch_has_undecided_merge = state
-                .ai_new_row_reviews
-                .iter()
-                .any(|nr| nr.duplicate_match_row.is_some() && !nr.merge_decided);
-
-            state.ai_mode = crate::ui::elements::editor::state::AiModeState::ResultsReady;
-            if ev.prompt_only {
-                state.last_ai_prompt_only = true;
-            }
-
-            state.refresh_structure_waiting_state();
-            info!(
-                "Processed AI root batch result: {} originals, {} new rows (prompt_only={}, waiting_for_structures={}, structure_jobs={})",
-                originals,
-                state.ai_new_row_reviews.len(),
-                ev.prompt_only,
-                state.ai_waiting_for_structure_results,
-                expected_structure_jobs
+            let duplicate_indices = phase2_helpers::detect_duplicate_indices(
+                extra_slice,
+                &ev.included_non_structure_columns,
+                ev.key_prefix_count,
+                state,
+                registry,
             );
+
+            info!(
+                "PHASE 1: Detected {} duplicates out of {} new rows",
+                duplicate_indices.len(),
+                extra_slice.len()
+            );
+
+            // Store Phase 1 intermediate data
+            let (cat_ctx, sheet_ctx) = state.current_sheet_context();
+            let sheet_name = sheet_ctx.unwrap_or_default();
+            
+            state.ai_phase1_intermediate = Some(crate::ui::elements::editor::state::Phase1IntermediateData {
+                all_ai_rows: rows.clone(),
+                duplicate_indices: duplicate_indices.clone(),
+                original_count: originals,
+                included_columns: ev.included_non_structure_columns.clone(),
+                category: cat_ctx.clone(),
+                sheet_name: sheet_name.clone(),
+                key_prefix_count: ev.key_prefix_count,
+                original_row_indices: ev.original_row_indices.clone(),
+            });
+
+            // OPTIMIZATION: Skip Phase 2 if only one column is being processed
+            // With single column, there's no merge complexity, so use Phase 1 results directly
+            if ev.included_non_structure_columns.len() <= 1 {
+                info!(
+                    "SINGLE-COLUMN OPTIMIZATION: Skipping Phase 2 (only {} column(s)), using Phase 1 results directly",
+                    ev.included_non_structure_columns.len()
+                );
+                
+                // Process Phase 1 results directly as final results
+                let established_row_count = originals + duplicate_indices.len();
+                phase2_helpers::handle_deep_review_result_phase2(
+                    ev,
+                    &duplicate_indices,
+                    established_row_count,
+                    state,
+                    registry,
+                    feedback_writer,
+                );
+            } else {
+                // Trigger Phase 2: Deep review call
+                phase2_helpers::trigger_phase2_deep_review(
+                    state,
+                    registry,
+                    commands,
+                    runtime,
+                    session_api_key,
+                    rows,
+                    &duplicate_indices,
+                    originals,
+                    &ev.included_non_structure_columns,
+                    ev.key_prefix_count,
+                );
+
+                // Do NOT enqueue structure jobs yet - wait for Phase 2 to complete
+                // Structure jobs will be enqueued in handle_deep_review_result_phase2
+            }
         }
         Err(err) => {
             handle_root_batch_error(state, ev, err, feedback_writer);
@@ -122,7 +186,7 @@ fn handle_root_batch_result(
 }
 
 /// Setup AI context prefixes for key columns
-fn setup_context_prefixes(
+pub(super) fn setup_context_prefixes(
     state: &mut EditorWindowState,
     registry: &SheetRegistry,
     ev: &AiBatchTaskResult,
@@ -230,6 +294,19 @@ fn process_original_rows(
             choices,
             non_structure_columns: included.clone(),
         });
+
+        // CACHE POPULATION: Store full grid row for rendering original previews
+        // Includes raw structure JSON for on-demand parsing or lookup in StructureReviewEntry
+        if let Some(sheet_name) = &sheet_ctx {
+            if let Some(sheet_ref) = registry.get_sheet(&cat_ctx, sheet_name) {
+                if let Some(full_row) = sheet_ref.grid.get(row_index) {
+                    state.ai_original_row_snapshot_cache.insert(
+                        (Some(row_index), None),
+                        full_row.clone(),
+                    );
+                }
+            }
+        }
     }
 }
 
@@ -286,20 +363,51 @@ fn process_new_rows(
                 registry,
             );
 
+        let new_row_idx = state.ai_new_row_reviews.len();
         state.ai_new_row_reviews.push(NewRowReview {
-            ai: ai_snapshot,
+            ai: ai_snapshot.clone(),
             non_structure_columns: included.clone(),
             duplicate_match_row,
             choices,
             merge_selected,
             merge_decided: false,
-            original_for_merge,
+            original_for_merge: original_for_merge.clone(),
         });
+
+        // CACHE POPULATION: Store snapshot for new/duplicate rows
+        // - Duplicates: Use matched existing row (includes structure JSON)
+        // - New rows: Empty snapshot (no original content)
+        // This unifies preview rendering across all row types (existing/new/duplicate)
+        if let Some(matched_idx) = duplicate_match_row {
+            if let Some(sheet_name) = &sheet_ctx {
+                if let Some(sheet_ref) = registry.get_sheet(&cat_ctx, sheet_name) {
+                    if let Some(full_row) = sheet_ref.grid.get(matched_idx) {
+                        state.ai_original_row_snapshot_cache.insert(
+                            (None, Some(new_row_idx)),
+                            full_row.clone(),
+                        );
+                    }
+                }
+            }
+        } else {
+            // Truly new rows (no duplicate): empty snapshot matching column count
+            if let Some(sheet_name) = &sheet_ctx {
+                if let Some(sheet_ref) = registry.get_sheet(&cat_ctx, sheet_name) {
+                    if let Some(meta) = &sheet_ref.metadata {
+                        let empty_row = vec![String::new(); meta.columns.len()];
+                        state.ai_original_row_snapshot_cache.insert(
+                            (None, Some(new_row_idx)),
+                            empty_row,
+                        );
+                    }
+                }
+            }
+        }
     }
 }
 
 /// Check if a new row is a duplicate of an existing row
-fn check_for_duplicate(
+pub(super) fn check_for_duplicate(
     ai_snapshot: &[String],
     first_col_value_to_row: &HashMap<String, usize>,
     included: &[usize],
@@ -340,7 +448,7 @@ fn check_for_duplicate(
 }
 
 /// Handle root batch errors
-fn handle_root_batch_error(
+pub(super) fn handle_root_batch_error(
     state: &mut EditorWindowState,
     ev: &AiBatchTaskResult,
     err: &str,
@@ -356,7 +464,7 @@ fn handle_root_batch_error(
         state.add_ai_call_log(format!("Error: {}", err), None, None, true);
     }
 
-    state.ai_output_panel_visible = true;
+    // Don't auto-open log panel - user will open manually if needed
     feedback_writer.write(SheetOperationFeedback {
         message: format!("AI batch error: {}", err),
         is_error: true,
@@ -376,6 +484,7 @@ fn handle_structure_batch_result(
     let root_sheet = context.root_sheet.clone();
     let structure_path = context.structure_path.clone();
     let target_rows = context.target_rows.clone();
+    let original_row_partitions = context.original_row_partitions.clone();
     let mut row_partitions = context.row_partitions.clone();
     let generation_id = context.generation_id;
 
@@ -390,7 +499,7 @@ fn handle_structure_batch_result(
             message: msg,
             is_error: true,
         });
-        state.ai_active_structure_job = None;
+        // PARALLEL MODE: No need to clear ai_active_structure_job
         state.mark_structure_result_received();
         return;
     };
@@ -406,7 +515,7 @@ fn handle_structure_batch_result(
             message: msg,
             is_error: true,
         });
-        state.ai_active_structure_job = None;
+        // PARALLEL MODE: No need to clear ai_active_structure_job
         state.mark_structure_result_received();
         return;
     };
@@ -422,7 +531,7 @@ fn handle_structure_batch_result(
             message: msg,
             is_error: true,
         });
-        state.ai_active_structure_job = None;
+        // PARALLEL MODE: No need to clear ai_active_structure_job
         state.mark_structure_result_received();
         return;
     };
@@ -438,7 +547,7 @@ fn handle_structure_batch_result(
             message: msg,
             is_error: true,
         });
-        state.ai_active_structure_job = None;
+        // PARALLEL MODE: No need to clear ai_active_structure_job
         state.mark_structure_result_received();
         return;
     };
@@ -456,7 +565,8 @@ fn handle_structure_batch_result(
         return;
     }
 
-    state.ai_active_structure_job = None;
+    // PARALLEL MODE: No need to clear ai_active_structure_job
+    // state.ai_active_structure_job = None;
 
     let schema_len = schema_fields.len();
     let included = ev.included_non_structure_columns.clone();
@@ -491,15 +601,10 @@ fn handle_structure_batch_result(
             }
 
             // Calculate original counts per parent
-            let original_counts: Vec<usize> = target_rows
-                .iter()
-                .map(|row_idx| {
-                    ev.original_row_indices
-                        .iter()
-                        .filter(|idx| **idx == *row_idx)
-                        .count()
-                })
-                .collect();
+            // For structures, original_row_partitions contains the actual count of structure rows per parent
+            // before AI added any rows. This represents how many original structure rows each parent has.
+            // row_partitions may be larger if AI added rows.
+            let original_counts: Vec<usize> = original_row_partitions.clone();
 
             // Process each partition
             let mut cursor = 0usize;

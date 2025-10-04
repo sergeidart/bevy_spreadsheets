@@ -9,6 +9,7 @@ pub mod legacy; // Single-row result handler (potentially deprecated)
 pub mod row_helpers; // Row processing utilities (snapshots, choices, normalization)
 pub mod structure_jobs; // Structure job enqueueing logic
 pub mod structure_results; // Structure result processing helpers
+pub mod phase2_helpers; // Phase 2 deep review processing (duplicate detection, merge workflow)
 
 // Other systems
 pub mod structure_processor;

@@ -50,9 +50,9 @@ pub fn take_structure_entries_for_new(
 
 pub fn queue_new_row_add(
     review: &NewRowReview,
-    selected_category: &Option<String>,
-    active_sheet_name: &str,
-    add_row_writer: &mut EventWriter<AddSheetRowRequest>,
+    _selected_category: &Option<String>,
+    _active_sheet_name: &str,
+    state: &mut EditorWindowState,
     structure_entries: Vec<StructureReviewEntry>,
 ) {
     let mut init_vals: Vec<(usize, String)> = Vec::new();
@@ -106,16 +106,11 @@ pub fn queue_new_row_add(
         init_vals.push((col_index, json_string));
     }
     
-    let req = AddSheetRowRequest {
-        category: selected_category.clone(),
-        sheet_name: active_sheet_name.to_string(),
-        initial_values: if init_vals.is_empty() {
-            None
-        } else {
-            Some(init_vals)
-        },
-    };
-    add_row_writer.write(req);
+    // Queue the row addition via throttling mechanism to ensure proper ordering
+    // (one row per frame prevents race conditions where rows get inserted incorrectly)
+    state.ai_throttled_apply_queue.push_back(crate::ui::elements::editor::state::ThrottledAiAction::AddRow {
+        initial_values: init_vals,
+    });
 }
 
 pub fn finalize_if_empty(state: &mut EditorWindowState) {
@@ -244,7 +239,7 @@ pub fn process_new_accept(
     selected_category: &Option<String>,
     active_sheet_name: &str,
     cell_update_writer: &mut EventWriter<UpdateCellEvent>,
-    add_row_writer: &mut EventWriter<AddSheetRowRequest>,
+    _add_row_writer: &mut EventWriter<AddSheetRowRequest>,  // Kept for compatibility, but using throttling queue instead
 ) {
     let mut sorted = indices.to_vec();
     if sorted.is_empty() {
@@ -324,12 +319,12 @@ pub fn process_new_accept(
                         });
                     }
                 } else {
-                    // Creating separate new row with structure data
-                    queue_new_row_add(&nr, selected_category, active_sheet_name, add_row_writer, structure_entries);
+                    // Creating separate new row with structure data (throttled)
+                    queue_new_row_add(&nr, selected_category, active_sheet_name, state, structure_entries);
                 }
             } else {
-                // Creating new row with structure data
-                queue_new_row_add(&nr, selected_category, active_sheet_name, add_row_writer, structure_entries);
+                // Creating new row with structure data (throttled)
+                queue_new_row_add(&nr, selected_category, active_sheet_name, state, structure_entries);
             }
             
             // CRITICAL: Update all structure entries with higher parent_new_row_index

@@ -163,6 +163,13 @@ pub enum AiBatchResultKind {
         // Optional structure context for nested processing
         structure_context: Option<StructureProcessingContext>,
     },
+    /// Phase 2 deep review call - all rows treated as existing, automatic after Phase 1
+    DeepReview {
+        /// Indices of rows that are duplicates (marked for merge UI)
+        duplicate_indices: Vec<usize>,
+        /// Number of original + duplicate rows (remaining are AI-added with minimal data)
+        established_row_count: usize,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -171,6 +178,9 @@ pub struct StructureProcessingContext {
     pub root_sheet: String,
     pub structure_path: Vec<usize>,
     pub target_rows: Vec<usize>,
+    /// Original structure row counts per parent (before AI adds rows)
+    pub original_row_partitions: Vec<usize>,
+    /// Updated structure row counts per parent (includes AI-added rows)
     pub row_partitions: Vec<usize>,
     pub generation_id: u64,
 }

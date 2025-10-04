@@ -206,6 +206,19 @@ pub fn handle_toggle_ai_row_generation(
         if changed {
             let meta_clone = meta.clone();
             save_single_sheet(registry.as_ref(), &meta_clone);
+            
+            // Update virtual sheets if this was a structure-level change
+            if let Some(path) = &e.structure_path {
+                if !path.is_empty() {
+                    update_virtual_sheets_from_parent_structure(
+                        &mut registry,
+                        &e.category,
+                        &e.sheet_name,
+                        path,
+                    );
+                }
+            }
+            
             feedback.write(SheetOperationFeedback {
                 message: message.clone(),
                 is_error: false,
@@ -290,6 +303,17 @@ pub fn handle_update_ai_send_schema(
                     };
                     let meta_clone = meta.clone();
                     save_single_sheet(registry.as_ref(), &meta_clone);
+                    
+                    // Update virtual sheets if this is a structure path update
+                    if let Some(path) = &e.structure_path {
+                        update_virtual_sheets_from_parent_structure(
+                            &mut registry,
+                            &e.category,
+                            &e.sheet_name,
+                            path,
+                        );
+                    }
+                    
                     feedback.write(SheetOperationFeedback {
                         message: feedback_text,
                         is_error: false,
@@ -331,7 +355,7 @@ pub fn handle_update_ai_structure_send(
         let Some(sheet) = registry.get_sheet_mut(&e.category, &e.sheet_name) else {
             feedback.write(SheetOperationFeedback {
                 message: format!(
-                    "Sheet {:?}/{} not found for AI structure send update",
+                    "Sheet {:?}/{} not found when updating AI structure send",
                     e.category, e.sheet_name
                 ),
                 is_error: true,
@@ -375,6 +399,15 @@ pub fn handle_update_ai_structure_send(
                     };
                     let meta_clone = meta.clone();
                     save_single_sheet(registry.as_ref(), &meta_clone);
+                    
+                    // Update virtual sheets that might be displaying this structure
+                    update_virtual_sheets_from_parent_structure(
+                        &mut registry,
+                        &e.category,
+                        &e.sheet_name,
+                        &e.structure_path,
+                    );
+                    
                     feedback.write(SheetOperationFeedback {
                         message: feedback_text,
                         is_error: false,
@@ -1017,5 +1050,103 @@ fn set_option(slot: &mut Option<bool>, new_value: Option<bool>) -> bool {
         true
     } else {
         false
+    }
+}
+
+/// Update virtual structure sheets' metadata after parent structure column AI config changes.
+/// This ensures that virtual sheets reflect the latest AI checkbox states from the parent schema.
+fn update_virtual_sheets_from_parent_structure(
+    registry: &mut SheetRegistry,
+    parent_category: &Option<String>,
+    parent_sheet: &str,
+    structure_path: &[usize],
+) {
+    // Clone the structure schema we need before doing any mutable operations
+    // This avoids borrow checker issues
+    let structure_schema_clone = {
+        let Some(parent_sheet_data) = registry.get_sheet(parent_category, parent_sheet) else {
+            return;
+        };
+        let Some(parent_meta) = &parent_sheet_data.metadata else {
+            return;
+        };
+        
+        // Navigate to the structure column at the given path
+        if structure_path.is_empty() {
+            return;
+        }
+        
+        let column_index = structure_path[0];
+        let Some(parent_column) = parent_meta.columns.get(column_index) else {
+            return;
+        };
+        
+        // Get the structure schema (could be nested)
+        let structure_schema = if structure_path.len() == 1 {
+            // Direct structure column
+            parent_column.structure_schema.as_ref()
+        } else {
+            // Navigate through nested structure fields
+            let mut current_schema = parent_column.structure_schema.as_ref();
+            for &field_idx in structure_path.iter().skip(1) {
+                if let Some(schema) = current_schema {
+                    if let Some(field) = schema.get(field_idx) {
+                        current_schema = field.structure_schema.as_ref();
+                    } else {
+                        return;
+                    }
+                } else {
+                    return;
+                }
+            }
+            current_schema
+        };
+        
+        let Some(schema) = structure_schema else {
+            return;
+        };
+        
+        // Clone the schema so we can use it after releasing the immutable borrow
+        schema.clone()
+    };
+    
+    // Find all virtual sheets that have this as their parent
+    // We need to collect the virtual sheet names first to avoid borrow conflicts
+    let mut virtual_sheets_to_update: Vec<(Option<String>, String)> = Vec::new();
+    let column_index = structure_path[0];
+    
+    for (cat, name, sheet_data) in registry.iter_sheets() {
+        if let Some(meta) = &sheet_data.metadata {
+            if let Some(parent_link) = &meta.structure_parent {
+                // Check if this virtual sheet is a child of the structure we just updated
+                if parent_link.parent_category == *parent_category
+                    && parent_link.parent_sheet == parent_sheet
+                    && parent_link.parent_column_index == column_index
+                {
+                    virtual_sheets_to_update.push((cat.clone(), name.to_string()));
+                }
+            }
+        }
+    }
+    
+    // Now update each virtual sheet's metadata using the cloned schema
+    for (virt_cat, virt_name) in virtual_sheets_to_update {
+        if let Some(virt_sheet) = registry.get_sheet_mut(&virt_cat, &virt_name) {
+            if let Some(virt_meta) = &mut virt_sheet.metadata {
+                // Update each column's AI flags from the parent structure schema
+                for (idx, virt_col) in virt_meta.columns.iter_mut().enumerate() {
+                    if let Some(schema_field) = structure_schema_clone.get(idx) {
+                        // Update ai_include_in_send and ai_enable_row_generation from parent schema
+                        virt_col.ai_include_in_send = schema_field.ai_include_in_send;
+                        virt_col.ai_enable_row_generation = schema_field.ai_enable_row_generation;
+                        
+                        // If this column is itself a structure, update its schema recursively
+                        if virt_col.structure_schema.is_some() && schema_field.structure_schema.is_some() {
+                            virt_col.structure_schema = schema_field.structure_schema.clone();
+                        }
+                    }
+                }
+            }
+        }
     }
 }

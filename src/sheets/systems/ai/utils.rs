@@ -16,18 +16,78 @@ pub fn parse_structure_rows_from_cell(
     if trimmed.starts_with('[') {
         if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
             if let serde_json::Value::Array(arr) = val {
-                let mut out = Vec::with_capacity(arr.len());
-                for obj in arr {
-                    if let serde_json::Value::Object(map) = obj {
-                        let mut row: Vec<String> = Vec::with_capacity(schema.len());
-                        for field in schema {
-                            let v = map
-                                .get(&field.header)
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("");
-                            row.push(v.to_string());
+                // Check if this is a flat array of values (single row) or array of rows
+                // Flat array: ["val1", "val2", "val3"] - all elements are primitives
+                // Array of rows: [["val1", "val2"], ...] or [{...}, ...] - elements are arrays/objects
+                let is_flat_array = arr.iter().all(|item| {
+                    matches!(item, 
+                        serde_json::Value::String(_) | 
+                        serde_json::Value::Number(_) | 
+                        serde_json::Value::Bool(_) | 
+                        serde_json::Value::Null
+                    )
+                });
+
+                if is_flat_array && !arr.is_empty() {
+                    // Handle flat array as a single row: ["val1", "val2", "val3"]
+                    let mut row: Vec<String> = Vec::with_capacity(schema.len());
+                    for (idx, val) in arr.iter().enumerate() {
+                        if idx < schema.len() {
+                            let cell_val = match val {
+                                serde_json::Value::String(s) => s.clone(),
+                                serde_json::Value::Number(n) => n.to_string(),
+                                serde_json::Value::Bool(b) => b.to_string(),
+                                serde_json::Value::Null => String::new(),
+                                _ => String::new(),
+                            };
+                            row.push(cell_val);
                         }
-                        out.push(row);
+                    }
+                    // Pad row if needed
+                    while row.len() < schema.len() {
+                        row.push(String::new());
+                    }
+                    return vec![row];
+                }
+
+                // Handle array of rows
+                let mut out = Vec::with_capacity(arr.len());
+                for item in arr {
+                    match item {
+                        // Handle array-of-objects format: [{"header1": "val1", "header2": "val2"}, ...]
+                        serde_json::Value::Object(map) => {
+                            let mut row: Vec<String> = Vec::with_capacity(schema.len());
+                            for field in schema {
+                                let v = map
+                                    .get(&field.header)
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("");
+                                row.push(v.to_string());
+                            }
+                            out.push(row);
+                        }
+                        // Handle array-of-arrays format: [["val1", "val2"], ["val3", "val4"], ...]
+                        serde_json::Value::Array(inner_arr) => {
+                            let mut row: Vec<String> = Vec::with_capacity(schema.len());
+                            for (idx, val) in inner_arr.iter().enumerate() {
+                                if idx < schema.len() {
+                                    let cell_val = match val {
+                                        serde_json::Value::String(s) => s.clone(),
+                                        serde_json::Value::Number(n) => n.to_string(),
+                                        serde_json::Value::Bool(b) => b.to_string(),
+                                        serde_json::Value::Null => String::new(),
+                                        _ => String::new(),
+                                    };
+                                    row.push(cell_val);
+                                }
+                            }
+                            // Pad row if needed
+                            while row.len() < schema.len() {
+                                row.push(String::new());
+                            }
+                            out.push(row);
+                        }
+                        _ => {} // Skip other types
                     }
                 }
                 return out;

@@ -54,108 +54,172 @@ pub fn send_selected_rows(
     if let Some(sheet) = sheet_opt { for row_index in selection.iter().copied() { if let Some(row) = sheet.grid.get(row_index) { let mut out_row = Vec::new(); for &ci in &included_indices { out_row.push(row.get(ci).cloned().unwrap_or_default()); } rows_data.push(out_row); } } }
 
     let model_id = if meta.ai_model_id.is_empty() { default_ai_model_id() } else { meta.ai_model_id.clone() };
-    let rule = meta.ai_general_rule.clone();
-    let grounding = meta.requested_grounding_with_google_search.unwrap_or(false);
+    
+    // Use root sheet's general rule when inside a virtual structure
+    let rule = if !state.virtual_structure_stack.is_empty() {
+        if let Some(root_sheet) = root_sheet_opt.as_ref() {
+            if let Some(root_meta) = registry.get_sheet(&root_category, root_sheet).and_then(|s| s.metadata.as_ref()) {
+                root_meta.ai_general_rule.clone()
+            } else {
+                meta.ai_general_rule.clone()
+            }
+        } else {
+            meta.ai_general_rule.clone()
+        }
+    } else {
+        meta.ai_general_rule.clone()
+    };
+    
+    // Grounding flag: use root sheet metadata if in structure, otherwise current metadata
+    let grounding = if !state.virtual_structure_stack.is_empty() {
+        // Inside structure - get grounding from root sheet
+        if let Some(root_sheet) = root_sheet_opt.as_ref() {
+            if let Some(root_meta) = registry.get_sheet(&root_category, root_sheet).and_then(|s| s.metadata.as_ref()) {
+                root_meta.requested_grounding_with_google_search.unwrap_or(false)
+            } else {
+                meta.requested_grounding_with_google_search.unwrap_or(false)
+            }
+        } else {
+            meta.requested_grounding_with_google_search.unwrap_or(false)
+        }
+    } else {
+        meta.requested_grounding_with_google_search.unwrap_or(false)
+    };
 
     // Row additions flag (structure aware). If inside structure stack, resolve root & overrides similar to old panel.
     let mut allow_additions_flag = meta.ai_enable_row_generation;
     if !state.virtual_structure_stack.is_empty() {
         // Find root meta & structure path like legacy logic.
-        let (root_category, root_sheet_opt) = state.resolve_root_sheet(registry);
-        if let Some(root_sheet) = root_sheet_opt { if let Some(root_meta) = registry.get_sheet(&root_category, &root_sheet).and_then(|s| s.metadata.as_ref()) { if let Some(override_val) = resolve_structure_override(root_meta, &state.ai_cached_included_columns_path) { allow_additions_flag = override_val; } } }
-    }
-
-    // Key prefix (ancestor key columns) for nested structure context. For root sends this is empty.
-    let mut key_prefix_headers: Vec<String> = Vec::new();
-    let mut key_prefix_values_per_row: Vec<Vec<String>> = Vec::new();
-    let mut key_prefix_count = 0usize;
-    if !state.virtual_structure_stack.is_empty() {
-        // Collect ancestor key columns (headers & values) similar to results reconstruction logic
-        for vctx in &state.virtual_structure_stack {
-            let anc_cat = vctx.parent.parent_category.clone();
-            let anc_sheet = vctx.parent.parent_sheet.clone();
-            let anc_row_idx = vctx.parent.parent_row;
-            if let Some(sheet) = registry.get_sheet(&anc_cat, &anc_sheet) {
-                if let Some(meta) = &sheet.metadata {
-                    if let Some(key_col_index) = meta.columns.iter().enumerate().find_map(|(_i,c)| {
-                        if matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure)) { c.structure_key_parent_column_index } else { None }
-                    }) {
-                        if let Some(col_def) = meta.columns.get(key_col_index) {
-                            key_prefix_headers.push(col_def.header.clone());
-                            // Get value for that ancestor row
-                            let val = sheet.grid.get(anc_row_idx).and_then(|r| r.get(key_col_index)).cloned().unwrap_or_default();
-                            // We'll append later per selected row (same chain for all rows)
-                            // For now store chain in a temp row vector
-                        }
-                    }
-                }
-            }
-        }
-        key_prefix_count = key_prefix_headers.len();
-        if key_prefix_count > 0 {
-            // Build prefix values per selected row: replicate ancestor values chain for each selected root row.
-            // (Each ancestor chain describes hierarchical context; values identical for all selected rows given current virtual stack.)
-            let mut chain_values: Vec<String> = Vec::new();
-            for (idx, header) in key_prefix_headers.iter().enumerate() {
-                // Value already looked up above; need to re-fetch to keep code simple.
-                if let Some(vctx) = state.virtual_structure_stack.get(idx) {
-                    let anc_cat = vctx.parent.parent_category.clone();
-                    let anc_sheet = vctx.parent.parent_sheet.clone();
-                    let anc_row_idx = vctx.parent.parent_row;
-                    let value = registry.get_sheet(&anc_cat, &anc_sheet)
-                        .and_then(|s| {
-                            let meta = &s.metadata; meta.as_ref()?;
-                            let key_col_index = meta.as_ref().and_then(|m| m.columns.iter().enumerate().find_map(|(_i,c)| if matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure)) { c.structure_key_parent_column_index } else { None }))?;
-                            s.grid.get(anc_row_idx).and_then(|r| r.get(key_col_index)).cloned()
-                        }).unwrap_or_default();
-                    chain_values.push(value);
+        if let Some(root_sheet) = root_sheet_opt.as_ref() { 
+            if let Some(root_meta) = registry.get_sheet(&root_category, root_sheet).and_then(|s| s.metadata.as_ref()) {
+                // Start with root sheet's default
+                let sheet_default = root_meta.ai_enable_row_generation;
+                // Then try to get structure-specific override
+                if let Some(override_val) = resolve_structure_override(root_meta, &state.ai_cached_included_columns_path) { 
+                    allow_additions_flag = override_val; 
                 } else {
-                    chain_values.push(String::new());
+                    // No explicit override, use root sheet's default
+                    allow_additions_flag = sheet_default;
                 }
-            }
-            key_prefix_values_per_row = vec![chain_values; rows_data.len()];
+            } 
         }
     }
 
-    // Apply key prefix to rows_data copy for payload (do not mutate original mapping arrays yet)
-    let mut rows_with_prefix: Vec<Vec<String>> = Vec::with_capacity(rows_data.len());
-    if key_prefix_count > 0 {
-        for (i, row) in rows_data.iter().enumerate() {
-            let mut combined = Vec::with_capacity(key_prefix_count + row.len());
-            if let Some(prefix_vals) = key_prefix_values_per_row.get(i) { combined.extend(prefix_vals.clone()); }
-            combined.extend(row.clone());
-            rows_with_prefix.push(combined);
+    // Note: Key prefix logic is no longer used here. When inside a structure, we send
+    // data as parent_groups with ParentKeyInfo. When not in structure, rows_data is sent as-is.
+    let key_prefix_count = 0usize; // For spawn_batch_task compatibility
+
+    // Build payload differently based on whether we're in a structure context
+    let payload = if !state.virtual_structure_stack.is_empty() {
+        // Inside structure - send as parent_groups with parent key
+        use crate::sheets::systems::ai::control_handler::{ParentGroup, ParentKeyInfo};
+        
+        // Get parent key information from the immediate parent (last in virtual_structure_stack)
+        let parent_key = if let Some(parent_ctx) = state.virtual_structure_stack.last() {
+            let parent_cat = parent_ctx.parent.parent_category.clone();
+            let parent_sheet = parent_ctx.parent.parent_sheet.clone();
+            let parent_row_idx = parent_ctx.parent.parent_row;
+            
+            // Get parent key column and value
+            let (key_context, key_value) = if let Some(parent_sheet_obj) = registry.get_sheet(&parent_cat, &parent_sheet) {
+                if let Some(parent_meta) = &parent_sheet_obj.metadata {
+                    // Find the structure key column
+                    let key_col_idx = parent_meta.columns.iter().enumerate()
+                        .find_map(|(_i, c)| {
+                            if matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure)) {
+                                c.structure_key_parent_column_index
+                            } else {
+                                None
+                            }
+                        });
+                    
+                    if let Some(key_idx) = key_col_idx {
+                        let context = parent_meta.columns.get(key_idx).and_then(|col| col.ai_context.clone());
+                        let value = parent_sheet_obj.grid.get(parent_row_idx)
+                            .and_then(|r| r.get(key_idx))
+                            .cloned()
+                            .unwrap_or_default();
+                        (context, value)
+                    } else {
+                        (None, String::new())
+                    }
+                } else {
+                    (None, String::new())
+                }
+            } else {
+                (None, String::new())
+            };
+            
+            ParentKeyInfo {
+                context: key_context,
+                key: key_value,
+            }
+        } else {
+            ParentKeyInfo {
+                context: None,
+                key: String::new(),
+            }
+        };
+        
+        // Create parent group with rows (no key prefix in rows)
+        let parent_group = ParentGroup {
+            parent_key,
+            rows: rows_data.clone(),
+        };
+        
+        BatchPayload {
+            ai_model_id: model_id,
+            general_sheet_rule: rule,
+            column_contexts: column_contexts.clone(),
+            rows_data: Vec::new(), // Empty for structure requests
+            requested_grounding_with_google_search: grounding,
+            allow_row_additions: allow_additions_flag,
+            key_prefix_count: None,
+            key_prefix_headers: None,
+            parent_groups: Some(vec![parent_group]),
+            user_prompt: user_prompt.clone().unwrap_or_default(),
         }
     } else {
-        rows_with_prefix = rows_data.clone();
-    }
-
-    let payload = BatchPayload { 
-        ai_model_id: model_id, 
-        general_sheet_rule: rule, 
-        column_contexts: column_contexts.clone(), 
-        rows_data: rows_with_prefix.clone(), 
-        requested_grounding_with_google_search: grounding, 
-        allow_row_additions: allow_additions_flag, 
-        // Key is already embedded in rows_data, so don't send these metadata fields
-        key_prefix_count: None, 
-        key_prefix_headers: None,
-        // parent_groups is only used for structure requests
-        parent_groups: None,
-        user_prompt: user_prompt.clone().unwrap_or_default() 
+        // Not in structure - send as regular rows_data
+        BatchPayload {
+            ai_model_id: model_id,
+            general_sheet_rule: rule,
+            column_contexts: column_contexts.clone(),
+            rows_data: rows_data.clone(),
+            requested_grounding_with_google_search: grounding,
+            allow_row_additions: allow_additions_flag,
+            key_prefix_count: None,
+            key_prefix_headers: None,
+            // parent_groups is only used for structure requests
+            parent_groups: None,
+            user_prompt: user_prompt.clone().unwrap_or_default(),
+        }
     };
     let payload_json = match serde_json::to_string(&payload) { Ok(s)=>s, Err(e)=>{ state.ai_raw_output_display = format!("Serialize error: {}", e); return; } };
 
     // Update state to submitting
-    state.ai_mode = AiModeState::Submitting; state.ai_raw_output_display.clear(); state.ai_output_panel_visible = true; state.ai_row_reviews.clear(); state.ai_new_row_reviews.clear(); state.ai_context_prefix_by_row.clear();
+    state.ai_mode = AiModeState::Submitting; state.ai_raw_output_display.clear(); state.ai_row_reviews.clear(); state.ai_new_row_reviews.clear(); state.ai_context_prefix_by_row.clear();
     // Set last_ai_prompt_only flag if prompt was provided without rows
     state.last_ai_prompt_only = selection.is_empty() && user_prompt.is_some();
     state.ai_last_send_root_rows = selection.clone();
     state.ai_last_send_root_category = root_category.clone();
     state.ai_last_send_root_sheet = root_sheet_opt.clone();
-    // Plan structure paths from root metadata if available
-    if let (Some(root_sheet_name), Some(root_meta_sheet)) = (root_sheet_opt.clone(), root_sheet_opt.as_ref().and_then(|sname| registry.get_sheet(&root_category, sname)).and_then(|s| s.metadata.as_ref()).map(|_| root_sheet_opt.clone())) { let _ = root_meta_sheet; }
-    if let Some(root_sheet_name) = &root_sheet_opt { if let Some(root_meta_ref) = registry.get_sheet(&root_category, root_sheet_name).and_then(|s| s.metadata.as_ref()) { state.ai_planned_structure_paths = root_meta_ref.ai_included_structure_paths(); } }
+    
+    // Plan structure paths from root metadata ONLY if we're NOT already inside a structure
+    // When inside a structure, we're sending a single-row request and don't want to trigger
+    // additional structure processing jobs (which would cause duplicate requests)
+    if state.virtual_structure_stack.is_empty() {
+        if let Some(root_sheet_name) = &root_sheet_opt { 
+            if let Some(root_meta_ref) = registry.get_sheet(&root_category, root_sheet_name).and_then(|s| s.metadata.as_ref()) { 
+                state.ai_planned_structure_paths = root_meta_ref.ai_included_structure_paths(); 
+            } 
+        }
+    } else {
+        // Clear planned structure paths when inside a structure to prevent duplicate jobs
+        state.ai_planned_structure_paths.clear();
+        // Also clear any existing structure reviews since we're doing a direct review
+        state.ai_structure_reviews.clear();
+    }
 
     // Debug text (pretty) - keep for backward compatibility
     if let Ok(pretty) = serde_json::to_string_pretty(&payload) { 
@@ -199,8 +263,72 @@ pub fn draw_ai_panel(
         // Left panel (Send button + status + settings gear)
         draw_left_panel_impl(ui, state, registry, selected_category, selected_sheet, session_api_key, Some(runtime), Some(commands));
 
-        // Add Rows toggle (replicating logic simplified: only root sheet toggle for now)
-        if let Some(sheet_name) = selected_sheet.clone() { if let Some(meta) = registry.get_sheet(selected_category, &sheet_name).and_then(|s| s.metadata.as_ref()) { let mut allow_flag = meta.ai_enable_row_generation; let mut toggle_val = allow_flag; let resp = ui.add_enabled(true, egui::Checkbox::new(&mut toggle_val, "Add Rows")).on_hover_text("Allow AI to append new rows to this sheet"); if resp.changed() { allow_flag = toggle_val; toggle_writer.write(RequestToggleAiRowGeneration { category: selected_category.clone(), sheet_name: sheet_name.clone(), enabled: allow_flag, structure_path: None, structure_override: None }); } } }
+        // Add Rows toggle - properly resolve from structure context if inside virtual sheet
+        if let Some(sheet_name) = selected_sheet.clone() {
+            if let Some(meta) = registry.get_sheet(selected_category, &sheet_name).and_then(|s| s.metadata.as_ref()) {
+                // Determine root context and structure path
+                let (root_category, root_sheet_opt) = state.resolve_root_sheet(registry);
+                let structure_path = if !state.virtual_structure_stack.is_empty() {
+                    state.ai_cached_included_columns_path.clone()
+                } else {
+                    Vec::new()
+                };
+                
+                // Resolve the actual value from structure override if applicable
+                let mut allow_flag = meta.ai_enable_row_generation;
+                let mut sheet_default = meta.ai_enable_row_generation;
+                
+                if !state.virtual_structure_stack.is_empty() {
+                    // Inside virtual structure - resolve from parent structure column
+                    if let Some(root_sheet) = root_sheet_opt.as_ref() {
+                        if let Some(root_meta) = registry.get_sheet(&root_category, root_sheet).and_then(|s| s.metadata.as_ref()) {
+                            sheet_default = root_meta.ai_enable_row_generation;
+                            if let Some(override_val) = resolve_structure_override(root_meta, &structure_path) {
+                                allow_flag = override_val;
+                            } else {
+                                allow_flag = sheet_default;
+                            }
+                        }
+                    }
+                }
+                
+                let mut toggle_val = allow_flag;
+                let tooltip = if !state.virtual_structure_stack.is_empty() {
+                    "Allow AI to append new rows to this structure"
+                } else {
+                    "Allow AI to append new rows to this sheet"
+                };
+                let resp = ui.add_enabled(true, egui::Checkbox::new(&mut toggle_val, "Add Rows")).on_hover_text(tooltip);
+                
+                if resp.changed() {
+                    // For structures, calculate override value
+                    let (new_structure_path, new_override) = if !state.virtual_structure_stack.is_empty() {
+                        let new_override = if toggle_val == sheet_default {
+                            None
+                        } else {
+                            Some(toggle_val)
+                        };
+                        (Some(structure_path), new_override)
+                    } else {
+                        (None, None)
+                    };
+                    
+                    let (event_category, event_sheet) = if !state.virtual_structure_stack.is_empty() {
+                        (root_category.clone(), root_sheet_opt.unwrap_or(sheet_name.clone()))
+                    } else {
+                        (selected_category.clone(), sheet_name.clone())
+                    };
+                    
+                    toggle_writer.write(RequestToggleAiRowGeneration {
+                        category: event_category,
+                        sheet_name: event_sheet,
+                        enabled: toggle_val,
+                        structure_path: new_structure_path,
+                        structure_override: new_override,
+                    });
+                }
+            }
+        }
 
         // Group panel (only when at root structure view)
         if state.virtual_structure_stack.is_empty() { if let Some(sheet_name) = selected_sheet.clone() { let meta_opt = registry.get_sheet(selected_category, &sheet_name).and_then(|s| s.metadata.as_ref()); draw_group_panel(ui, state, selected_category, &sheet_name, meta_opt, create_group_writer, rename_group_writer, select_group_writer, delete_group_writer); } }

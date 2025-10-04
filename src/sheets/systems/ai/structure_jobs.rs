@@ -4,12 +4,13 @@
 use bevy::prelude::*;
 
 use crate::sheets::resources::SheetRegistry;
-use crate::ui::elements::editor::state::{EditorWindowState, StructureNewRowContext, StructureSendJob};
+use crate::ui::elements::editor::state::{EditorWindowState, Phase1IntermediateData, StructureNewRowContext, StructureSendJob};
 
 /// Enqueue structure jobs for a batch result, preparing tokens for new rows
 pub fn enqueue_structure_jobs_for_batch(
     state: &mut EditorWindowState,
     registry: &SheetRegistry,
+    phase1_data: Option<&Phase1IntermediateData>,
 ) -> usize {
     state.ai_pending_structure_jobs.clear();
     state.ai_active_structure_job = None;
@@ -72,7 +73,7 @@ pub fn enqueue_structure_jobs_for_batch(
         }
 
         if !state.ai_new_row_reviews.is_empty() {
-            let new_row_context_inputs: Vec<(usize, Vec<(usize, String)>)> = state
+            let new_row_context_inputs: Vec<(usize, Vec<(usize, String)>, Option<Vec<String>>)> = state
                 .ai_new_row_reviews
                 .iter()
                 .enumerate()
@@ -83,15 +84,23 @@ pub fn enqueue_structure_jobs_for_batch(
                         .zip(nr.ai.iter())
                         .map(|(col_idx, value)| (*col_idx, value.clone()))
                         .collect();
-                    (new_idx, non_structure_values)
+                    
+                    // Extract full AI row from phase1_data if available
+                    let full_ai_row = phase1_data.and_then(|phase1| {
+                        let row_index_in_phase1 = phase1.original_count + new_idx;
+                        phase1.all_ai_rows.get(row_index_in_phase1).cloned()
+                    });
+                    
+                    (new_idx, non_structure_values, full_ai_row)
                 })
                 .collect();
 
-            for (new_idx, non_structure_values) in new_row_context_inputs {
+            for (new_idx, non_structure_values, full_ai_row) in new_row_context_inputs {
                 let token = state.allocate_structure_new_row_token();
                 let context = StructureNewRowContext {
                     new_row_index: new_idx,
                     non_structure_values,
+                    full_ai_row,
                 };
                 state.ai_structure_new_row_contexts.insert(token, context);
                 target_rows.push(token);

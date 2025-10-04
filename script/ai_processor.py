@@ -348,8 +348,11 @@ def execute_ai_query(api_key: str, payload_json: str) -> str:  # noqa: D401
                 return make_err("Empty response for grouped request", original_raw)
             
             # Check if it's a grouped response (array of arrays of arrays)
-            is_grouped = all(isinstance(g, list) for g in parsed) and any(
-                isinstance(g, list) and g and isinstance(g[0], list) for g in parsed
+            # A grouped response has the right number of groups, and each group is an array of rows
+            is_grouped = (
+                len(parsed) == len(parent_groups) and
+                all(isinstance(g, list) for g in parsed) and
+                all(isinstance(g, list) and all(isinstance(row, list) for row in g) for g in parsed if g)
             )
             
             if not is_grouped:

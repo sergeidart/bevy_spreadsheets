@@ -205,6 +205,8 @@ pub fn generic_sheet_editor_ui(
             );
         } else {
             // Show review panel when in AI Reviewing state
+            // The review panel is self-contained and shows all necessary context (ancestor keys, row data)
+            // Do NOT show the virtual sheet table here - it causes confusing double-UI during review
             crate::ui::elements::ai_review::ai_batch_review_ui::draw_ai_batch_review_panel(
                 ui,
                 &mut state,
@@ -215,35 +217,6 @@ pub fn generic_sheet_editor_ui(
                 &mut sheet_writers.cell_update,
                 &mut sheet_writers.add_row,
             );
-            ui.add_space(5.0);
-
-            // While in AI review mode we previously hid the normal sheet table entirely.
-            // This prevented virtual structure sheets (opened via OpenStructureViewEvent) from displaying.
-            // If the user opens a structure, show the structure sheet view beneath the review panel so it is accessible.
-            // If viewing a virtual structure while in review mode, show its sheet below so navigation is visible.
-            if !state.virtual_structure_stack.is_empty() {
-                ui.separator();
-                crate::ui::elements::editor::editor_sheet_display::show_sheet_table(
-                    ui,
-                    ctx,
-                    row_height,
-                    &mut state,
-                    &misc.registry,
-                    &misc.render_cache_res,
-                    sheet_writers.reorder_column,
-                    sheet_writers.cell_update,
-                    sheet_writers.open_structure,
-                    sheet_writers.toggle_ai_row_generation,
-                    sheet_writers.update_ai_send_schema,
-                    sheet_writers.update_ai_structure_send,
-                    sheet_writers.add_row,
-                    sheet_writers.add_column,
-                    sheet_writers.copy_cell,
-                    sheet_writers.paste_cell,
-                    &misc.clipboard_buffer,
-                );
-                ui.add_space(5.0);
-            }
         }
 
         // (moved to a global bottom panel below this CentralPanel block)

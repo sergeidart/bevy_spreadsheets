@@ -23,12 +23,8 @@ pub fn process_structure_ai_jobs(
     mut commands: Commands,
     session_api_key: Res<SessionApiKey>,
 ) {
-    // Only process one job at a time to avoid overwhelming the AI service
-    if state.ai_active_structure_job.is_some() {
-        return;
-    }
-
-    // Get the next job from queue
+    // PARALLEL MODE: Process ALL pending jobs simultaneously for faster testing
+    // Pop jobs until queue is empty
     let Some(job) = state.ai_pending_structure_jobs.pop_front() else {
         return;
     };
@@ -42,7 +38,8 @@ pub fn process_structure_ai_jobs(
         job.target_rows
     );
 
-    state.ai_active_structure_job = Some(job.clone());
+    // PARALLEL MODE: Don't set ai_active_structure_job to allow multiple jobs to run simultaneously
+    // state.ai_active_structure_job = Some(job.clone());
 
     // Get the root sheet and metadata
     let Some(root_sheet) = registry.get_sheet(&job.root_category, &job.root_sheet) else {
@@ -50,7 +47,7 @@ pub fn process_structure_ai_jobs(
             "Structure AI job failed: root sheet {:?}/{} not found",
             job.root_category, job.root_sheet
         );
-        state.ai_active_structure_job = None;
+        // PARALLEL MODE: No need to clear ai_active_structure_job
         state.mark_structure_result_received();
         return;
     };
@@ -60,7 +57,7 @@ pub fn process_structure_ai_jobs(
             "Structure AI job failed: metadata missing for {:?}/{}",
             job.root_category, job.root_sheet
         );
-        state.ai_active_structure_job = None;
+        // PARALLEL MODE: No need to clear ai_active_structure_job
         state.mark_structure_result_received();
         return;
     };
@@ -71,13 +68,13 @@ pub fn process_structure_ai_jobs(
             "Structure AI job failed: no schema fields for path {:?} in {:?}/{}",
             job.structure_path, job.root_category, job.root_sheet
         );
-        state.ai_active_structure_job = None;
+        // PARALLEL MODE: No need to clear ai_active_structure_job
         state.mark_structure_result_received();
         return;
     };
 
-    // Build the structure headers and contexts
-    let structure_headers: Vec<String> = structure_fields.iter().map(|f| f.header.clone()).collect();
+    // Build the structure headers - will be filtered later to match included_indices
+    let all_structure_headers: Vec<String> = structure_fields.iter().map(|f| f.header.clone()).collect();
     
     // Build field path (headers) for nested structure navigation
     // This converts structure_path indices to field names by walking through the schema
@@ -182,11 +179,23 @@ pub fn process_structure_ai_jobs(
         }
     }
     
-    // Build column contexts: structure field contexts only (key context is in parent_keys)
-    let column_contexts: Vec<Option<String>> = structure_fields
-        .iter()
-        .map(|f| decorate_context_with_type(f.ai_context.as_ref(), f.data_type))
-        .collect();
+    // Build column contexts and included indices: filter by ai_include_in_send to respect schema groups
+    // Collect indices of non-structure fields that should be included
+    let mut included_indices: Vec<usize> = Vec::new();
+    let mut column_contexts: Vec<Option<String>> = Vec::new();
+    
+    for (idx, field) in structure_fields.iter().enumerate() {
+        // Skip structure columns (nested structures)
+        if matches!(field.validator, Some(crate::sheets::definitions::ColumnValidator::Structure)) {
+            continue;
+        }
+        // Skip columns explicitly excluded by schema groups
+        if matches!(field.ai_include_in_send, Some(false)) {
+            continue;
+        }
+        included_indices.push(idx);
+        column_contexts.push(decorate_context_with_type(field.ai_context.as_ref(), field.data_type));
+    }
     
     // Store key header for later use
     let key_header = if let Some(key_idx) = key_col_index {
@@ -338,7 +347,7 @@ pub fn process_structure_ai_jobs(
     for &target_row in &job.target_rows {
         // Check if this is a regular row index or a new row context token
         if let Some(context) = state.ai_structure_new_row_contexts.get(&target_row) {
-            // This is a new row context - create single empty structure row
+            // This is a new row context - check if there's existing undecided structure data
             
             // Extract key column value from the new row's data
             let key_value = if key_col_index.is_some() {
@@ -383,18 +392,218 @@ pub fn process_structure_ai_jobs(
                 key: key_value,
             };
 
-            // Add empty structure row (AI will fill these) - WITHOUT key column
-            let mut row: Vec<String> = Vec::new();
-            for _ in &structure_headers {
-                row.push(String::new());
-            }
+            // First check if this new row is a duplicate of an existing row
+            // If yes, we should extract structure data from the matched existing row, not from AI data
+            let duplicate_match_row = state.ai_new_row_reviews
+                .get(context.new_row_index)
+                .and_then(|nr| nr.duplicate_match_row);
             
-            // Create parent group with single empty row
+            // Check if there's an existing structure review entry for this new row
+            let existing_structure_rows = state.ai_structure_reviews.iter()
+                .find(|sr| {
+                    sr.parent_new_row_index == Some(context.new_row_index)
+                    && sr.structure_path == job.structure_path
+                    && !sr.decided
+                })
+                .map(|sr| {
+                    // Use merged_rows if they have content (user decisions applied), otherwise ai_rows
+                    // This ensures we send the latest categorized data, not the original AI suggestions
+                    let source_rows = if !sr.merged_rows.is_empty() && sr.merged_rows.len() >= sr.ai_rows.len() {
+                        &sr.merged_rows
+                    } else {
+                        &sr.ai_rows
+                    };
+                    
+                    source_rows.iter()
+                        .map(|row| {
+                            included_indices.iter()
+                                .map(|&idx| row.get(idx).cloned().unwrap_or_default())
+                                .collect::<Vec<String>>()
+                        })
+                        .collect::<Vec<Vec<String>>>()
+                });
+
+            let group_rows = if let Some(existing_rows) = existing_structure_rows {
+                info!(
+                    "New row context {}: using {} existing undecided structure rows",
+                    target_row, existing_rows.len()
+                );
+                row_partitions.push(existing_rows.len());
+                existing_rows
+            } else if let Some(matched_row_idx) = duplicate_match_row {
+                // This new row is a duplicate of an existing row
+                // Extract structure data from the matched existing row's grid cell
+                info!(
+                    "New row context {}: detected duplicate of existing row {}, extracting structure data from matched row",
+                    target_row, matched_row_idx
+                );
+                
+                let structure_col_idx = job.structure_path[0];
+                if let Some(existing_grid_row) = root_sheet.grid.get(matched_row_idx) {
+                    if let Some(structure_cell_json) = existing_grid_row.get(structure_col_idx) {
+                        // Parse the structure JSON from the existing row
+                        let target_json = if job.structure_path.len() > 1 {
+                            extract_nested_structure_json(structure_cell_json, &nested_field_path)
+                        } else {
+                            Some(structure_cell_json.clone())
+                        };
+                        
+                        if let Some(json_str) = target_json {
+                            // Use the same parsing logic as for full_ai_row
+                            let parsed_rows = crate::sheets::systems::ai::utils::parse_structure_rows_from_cell(
+                                &json_str,
+                                &structure_fields
+                            );
+                            
+                            if !parsed_rows.is_empty() {
+                                info!(
+                                    "New row context {}: extracted {} structure rows from matched existing row {}",
+                                    target_row, parsed_rows.len(), matched_row_idx
+                                );
+                                
+                                // Filter to included columns
+                                let filtered_rows: Vec<Vec<String>> = parsed_rows.iter()
+                                    .map(|row| {
+                                        included_indices.iter()
+                                            .map(|&idx| row.get(idx).cloned().unwrap_or_default())
+                                            .collect()
+                                    })
+                                    .collect();
+                                
+                                row_partitions.push(filtered_rows.len());
+                                filtered_rows
+                            } else {
+                                info!(
+                                    "New row context {}: matched row {} has no structure data, using empty row",
+                                    target_row, matched_row_idx
+                                );
+                                let row = vec![String::new(); included_indices.len()];
+                                row_partitions.push(1);
+                                vec![row]
+                            }
+                        } else {
+                            info!(
+                                "New row context {}: could not extract nested structure from matched row {}, using empty row",
+                                target_row, matched_row_idx
+                            );
+                            let row = vec![String::new(); included_indices.len()];
+                            row_partitions.push(1);
+                            vec![row]
+                        }
+                    } else {
+                        info!(
+                            "New row context {}: matched row {} has no structure column {}, using empty row",
+                            target_row, matched_row_idx, structure_col_idx
+                        );
+                        let row = vec![String::new(); included_indices.len()];
+                        row_partitions.push(1);
+                        vec![row]
+                    }
+                } else {
+                    warn!(
+                        "New row context {}: matched row {} not found in grid, using empty row",
+                        target_row, matched_row_idx
+                    );
+                    let row = vec![String::new(); included_indices.len()];
+                    row_partitions.push(1);
+                    vec![row]
+                }
+            } else if let Some(full_row) = &context.full_ai_row {
+                // Try to extract structure data from the full AI row
+                let structure_col_idx = job.structure_path[0];
+                
+                if let Some(structure_cell_json) = full_row.get(structure_col_idx) {
+                    // Extract nested structure if needed (for nested paths)
+                    let target_json = if job.structure_path.len() > 1 {
+                        extract_nested_structure_json(structure_cell_json, &nested_field_path)
+                    } else {
+                        Some(structure_cell_json.clone())
+                    };
+                    
+                    if let Some(json_str) = target_json {
+                        // Parse JSON to extract rows
+                        match serde_json::from_str::<serde_json::Value>(&json_str) {
+                            Ok(serde_json::Value::Array(arr)) => {
+                                let parsed_rows: Vec<Vec<String>> = arr.iter()
+                                    .filter_map(|item| {
+                                        if let serde_json::Value::Array(row_arr) = item {
+                                            let row: Vec<String> = row_arr.iter()
+                                                .map(|val| match val {
+                                                    serde_json::Value::String(s) => s.clone(),
+                                                    serde_json::Value::Number(n) => n.to_string(),
+                                                    serde_json::Value::Bool(b) => b.to_string(),
+                                                    serde_json::Value::Null => String::new(),
+                                                    _ => serde_json::to_string(val).unwrap_or_default(),
+                                                })
+                                                .collect();
+                                            Some(row)
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect();
+                                
+                                if !parsed_rows.is_empty() {
+                                    info!(
+                                        "New row context {}: extracted {} structure rows from AI response",
+                                        target_row, parsed_rows.len()
+                                    );
+                                    row_partitions.push(parsed_rows.len());
+                                    parsed_rows
+                                } else {
+                                    info!(
+                                        "New row context {}: parsed JSON but no valid rows, using empty row",
+                                        target_row
+                                    );
+                                    let row = vec![String::new(); included_indices.len()];
+                                    row_partitions.push(1);
+                                    vec![row]
+                                }
+                            }
+                            _ => {
+                                info!(
+                                    "New row context {}: structure JSON is not an array, using empty row",
+                                    target_row
+                                );
+                                let row = vec![String::new(); included_indices.len()];
+                                row_partitions.push(1);
+                                vec![row]
+                            }
+                        }
+                    } else {
+                        info!(
+                            "New row context {}: could not extract nested structure JSON, using empty row",
+                            target_row
+                        );
+                        let row = vec![String::new(); included_indices.len()];
+                        row_partitions.push(1);
+                        vec![row]
+                    }
+                } else {
+                    info!(
+                        "New row context {}: structure column {} not found in full_ai_row, using empty row",
+                        target_row, structure_col_idx
+                    );
+                    let row = vec![String::new(); included_indices.len()];
+                    row_partitions.push(1);
+                    vec![row]
+                }
+            } else {
+                // No existing structure data and no full_ai_row - create single empty row
+                info!(
+                    "New row context {}: no existing data and no full_ai_row, creating empty structure row",
+                    target_row
+                );
+                let row = vec![String::new(); included_indices.len()];
+                row_partitions.push(1);
+                vec![row]
+            };
+            
+            // Create parent group
             parent_groups.push(crate::sheets::systems::ai::control_handler::ParentGroup {
                 parent_key,
-                rows: vec![row],
+                rows: group_rows,
             });
-            row_partitions.push(1); // Single row per new context
         } else if let Some(root_row) = root_sheet.grid.get(target_row) {
             // This is an existing row - extract structure data
             info!(
@@ -458,16 +667,27 @@ pub fn process_structure_ai_jobs(
                     target_row,
                     &structure_cell.chars().take(100).collect::<String>()
                 );
-                let structure_rows = parse_structure_cell_to_rows(&structure_cell, &structure_headers);
+                // Parse with all headers first
+                let all_rows = parse_structure_cell_to_rows(&structure_cell, &all_structure_headers);
                 info!(
                     "Row {}: parsed into {} structure rows",
-                    target_row, structure_rows.len()
+                    target_row, all_rows.len()
                 );
-                row_partitions.push(structure_rows.len());
-                structure_rows
+                
+                // Filter each row to only include columns that match included_indices
+                let filtered_rows: Vec<Vec<String>> = all_rows.into_iter()
+                    .map(|row| {
+                        included_indices.iter()
+                            .map(|&idx| row.get(idx).cloned().unwrap_or_default())
+                            .collect()
+                    })
+                    .collect();
+                
+                row_partitions.push(filtered_rows.len());
+                filtered_rows
             } else {
-                // No structure data - create single empty row WITHOUT key column
-                let row = vec![String::new(); structure_headers.len()];
+                // No structure data - create single empty row with only included columns
+                let row = vec![String::new(); included_indices.len()];
                 row_partitions.push(1);
                 vec![row]
             };
@@ -485,7 +705,7 @@ pub fn process_structure_ai_jobs(
             "Structure AI job for {:?}/{} path {:?} has no valid parent groups",
             job.root_category, job.root_sheet, job.structure_path
         );
-        state.ai_active_structure_job = None;
+        // PARALLEL MODE: No need to clear ai_active_structure_job
         state.mark_structure_result_received();
         return;
     }
@@ -523,7 +743,7 @@ pub fn process_structure_ai_jobs(
         Ok(s) => s,
         Err(e) => {
             error!("Failed to serialize structure payload: {}", e);
-            state.ai_active_structure_job = None;
+            // PARALLEL MODE: No need to clear ai_active_structure_job
             state.mark_structure_result_received();
             return;
         }
@@ -537,8 +757,9 @@ pub fn process_structure_ai_jobs(
 
     // Clone data for the async task
     let api_key_for_task = session_api_key.0.clone();
-    // For structure batches, included_cols should be structure field indices, not root column indices
-    let included_cols_clone: Vec<usize> = (0..structure_fields.len()).collect();
+    // For structure batches, included_cols should be the actual indices of included fields
+    // These map to the filtered structure_headers and column_contexts we built above
+    let included_cols_clone: Vec<usize> = included_indices.clone();
     let job_clone = job.clone();
     let row_partitions_clone = row_partitions;
 
@@ -567,6 +788,7 @@ pub fn process_structure_ai_jobs(
                                         root_sheet: job_clone.root_sheet.clone(),
                                         structure_path: job_clone.structure_path.clone(),
                                         target_rows: job_clone.target_rows.clone(),
+                                        original_row_partitions: row_partitions_clone.clone(),
                                         row_partitions: row_partitions_clone,
                                         generation_id: job_clone.generation_id,
                                     }),
@@ -718,7 +940,9 @@ pub fn process_structure_ai_jobs(
         .unwrap_or_else(|e| (Err(format!("PyO3 error: {}", e)), Some(e.to_string()), None));
 
         // Use updated partitions if provided (for grouped responses with AI-added rows)
-        let final_partitions = updated_partitions.unwrap_or(row_partitions_clone);
+        let final_partitions = updated_partitions.unwrap_or_else(|| row_partitions_clone.clone());
+        // Keep original partitions for identifying which rows are original vs AI-added
+        let original_partitions = row_partitions_clone;
 
         ctx.run_on_main_thread(move |world_ctx| {
             world_ctx
@@ -739,6 +963,7 @@ pub fn process_structure_ai_jobs(
                                 root_sheet: job_clone.root_sheet.clone(),
                                 structure_path: job_clone.structure_path.clone(),
                                 target_rows: job_clone.target_rows.clone(),
+                                original_row_partitions: original_partitions,
                                 row_partitions: final_partitions,
                                 generation_id: job_clone.generation_id,
                             }),
