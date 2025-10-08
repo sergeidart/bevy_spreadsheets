@@ -33,7 +33,8 @@ pub fn render_review_ai_cell(
         let is_diff = ai_cell.as_str() != original_value;
         ui.add(
             egui::TextEdit::singleline(ai_cell)
-                .desired_width(f32::INFINITY)
+                // Use current available width to avoid pushing table columns wider every frame
+                .desired_width(ui.available_width())
                 .text_color_opt(if is_diff {
                     Some(Color32::LIGHT_YELLOW)
                 } else {
@@ -47,6 +48,7 @@ pub fn render_review_ai_cell(
     }
 }
 
+#[allow(dead_code)]
 pub fn render_review_choice_cell(
     ui: &mut egui::Ui,
     choice_opt: Option<&mut ReviewChoice>,
@@ -59,19 +61,59 @@ pub fn render_review_choice_cell(
             ui.small(RichText::new("Same").color(Color32::GRAY));
             return false;
         }
-        let mut changed = false;
-        if ui
-            .radio_value(choice, ReviewChoice::Original, "Orig")
-            .clicked()
-        {
-            changed = true;
-        }
-        if ui.radio_value(choice, ReviewChoice::AI, "AI").clicked() {
-            changed = true;
-        }
-        changed
+        // Orig is a non-interactive indicator in AI Review; only AI is actionable.
+        // Place toggles to the right visually by drawing in a horizontal and using spacer.
+        let mut clicked_ai = false;
+        ui.horizontal(|ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.radio_value(choice, ReviewChoice::AI, "AI").clicked() {
+                    clicked_ai = true;
+                }
+                ui.add_space(8.0);
+                let selected = matches!(*choice, ReviewChoice::Original);
+                ui.add_enabled(false, egui::RadioButton::new(selected, "Orig"));
+            });
+        });
+        clicked_ai
     } else {
         ui.label("");
+        false
+    }
+}
+
+/// Render just the "Orig" radio button for the Original preview row (read-only indicator)
+pub fn render_original_choice_toggle(
+    ui: &mut egui::Ui,
+    choice: Option<ReviewChoice>,
+    original_value: &str,
+    ai_value: Option<&str>,
+) {
+    if let Some(ch) = choice {
+        let ai_val = ai_value.unwrap_or_default();
+        if original_value == ai_val {
+            ui.small(RichText::new("Same").color(Color32::GRAY));
+        } else {
+            // Show radio as selected/unselected indicator only (not clickable)
+            let selected = matches!(ch, ReviewChoice::Original);
+            ui.add_enabled(false, egui::RadioButton::new(selected, "Orig"));
+        }
+    }
+}
+
+/// Render just the "AI" radio button for the AI suggested row
+pub fn render_ai_choice_toggle(
+    ui: &mut egui::Ui,
+    choice_opt: Option<&mut ReviewChoice>,
+    original_value: &str,
+    ai_value: Option<&str>,
+) -> bool {
+    if let Some(choice) = choice_opt {
+        let ai_val = ai_value.unwrap_or_default();
+        if original_value == ai_val {
+            return false; // No toggle needed, values are the same
+        }
+        ui.radio_value(choice, ReviewChoice::AI, "AI").clicked()
+    } else {
         false
     }
 }
@@ -88,7 +130,7 @@ pub fn render_review_ai_cell_linked(
     let is_valid = allowed_values.is_empty() 
         || allowed_values.iter().any(|v| normalize_for_link_cmp(v) == normalize_for_link_cmp(ai_cell));
     
-    let mut changed = false;
+    // Track whether text edit or popup selection changed the value
     let text_color = if is_diff {
         Some(Color32::LIGHT_YELLOW)
     } else {
@@ -108,7 +150,8 @@ pub fn render_review_ai_cell_linked(
     let resp = ui.add(
         egui::TextEdit::singleline(ai_cell)
             .id(text_edit_id)
-            .desired_width(f32::INFINITY)
+            // Use current available width to avoid per-frame growth
+            .desired_width(ui.available_width())
             .text_color_opt(text_color)
     );
     
@@ -121,7 +164,7 @@ pub fn render_review_ai_cell_linked(
         );
     }
     
-    changed = resp.changed();
+    let mut changed = resp.changed();
     
     // Open popup on focus (like base sheets)
     if resp.gained_focus() {

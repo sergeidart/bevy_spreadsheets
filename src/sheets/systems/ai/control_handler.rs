@@ -17,6 +17,16 @@ use crate::{
 	SessionApiKey,
 };
 
+/// Rewrite the Python processor file to ensure it's up to date before execution
+fn rewrite_python_processor() {
+	const AI_PROCESSOR_PY: &str = include_str!("../../../../script/ai_processor.py");
+	let script_path = std::path::Path::new("script/ai_processor.py");
+	if let Some(parent) = script_path.parent() {
+		let _ = std::fs::create_dir_all(parent);
+	}
+	let _ = std::fs::write(script_path, AI_PROCESSOR_PY);
+}
+
 // Re-export small structs used by UI for clarity
 #[derive(Clone, serde::Serialize)]
 pub struct KeyPayload {
@@ -134,6 +144,9 @@ pub fn spawn_batch_task(
 	included_cols: Vec<usize>,
 	key_prefix_count: usize,
 ) {
+	// Rewrite Python processor file to ensure it's up to date
+	rewrite_python_processor();
+	
 	let api_key_for_task = api_key.0.clone();
 	let included_cols_clone = included_cols.clone();
 	let original_rows_clone = original_rows.clone();
@@ -182,6 +195,9 @@ pub fn spawn_prompt_task(
 	payload_json: String,
 	included_cols: Vec<usize>,
 ) {
+	// Rewrite Python processor file to ensure it's up to date
+	rewrite_python_processor();
+	
 	let api_key_for_task = api_key.0.clone();
 	let included_cols_clone = included_cols.clone();
 	let commands_entity = commands.spawn_empty().id();

@@ -1,6 +1,6 @@
 // src/sheets/systems/io/startup/scan.rs
 use crate::sheets::{
-    definitions::SheetMetadata,
+    definitions::{SheetMetadata, ColumnDefinition, ColumnDataType, ColumnValidator},
     events::RequestSheetRevalidation,
     resources::SheetRegistry,
     systems::io::{
@@ -289,3 +289,333 @@ pub fn scan_filesystem_for_unregistered_sheets(
         info!("Startup Scan: No new unregistered sheets found to process.");
     }
 }
+
+/// Scan for SQLite database files and load tables as sheets
+pub fn scan_and_load_database_files(
+    mut registry: ResMut<SheetRegistry>,
+    mut revalidate_writer: EventWriter<RequestSheetRevalidation>,
+) {
+    let base_path = get_default_data_base_path();
+    info!(
+        "Startup DB Scan: Scanning directory '{:?}' for database files...",
+        base_path
+    );
+
+    if !base_path.exists() {
+        info!("Startup DB Scan: Data directory does not exist. Nothing to scan.");
+        return;
+    }
+
+    // Find all .db files in the SkylineDB directory
+    let mut db_files = Vec::new();
+    for entry in WalkDir::new(&base_path)
+        .max_depth(1) // Only look in root of SkylineDB, not subdirectories
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_file())
+    {
+        let path = entry.path();
+        if path.extension().map_or(false, |ext| ext.eq_ignore_ascii_case("db")) {
+            db_files.push(path.to_path_buf());
+        }
+    }
+
+    if db_files.is_empty() {
+        info!("Startup DB Scan: No database files (.db) found.");
+        return;
+    }
+
+    info!("Startup DB Scan: Found {} database file(s)", db_files.len());
+
+    // Load tables from each database
+    for db_path in db_files {
+        let db_name = db_path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "Unknown".to_string());
+
+        info!(
+            "Startup DB Scan: Loading tables from database: {}",
+            db_path.display()
+        );
+
+        match rusqlite::Connection::open(&db_path) {
+            Ok(conn) => {
+                // Check if this is a SkylineDB database (has _Metadata table)
+                let has_metadata_table: bool = conn
+                    .query_row(
+                        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='_Metadata'",
+                        [],
+                        |row| row.get::<_, i32>(0).map(|v| v > 0),
+                    )
+                    .unwrap_or(false);
+
+                // If SkylineDB metadata exists, ensure it's migrated to latest schema (adds 'hidden' if missing)
+                if has_metadata_table {
+                    if let Err(e) = crate::sheets::database::schema::ensure_global_metadata_table(&conn) {
+                        error!("Startup DB Scan: Failed to ensure _Metadata schema in '{}': {}", db_name, e);
+                    }
+                }
+
+                // Get list of tables
+                let table_names: Vec<String> = if has_metadata_table {
+                    // Use SkylineDB metadata system
+                    match crate::sheets::database::reader::DbReader::list_sheets(&conn) {
+                        Ok(names) => names,
+                        Err(e) => {
+                            error!(
+                                "Startup DB Scan: Failed to list tables in '{}': {}",
+                                db_name, e
+                            );
+                            continue;
+                        }
+                    }
+                } else {
+                    // No metadata table - scan SQLite system tables directly
+                    info!(
+                        "Startup DB Scan: Database '{}' has no _Metadata table. Loading as generic SQLite database.",
+                        db_name
+                    );
+                    
+                    match conn.prepare(
+                        "SELECT name FROM sqlite_master 
+                         WHERE type='table' 
+                         AND name NOT LIKE 'sqlite_%'
+                         AND name NOT LIKE '%_Metadata'
+                         ORDER BY name"
+                    ) {
+                        Ok(mut stmt) => {
+                            match stmt.query_map([], |row| row.get(0)) {
+                                Ok(rows) => {
+                                    rows.collect::<Result<Vec<String>, _>>().unwrap_or_default()
+                                }
+                                Err(e) => {
+                                    error!("Startup DB Scan: Failed to query tables: {}", e);
+                                    continue;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            error!("Startup DB Scan: Failed to prepare query: {}", e);
+                            continue;
+                        }
+                    }
+                };
+
+                // Always create the category (database) even if empty
+                let _ = registry.create_category(db_name.clone());
+                
+                if table_names.is_empty() {
+                    info!("Startup DB Scan: No tables found in '{}' (empty database)", db_name);
+                    continue;
+                }
+
+                info!(
+                    "Startup DB Scan: Found {} table(s) in '{}'",
+                    table_names.len(),
+                    db_name
+                );
+
+                for table_name in table_names {
+                    // Try to load with metadata first
+                    let (metadata, grid) = if has_metadata_table {
+                        // Load from SkylineDB metadata
+                        match crate::sheets::database::reader::DbReader::read_metadata(
+                            &conn,
+                            &table_name,
+                        ) {
+                            Ok(mut metadata) => {
+                                metadata.category = Some(db_name.clone());
+                                match crate::sheets::database::reader::DbReader::read_grid_data(
+                                    &conn,
+                                    &table_name,
+                                    &metadata,
+                                ) {
+                                    Ok(grid) => (metadata, grid),
+                                    Err(e) => {
+                                        error!(
+                                            "Startup DB Scan: Failed to read grid data for table '{}': {}",
+                                            table_name, e
+                                        );
+                                        continue;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                error!(
+                                    "Startup DB Scan: Failed to read metadata for table '{}': {}",
+                                    table_name, e
+                                );
+                                continue;
+                            }
+                        }
+                    } else {
+                        // No metadata - infer schema from SQLite table structure
+                        info!(
+                            "Startup DB Scan: Inferring schema for table '{}' from SQLite structure",
+                            table_name
+                        );
+                        
+                        match infer_schema_and_load_table(&conn, &table_name, &db_name) {
+                            Ok((meta, grid)) => (meta, grid),
+                            Err(e) => {
+                                error!(
+                                    "Startup DB Scan: Failed to infer schema for table '{}': {}",
+                                    table_name, e
+                                );
+                                continue;
+                            }
+                        }
+                    };
+
+                    // Register the sheet in the registry
+                    let sheet_data = crate::sheets::definitions::SheetGridData {
+                        metadata: Some(metadata.clone()),
+                        grid,
+                    };
+
+                    registry.add_or_replace_sheet(
+                        Some(db_name.clone()),
+                        table_name.clone(),
+                        sheet_data,
+                    );
+
+                    info!(
+                        "Startup DB Scan: Successfully loaded table '{}' from category '{}'",
+                        table_name, db_name
+                    );
+
+                    // Trigger render cache build for the newly loaded sheet
+                    revalidate_writer.write(RequestSheetRevalidation {
+                        category: Some(db_name.clone()),
+                        sheet_name: table_name.clone(),
+                    });
+                }
+            }
+            Err(e) => {
+                error!(
+                    "Startup DB Scan: Failed to open database '{}': {}",
+                    db_path.display(),
+                    e
+                );
+            }
+        }
+    }
+}
+
+/// Infer schema from SQLite table structure and load data
+/// Used for databases without SkylineDB metadata
+fn infer_schema_and_load_table(
+        conn: &rusqlite::Connection,
+        table_name: &str,
+        db_name: &str,
+    ) -> Result<(SheetMetadata, Vec<Vec<String>>), String> {
+        // Get column info from SQLite
+        let pragma_query = format!("PRAGMA table_info(\"{}\")", table_name);
+        let mut stmt = conn
+            .prepare(&pragma_query)
+            .map_err(|e| format!("Failed to get table info: {}", e))?;
+
+        let column_info: Vec<(String, String)> = stmt
+            .query_map([], |row| {
+                let name: String = row.get(1)?;
+                let type_str: String = row.get(2)?;
+                Ok((name, type_str))
+            })
+            .map_err(|e| format!("Failed to query table info: {}", e))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to collect column info: {}", e))?;
+
+        if column_info.is_empty() {
+            return Err("No columns found in table".to_string());
+        }
+
+        // Filter out internal columns (row_index, etc.)
+        let columns: Vec<ColumnDefinition> = column_info
+            .iter()
+            .filter(|(name, _)| name != "row_index")
+            .map(|(name, sqlite_type)| {
+                // Map SQLite types to our data types
+                let data_type = match sqlite_type.to_uppercase().as_str() {
+                    t if t.contains("INT") => ColumnDataType::I64,
+                    t if t.contains("REAL") || t.contains("FLOAT") || t.contains("DOUBLE") => {
+                        ColumnDataType::F64
+                    }
+                    t if t.contains("BOOL") => ColumnDataType::Bool,
+                    _ => ColumnDataType::String,
+                };
+
+                ColumnDefinition {
+                    header: name.clone(),
+                    validator: Some(ColumnValidator::Basic(data_type)),
+                    data_type,
+                    filter: None,
+                    ai_context: None,
+                    ai_enable_row_generation: None,
+                    ai_include_in_send: None,
+                    width: None,
+                    structure_schema: None,
+                    structure_column_order: None,
+                    structure_key_parent_column_index: None,
+                    structure_ancestor_key_parent_column_indices: None,
+                }
+            })
+            .collect();
+
+        // Create generic metadata
+        let metadata = SheetMetadata {
+            sheet_name: table_name.to_string(),
+            category: Some(db_name.to_string()),
+            data_filename: format!("{}.json", table_name),
+            columns: columns.clone(),
+            ai_general_rule: None,
+            ai_model_id: "gemini-flash-latest".to_string(),
+            ai_temperature: None,
+            ai_top_k: None,
+            ai_top_p: None,
+            requested_grounding_with_google_search: Some(false),
+            ai_enable_row_generation: false,
+            ai_schema_groups: Vec::new(),
+            ai_active_schema_group: None,
+            random_picker: None,
+            structure_parent: None,
+            hidden: false,
+        };
+
+        // Load grid data
+        let column_names: Vec<String> = columns.iter().map(|c| c.header.clone()).collect();
+        let select_cols = column_names
+            .iter()
+            .map(|name| format!("\"{}\"", name))
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let query = format!("SELECT {} FROM \"{}\"", select_cols, table_name);
+        let mut stmt = conn
+            .prepare(&query)
+            .map_err(|e| format!("Failed to prepare SELECT query: {}", e))?;
+
+        let col_count = column_names.len();
+        let rows = stmt
+            .query_map([], |row| {
+                let mut cells = Vec::new();
+                for i in 0..col_count {
+                    // Try to get as string, fallback to empty
+                    let value: Option<String> = row.get(i).ok();
+                    cells.push(value.unwrap_or_default());
+                }
+                Ok(cells)
+            })
+            .map_err(|e| format!("Failed to query rows: {}", e))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| format!("Failed to collect rows: {}", e))?;
+
+        info!(
+            "Infer Schema: Table '{}': loaded {} rows with {} columns",
+            table_name,
+            rows.len(),
+            col_count
+        );
+
+        Ok((metadata, rows))
+    }

@@ -128,7 +128,9 @@ pub(super) fn handle_on_close(
                                     "Propagated virtual column edits to parent '{:?}/{}'. Saving parent.",
                                     parent_cat, parent_sheet_name
                                 );
-                                save_single_sheet(registry, meta_to_save);
+                                if meta_to_save.category.is_none() {
+                                    save_single_sheet(registry, meta_to_save);
+                                }
                                 return; // Done
                             }
                         }
@@ -147,7 +149,9 @@ pub(super) fn handle_on_close(
                         "Filter/Context changed for '{:?}/{}', triggering save.",
                         popup_category, popup_sheet_name
                     );
-                    save_single_sheet(registry, meta_to_save);
+                    if meta_to_save.category.is_none() {
+                        save_single_sheet(registry, meta_to_save);
+                    }
                 } else {
                     warn!(
                         "Cannot save after filter/context change for '{:?}/{}': Metadata missing.",

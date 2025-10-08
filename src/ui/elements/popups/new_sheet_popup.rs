@@ -2,7 +2,7 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 
-use crate::sheets::events::{RequestCreateNewSheet, RequestInitiateFileUpload};
+use crate::sheets::events::{RequestCreateNewSheet, RequestUploadJsonToCurrentDb};
 use crate::ui::elements::editor::state::EditorWindowState;
 
 pub fn show_new_sheet_popup(
@@ -10,7 +10,7 @@ pub fn show_new_sheet_popup(
     state: &mut EditorWindowState,
     create_sheet_writer: &mut EventWriter<RequestCreateNewSheet>,
     // New: allow uploading JSON from within this popup
-    upload_req_writer: Option<&mut EventWriter<RequestInitiateFileUpload>>,
+    upload_json_writer: Option<&mut EventWriter<RequestUploadJsonToCurrentDb>>,
     // ui_feedback: &UiFeedbackState, // To display error messages from name validation (optional here)
 ) {
     if !state.show_new_sheet_popup {
@@ -59,9 +59,15 @@ pub fn show_new_sheet_popup(
                     cancel_clicked = true;
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui_r| {
-                    if let Some(w) = upload_req_writer {
-                        if ui_r.button("⬆ Upload JSON").on_hover_text("Upload a JSON file (placed in Root category)").clicked() {
-                            w.write(RequestInitiateFileUpload);
+                    if let Some(w) = upload_json_writer {
+                        // Only show upload button if we have a target database (category)
+                        if let Some(ref target_db) = state.new_sheet_target_category {
+                            if ui_r.button("⬆ Upload JSON").on_hover_text("Import a JSON file as a table in this database").clicked() {
+                                w.write(RequestUploadJsonToCurrentDb {
+                                    target_db_name: target_db.clone(),
+                                });
+                                state.show_new_sheet_popup = false; // Close popup after triggering upload
+                            }
                         }
                     }
                 });

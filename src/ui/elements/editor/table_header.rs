@@ -1,5 +1,6 @@
 // src/ui/elements/editor/table_header.rs
 use bevy::prelude::*;
+use bevy::log::{info, warn};
 use bevy_egui::egui::{self, Color32, Id, Order, PointerButton, Sense, Stroke};
 use egui_extras::TableRow;
 
@@ -9,14 +10,13 @@ use crate::sheets::events::{
     RequestReorderColumn, RequestUpdateAiSendSchema, RequestUpdateAiStructureSend,
 };
 use crate::sheets::resources::SheetRegistry;
-
 pub fn sheet_table_header(
     header_row: &mut TableRow,
     ctx: &egui::Context,
     metadata: &SheetMetadata,
     sheet_name: &str,
     category: &Option<String>,
-    registry: &SheetRegistry,
+    _registry: &SheetRegistry,
     state: &mut EditorWindowState,
     mut reorder_writer: EventWriter<RequestReorderColumn>,
     mut send_schema_writer: EventWriter<RequestUpdateAiSendSchema>,
@@ -26,22 +26,23 @@ pub fn sheet_table_header(
     let filters = metadata.get_filters();
     let num_cols = headers.len();
 
-    // Column drag is now always enabled regardless of mode
+    // Compute visible columns (respecting structure context)
+    let visible_columns = state.get_visible_column_indices(category, sheet_name, num_cols);
+
+    // Column drag enabled
     let is_column_mode = true;
     let dnd_id_source = Id::new("column_dnd_context")
         .with(&state.selected_category)
         .with(sheet_name);
 
     let mut _header_row_y_range: Option<std::ops::RangeInclusive<f32>> = None;
-    let mut drop_handled_this_frame = false;
-
-    // Check for global primary button release once at the start of header processing for this frame
     let primary_released_this_frame = ctx.input(|i| i.pointer.primary_released());
 
-    for (c_idx, header_text) in headers.iter().enumerate() {
+    for c_idx in visible_columns.iter().copied() {
+        let header_text = &headers[c_idx];
         header_row.col(|ui| {
             if _header_row_y_range.is_none() {
-                 _header_row_y_range = Some(ui.max_rect().y_range().into());
+                _header_row_y_range = Some(ui.max_rect().y_range().into());
             }
 
             let item_id = dnd_id_source.with(c_idx);
@@ -51,123 +52,172 @@ pub fn sheet_table_header(
 
             ui.allocate_new_ui(egui::UiBuilder::new().max_rect(response.rect), |header_content_ui| {
                 header_content_ui.horizontal(|ui_h| {
+                    // Treat Parent_key column specially: always included, cannot be deleted/unchecked
+                    let is_parent_key = header_text.eq_ignore_ascii_case("parent_key") && c_idx == 1;
                     match state.current_interaction_mode {
                         SheetInteractionState::DeleteModeActive => {
-                        let mut is_selected_for_delete = state.selected_columns_for_deletion.contains(&c_idx);
-                        if ui_h.checkbox(&mut is_selected_for_delete, "").changed() {
-                            if is_selected_for_delete {
-                                state.selected_columns_for_deletion.insert(c_idx);
+                            if !is_parent_key {
+                                let mut is_selected_for_delete = state.selected_columns_for_deletion.contains(&c_idx);
+                                if ui_h.checkbox(&mut is_selected_for_delete, "").changed() {
+                                    if is_selected_for_delete { state.selected_columns_for_deletion.insert(c_idx); }
+                                    else { state.selected_columns_for_deletion.remove(&c_idx); }
+                                }
                             } else {
-                                state.selected_columns_for_deletion.remove(&c_idx);
+                                // Reserve space for alignment but don't draw an interactive checkbox
+                                let mut dummy = false;
+                                ui_h.add_enabled(false, egui::Checkbox::without_text(&mut dummy));
                             }
-                        }
-                        ui_h.add_space(2.0);
+                            ui_h.add_space(2.0);
                         }
                         SheetInteractionState::AiModeActive => {
                             if let Some(col_def) = metadata.columns.get(c_idx) {
                                 if !matches!(col_def.validator, Some(ColumnValidator::Structure)) {
+                                    if is_parent_key {
+                                        // Parent_key is always included and cannot be toggled
+                                        let mut dummy = true;
+                                        let _ = ui_h.add_enabled(false, egui::Checkbox::new(&mut dummy, ""));
+                                        ui_h.add_space(2.0);
+                                    } else {
                                     let mut is_included = !matches!(col_def.ai_include_in_send, Some(false));
-                                    if ui_h.checkbox(&mut is_included, "").changed() {
-                                        if let Some((root_category, root_sheet, structure_path)) =
-                                            resolve_root_context_for_current_view(
-                                                registry,
-                                                category,
-                                                sheet_name,
-                                            )
-                                        {
-                                            if root_sheet.is_empty() {
-                                                warn!(
-                                                    "Skipping AI send schema update: missing root sheet for {:?}/{}",
-                                                    root_category, sheet_name
-                                                );
-                                            } else {
-                                                let included_indices: Vec<usize> = metadata
-                                                .columns
-                                                .iter()
-                                                .enumerate()
+                                    let checkbox_resp = ui_h.checkbox(&mut is_included, "");
+                                    if checkbox_resp.changed() {
+                                        // Derive root context and current structure path from virtual stack
+                                        let structure_path: Vec<usize> = state
+                                            .virtual_structure_stack
+                                            .iter()
+                                            .map(|ctx| ctx.parent.parent_col)
+                                            .collect();
+                                        let (root_category, root_sheet) = if let Some(first_ctx) = state.virtual_structure_stack.first() {
+                                            (first_ctx.parent.parent_category.clone(), first_ctx.parent.parent_sheet.clone())
+                                        } else {
+                                            (category.clone(), sheet_name.to_string())
+                                        };
+                                        if root_sheet.is_empty() {
+                                            warn!("Skipping AI send schema update: missing root sheet for {:?}/{}", root_category, sheet_name);
+                                        } else {
+                                            let included_indices: Vec<usize> = metadata.columns.iter().enumerate()
                                                 .filter_map(|(idx, col)| {
-                                                    if matches!(
-                                                        col.validator,
-                                                        Some(ColumnValidator::Structure)
-                                                    ) {
-                                                        return None;
-                                                    }
-                                                    let include = if idx == c_idx {
+                                                    if matches!(col.validator, Some(ColumnValidator::Structure)) { return None; }
+                                                    // Parent_key is always included
+                                                    let is_parent_key = idx == 1 && headers.get(1).map(|h| h.eq_ignore_ascii_case("parent_key")).unwrap_or(false);
+                                                    let include = if is_parent_key {
+                                                        true
+                                                    } else if idx == c_idx {
                                                         is_included
                                                     } else {
-                                                        !matches!(
-                                                            col.ai_include_in_send,
-                                                            Some(false)
-                                                        )
+                                                        !matches!(col.ai_include_in_send, Some(false))
                                                     };
-                                                    if include {
-                                                        Some(idx)
-                                                    } else {
-                                                        None
-                                                    }
-                                                })
+                                                    if include { Some(idx) } else { None }
+                                                }).collect();
+                                            let structure_path_opt = if structure_path.is_empty() { None } else { Some(structure_path) };
+                                            send_schema_writer.write(RequestUpdateAiSendSchema { category: root_category.clone(), sheet_name: root_sheet.clone(), structure_path: structure_path_opt, included_columns: included_indices.clone() });
+                                            state.ai_cached_included_columns_category = category.clone();
+                                            state.ai_cached_included_columns_sheet = Some(sheet_name.to_string());
+                                            state.ai_cached_included_columns_path = state.virtual_structure_stack.iter().map(|ctx| ctx.parent.parent_col).collect();
+                                            let mut flags = vec![false; metadata.columns.len()];
+                                            for &idx in &included_indices { if let Some(slot) = flags.get_mut(idx) { *slot = true; } }
+                                            state.ai_cached_included_columns = flags;
+                                            state.ai_cached_included_columns_dirty = false;
+                                            state.ai_cached_included_columns_valid = true;
+                                        }
+                                        ui_h.ctx().request_repaint();
+                                    }
+                                    // Bulk context menu for visible non-structure columns
+                                        checkbox_resp.context_menu(|menu_ui| {
+                                        if menu_ui.button("Select all visible columns").clicked() {
+                                            // Derive root context and current structure path from virtual stack
+                                            let structure_path: Vec<usize> = state
+                                                .virtual_structure_stack
+                                                .iter()
+                                                .map(|ctx| ctx.parent.parent_col)
                                                 .collect();
-                                                let structure_path_opt = if structure_path.is_empty() {
-                                                    None
-                                                } else {
-                                                    Some(structure_path)
-                                                };
-                                                send_schema_writer.write(RequestUpdateAiSendSchema {
-                                                    category: root_category.clone(),
-                                                    sheet_name: root_sheet.clone(),
-                                                    structure_path: structure_path_opt,
-                                                    included_columns: included_indices.clone(),
-                                                });
+                                            let (root_category, root_sheet) = if let Some(first_ctx) = state.virtual_structure_stack.first() {
+                                                (first_ctx.parent.parent_category.clone(), first_ctx.parent.parent_sheet.clone())
+                                            } else {
+                                                (category.clone(), sheet_name.to_string())
+                                            };
+                                            {
+                                                let mut included_set: std::collections::HashSet<usize> = metadata.columns.iter().enumerate()
+                                                    .filter_map(|(idx, col)| if !matches!(col.validator, Some(ColumnValidator::Structure)) && !matches!(col.ai_include_in_send, Some(false)) { Some(idx) } else { None })
+                                                    .collect();
+                                                for &idx in &visible_columns { if let Some(col) = metadata.columns.get(idx) { if !matches!(col.validator, Some(ColumnValidator::Structure)) { included_set.insert(idx); } } }
+                                                let mut included_indices: Vec<usize> = included_set.into_iter().collect();
+                                                included_indices.sort_unstable();
+                                                let structure_path_opt = if structure_path.is_empty() { None } else { Some(structure_path) };
+                                                send_schema_writer.write(RequestUpdateAiSendSchema { category: root_category.clone(), sheet_name: root_sheet.clone(), structure_path: structure_path_opt, included_columns: included_indices.clone() });
                                                 state.ai_cached_included_columns_category = category.clone();
                                                 state.ai_cached_included_columns_sheet = Some(sheet_name.to_string());
-                                                state.ai_cached_included_columns_path = state
-                                                    .virtual_structure_stack
-                                                    .iter()
-                                                    .map(|ctx| ctx.parent.parent_col)
-                                                    .collect();
-                                                let mut flags =
-                                                    vec![false; metadata.columns.len()];
-                                                for &idx in &included_indices {
-                                                    if let Some(slot) = flags.get_mut(idx) {
-                                                        *slot = true;
-                                                    }
-                                                }
+                                                state.ai_cached_included_columns_path = state.virtual_structure_stack.iter().map(|ctx| ctx.parent.parent_col).collect();
+                                                let mut flags = vec![false; metadata.columns.len()];
+                                                for &idx in &included_indices { if let Some(slot) = flags.get_mut(idx) { *slot = true; } }
                                                 state.ai_cached_included_columns = flags;
                                                 state.ai_cached_included_columns_dirty = false;
                                                 state.ai_cached_included_columns_valid = true;
-                                            }
-                                            ui_h.ctx().request_repaint();
-                                        }
-                                    }
-                                    ui_h.add_space(2.0);
-                                } else {
-                                    let mut is_included =
-                                        matches!(col_def.ai_include_in_send, Some(true));
-                                    if ui_h.checkbox(&mut is_included, "").changed() {
-                                        if let Some((root_category, root_sheet, mut structure_path)) =
-                                            resolve_root_context_for_current_view(
-                                                registry,
-                                                category,
-                                                sheet_name,
-                                            )
-                                        {
-                                            if root_sheet.is_empty() {
-                                                warn!(
-                                                    "Skipping AI structure send update: missing root sheet for {:?}/{}",
-                                                    root_category, sheet_name
-                                                );
-                                            } else {
-                                                structure_path.push(c_idx);
-                                                structure_send_writer
-                                                    .write(RequestUpdateAiStructureSend {
-                                                        category: root_category.clone(),
-                                                        sheet_name: root_sheet.clone(),
-                                                        structure_path: structure_path.clone(),
-                                                        include: is_included,
-                                                    });
-                                                state.mark_ai_included_columns_dirty();
                                                 ui_h.ctx().request_repaint();
+                                                menu_ui.close_menu();
                                             }
+                                        }
+                                        if menu_ui.button("Remove selection from all visible columns").clicked() {
+                                            // Derive root context and current structure path from virtual stack
+                                            let structure_path: Vec<usize> = state
+                                                .virtual_structure_stack
+                                                .iter()
+                                                .map(|ctx| ctx.parent.parent_col)
+                                                .collect();
+                                            let (root_category, root_sheet) = if let Some(first_ctx) = state.virtual_structure_stack.first() {
+                                                (first_ctx.parent.parent_category.clone(), first_ctx.parent.parent_sheet.clone())
+                                            } else {
+                                                (category.clone(), sheet_name.to_string())
+                                            };
+                                                let mut included_indices: Vec<usize> = metadata.columns.iter().enumerate()
+                                                    .filter_map(|(idx, col)| {
+                                                        if matches!(col.validator, Some(ColumnValidator::Structure)) { return None; }
+                                                        if visible_columns.contains(&idx) { return None; }
+                                                        if matches!(col.ai_include_in_send, Some(false)) { return None; }
+                                                        Some(idx)
+                                                    }).collect();
+                                                // Ensure Parent_key (index 1) is always included
+                                                if headers.get(1).map(|h| h.eq_ignore_ascii_case("parent_key")).unwrap_or(false) {
+                                                    if !included_indices.contains(&1) { included_indices.push(1); }
+                                                }
+                                                let structure_path_opt = if structure_path.is_empty() { None } else { Some(structure_path) };
+                                                send_schema_writer.write(RequestUpdateAiSendSchema { category: root_category.clone(), sheet_name: root_sheet.clone(), structure_path: structure_path_opt, included_columns: included_indices.clone() });
+                                                state.ai_cached_included_columns_category = category.clone();
+                                                state.ai_cached_included_columns_sheet = Some(sheet_name.to_string());
+                                                state.ai_cached_included_columns_path = state.virtual_structure_stack.iter().map(|ctx| ctx.parent.parent_col).collect();
+                                                let mut flags = vec![false; metadata.columns.len()];
+                                                for &idx in &included_indices { if let Some(slot) = flags.get_mut(idx) { *slot = true; } }
+                                                state.ai_cached_included_columns = flags;
+                                                state.ai_cached_included_columns_dirty = false;
+                                                state.ai_cached_included_columns_valid = true;
+                                                ui_h.ctx().request_repaint();
+                                                menu_ui.close_menu();
+                                        }
+                                        });
+                                        ui_h.add_space(2.0);
+                                    }
+                                } else {
+                                    let mut is_included = matches!(col_def.ai_include_in_send, Some(true));
+                                    let checkbox_resp = ui_h.checkbox(&mut is_included, "");
+                                    if checkbox_resp.changed() {
+                                        // Derive root context and current structure path from virtual stack
+                                        let mut structure_path: Vec<usize> = state
+                                            .virtual_structure_stack
+                                            .iter()
+                                            .map(|ctx| ctx.parent.parent_col)
+                                            .collect();
+                                        let (root_category, root_sheet) = if let Some(first_ctx) = state.virtual_structure_stack.first() {
+                                            (first_ctx.parent.parent_category.clone(), first_ctx.parent.parent_sheet.clone())
+                                        } else {
+                                            (category.clone(), sheet_name.to_string())
+                                        };
+                                        if root_sheet.is_empty() {
+                                            warn!("Skipping AI structure send update: missing root sheet for {:?}/{}", root_category, sheet_name);
+                                        } else {
+                                            structure_path.push(c_idx);
+                                            structure_send_writer.write(RequestUpdateAiStructureSend { category: root_category.clone(), sheet_name: root_sheet.clone(), structure_path: structure_path.clone(), include: is_included });
+                                            state.mark_ai_included_columns_dirty();
+                                            ui_h.ctx().request_repaint();
                                         }
                                     }
                                     ui_h.add_space(2.0);
@@ -183,18 +233,27 @@ pub fn sheet_table_header(
                         header_text.clone()
                     };
 
-                    let can_open_options =
-                        state.current_interaction_mode == SheetInteractionState::Idle;
+                    let can_open_options = state.current_interaction_mode == SheetInteractionState::Idle;
 
                     // Determine header background color based on selection state
                     let header_bg_color = if state.selected_columns_for_deletion.contains(&c_idx) {
-                        Color32::from_rgba_unmultiplied(120, 20, 20, 150) // Red background for deletion
+                        Color32::from_rgba_unmultiplied(120, 20, 20, 150)
                     } else {
                         Color32::TRANSPARENT
                     };
 
-                    let header_button = egui::Button::new(&display_text).fill(header_bg_color);
+                    // Style: button-like header with darker background, full column width, centered text
+                    let dark_bg_default = egui::Color32::from_rgb(40, 40, 40);
+                    let fill_color = if header_bg_color == egui::Color32::TRANSPARENT { dark_bg_default } else { header_bg_color };
+                    let header_button = egui::Button::new(&display_text)
+                        .fill(fill_color)
+                        .min_size(ui_h.available_size());
                     let header_button_response = ui_h.add_enabled(can_open_options, header_button);
+                    // Update last header right edge based on the button rect in content space
+                    let button_right = header_button_response.rect.right();
+                    if button_right.is_finite() && button_right > state.last_header_right_edge_x {
+                        state.last_header_right_edge_x = button_right;
+                    }
 
                     if header_button_response.clicked() && can_open_options {
                         state.show_column_options_popup = true;
@@ -247,7 +306,6 @@ pub fn sheet_table_header(
                 }
 
                 // --- Drop Target Visual Cue ---
-                // Show visual cue if we are dragging something and this column is not the source
                 if let Some(source_column_idx) = state.column_drag_state.source_index {
                     if source_column_idx != c_idx && response.hovered() {
                         if let Some(globally_dragged_egui_id) = ctx.dragged_id() {
@@ -277,113 +335,28 @@ pub fn sheet_table_header(
 
                 // --- Handle Drop ---
                 if primary_released_this_frame {
-                    // Global check for release
                     if let Some(source_idx) = state.column_drag_state.source_index {
-                        // Our app knows a drag was in progress; check if the release happened over this column
                         if response.hovered() {
-                            info!(
-                                "Drop Attempt: Primary released on hovered column idx: {}, item_id: {:?}",
-                                c_idx,
-                                item_id
-                            );
-                            let mut target_drop_idx = c_idx;
-                            if let Some(pos) = ctx.input(|i| i.pointer.hover_pos()) {
-                                if pos.x > response.rect.center().x {
-                                    target_drop_idx += 1;
+                            if let Some(pointer_pos) = ctx.input(|i| i.pointer.hover_pos()) {
+                                let rect = response.rect;
+                                let mut dest = if pointer_pos.x < rect.center().x { c_idx } else { c_idx + 1 };
+                                let max_len = metadata.columns.len();
+                                if dest > max_len { dest = max_len; }
+                                let new_index = if dest > source_idx { dest - 1 } else { dest };
+                                if source_idx != new_index {
+                                    reorder_writer.write(RequestReorderColumn {
+                                        category: category.clone(),
+                                        sheet_name: sheet_name.to_string(),
+                                        old_index: source_idx,
+                                        new_index,
+                                    });
                                 }
                             }
-
-                            let final_insert_idx = if source_idx < target_drop_idx {
-                                target_drop_idx.saturating_sub(1)
-                            } else {
-                                target_drop_idx
-                            };
-                            let final_insert_idx = final_insert_idx.min(num_cols);
-
-                            if source_idx != final_insert_idx && final_insert_idx <= num_cols {
-                                info!(
-                                    "Column drop confirmed: Source idx {}, Target insert idx {}",
-                                    source_idx,
-                                    final_insert_idx
-                                );
-                                reorder_writer.write(RequestReorderColumn {
-                                    category: state.selected_category.clone(),
-                                    sheet_name: sheet_name.to_string(),
-                                    old_index: source_idx,
-                                    new_index: final_insert_idx,
-                                });
-                            } else {
-                                info!(
-                                    "Drop resulted in no change (source_idx: {}, final_insert_idx: {}).",
-                                    source_idx,
-                                    final_insert_idx
-                                );
-                            }
-
-                            state.column_drag_state.source_index = None;
-                            ctx.set_dragged_id(Id::NULL);
-                            drop_handled_this_frame = true;
                         }
                     }
+                    state.column_drag_state.source_index = None;
                 }
             }
         });
     }
-
-    // Global drag release check (if mouse released and not handled by a specific column drop)
-    if primary_released_this_frame && !drop_handled_this_frame {
-        if state.column_drag_state.source_index.is_some() {
-            info!(
-                "Drag cancelled or released outside target (Global Check). Source idx: {:?}",
-                state.column_drag_state.source_index
-            );
-            state.column_drag_state.source_index = None;
-            // It's good practice to also clear egui's dragged_id if our app thought a drag was active.
-            // Egui might have already cleared it, but this ensures consistency.
-            ctx.set_dragged_id(Id::NULL);
-        }
-    }
-
-    if num_cols == 0 {
-        header_row.col(|ui| {
-            ui.strong("(No Columns)");
-        });
-    }
-}
-
-fn resolve_root_context_for_current_view(
-    registry: &SheetRegistry,
-    category: &Option<String>,
-    sheet_name: &str,
-) -> Option<(Option<String>, String, Vec<usize>)> {
-    let mut root_category = category.clone();
-    let mut root_sheet = sheet_name.to_string();
-    let mut path_rev: Vec<usize> = Vec::new();
-    let mut safety = 0;
-
-    loop {
-        safety += 1;
-        if safety > 32 {
-            warn!(
-                "Structure parent chain exceeded safety limit for {:?}/{}",
-                category, sheet_name
-            );
-            break;
-        }
-        let meta_opt = registry
-            .get_sheet(&root_category, &root_sheet)
-            .and_then(|s| s.metadata.as_ref());
-        if let Some(meta) = meta_opt {
-            if let Some(parent) = &meta.structure_parent {
-                path_rev.push(parent.parent_column_index);
-                root_category = parent.parent_category.clone();
-                root_sheet = parent.parent_sheet.clone();
-                continue;
-            }
-        }
-        break;
-    }
-
-    path_rev.reverse();
-    Some((root_category, root_sheet, path_rev))
 }

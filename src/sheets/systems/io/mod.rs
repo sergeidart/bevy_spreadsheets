@@ -12,23 +12,21 @@ pub mod startup;
 pub mod validator; // <-- ADDED new startup submodule
 
 // --- Shared Constants ---
-pub const DEFAULT_DATA_DIR: &str = "data_sheets";
+// Legacy constant kept for reference, but default path now uses Documents/SkylineDB
+pub const DEFAULT_DATA_DIR: &str = "SkylineDB";
 
 // --- Shared Helper Functions ---
-// (These remain the same)
+/// Get the default data base path for JSON sheets.
+/// Now uses Documents/SkylineDB to match the database location.
 pub fn get_default_data_base_path() -> PathBuf {
-    let base_dir = if let Ok(exe_path) = std::env::current_exe() {
-        exe_path
-            .parent()
-            .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| PathBuf::from("."))
-    } else {
-        error!(
-            "Failed to get current executable path, using current working directory '.' instead."
-        );
-        PathBuf::from(".")
-    };
-    let data_path = base_dir.join(DEFAULT_DATA_DIR);
+    let data_path = directories_next::UserDirs::new()
+        .and_then(|dirs| dirs.document_dir().map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| {
+            error!("Failed to get Documents directory, using current working directory '.' instead.");
+            PathBuf::from(".")
+        })
+        .join(DEFAULT_DATA_DIR);
+    
     trace!("Data base path determined as: {:?}", data_path);
     data_path
 }

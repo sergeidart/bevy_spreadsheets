@@ -256,6 +256,50 @@ impl SheetRegistry {
         names
     }
 
+    /// Returns sheet names in a category optionally filtering out structure sheets
+    pub fn get_sheet_names_in_category_filtered(
+        &self,
+        category: &Option<String>,
+        show_hidden_sheets: bool,
+    ) -> Vec<String> {
+        let mut names = Vec::new();
+        if let Some(category_map) = self.categorized_sheets.get(category) {
+            for (name, data) in category_map.iter() {
+                // If there's no metadata, skip (technical sheets etc.)
+                let Some(meta) = &data.metadata else { continue; };
+                // If not showing hidden sheets and this sheet is hidden, skip it
+                if !show_hidden_sheets && meta.hidden {
+                    continue;
+                }
+                names.push(name.clone());
+            }
+            names.sort_unstable();
+        }
+        names
+    }
+
+    /// Check if a table is a structure table (has id and parent_key columns)
+    pub fn is_structure_table(&self, category: &Option<String>, sheet_name: &str) -> bool {
+        if let Some(category_map) = self.categorized_sheets.get(category) {
+            if let Some(data) = category_map.get(sheet_name) {
+                return data
+                    .metadata
+                    .as_ref()
+                    .map(|m| {
+                        if m.columns.len() >= 2 {
+                            let h0 = m.columns[0].header.as_str();
+                            let h1 = m.columns[1].header.as_str();
+                            h0.eq_ignore_ascii_case("id") && h1.eq_ignore_ascii_case("parent_key")
+                        } else {
+                            false
+                        }
+                    })
+                    .unwrap_or(false);
+            }
+        }
+        false
+    }
+
     /// Checks if a sheet exists anywhere across all categories.
     pub fn does_sheet_exist(&self, sheet_name: &str) -> bool {
         self.categorized_sheets

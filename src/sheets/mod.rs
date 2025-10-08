@@ -6,6 +6,7 @@ pub mod definitions;
 pub mod events;
 pub mod plugin;
 pub mod resources;
+pub mod database;
 
 pub(crate) mod systems;
 

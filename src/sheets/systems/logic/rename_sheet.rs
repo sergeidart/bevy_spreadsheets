@@ -2,7 +2,6 @@
 use crate::sheets::{
     events::{RequestRenameSheet, RequestRenameSheetFile, SheetOperationFeedback},
     resources::SheetRegistry,
-    systems::io::save::save_single_sheet, // Keep save import
 };
 use bevy::prelude::*;
 use std::path::PathBuf; // Added for relative path
@@ -68,9 +67,10 @@ pub fn handle_rename_request(
                     is_error: false,
                 });
 
-                // --- Trigger save of the newly renamed sheet ---
-                // Need immutable borrow again for save
-                let registry_immut = registry.as_ref();
+                // NOTE: Do NOT save JSON files here prior to file rename.
+                // Saving first would create the new files and prevent fs::rename,
+                // leading to duplicates (old + new). We'll only emit file rename
+                // requests for JSON mode and skip pre-saving entirely.
                 if let Some(meta_to_save) = &mut moved_data.metadata {
                     // Ensure category in moved data is correct before saving
                     if meta_to_save.category != *category {
@@ -80,7 +80,10 @@ pub fn handle_rename_request(
                         );
                         meta_to_save.category = category.clone();
                     }
-                    save_single_sheet(registry_immut, meta_to_save); // Pass the updated metadata
+                    // In DB mode, there are no filesystem files to rename or save.
+                    if meta_to_save.category.is_some() {
+                        info!("DB mode: Skipping JSON file save for renamed sheet '{:?}/{}'", category, new_name);
+                    }
 
                     // --- Request File Renames using updated metadata ---
                     let new_grid_filename = &meta_to_save.data_filename; // Already updated by rename_sheet
@@ -111,35 +114,44 @@ pub fn handle_rename_request(
                     }
                     new_meta_rel_path.push(new_meta_filename);
 
-                    // Request grid file rename only if old name existed and names differ
-                    if !old_grid_rel_path.as_os_str().is_empty()
-                        && !new_grid_rel_path.as_os_str().is_empty()
-                        && old_grid_rel_path != new_grid_rel_path
-                    {
-                        info!(
-                            "Requesting grid file rename: '{}' -> '{}'",
-                            old_grid_rel_path.display(),
-                            new_grid_rel_path.display()
-                        );
-                        file_rename_writer.write(RequestRenameSheetFile {
-                            old_relative_path: old_grid_rel_path,
-                            new_relative_path: new_grid_rel_path,
-                        });
+                    // JSON mode: request fs renames (grid)
+                    if meta_to_save.category.is_none() {
+                        // Request grid file rename only if old name existed and names differ
+                        if !old_grid_rel_path.as_os_str().is_empty()
+                            && !new_grid_rel_path.as_os_str().is_empty()
+                            && old_grid_rel_path != new_grid_rel_path
+                        {
+                            info!(
+                                "Requesting grid file rename: '{}' -> '{}'",
+                                old_grid_rel_path.display(),
+                                new_grid_rel_path.display()
+                            );
+                            file_rename_writer.write(RequestRenameSheetFile {
+                                old_relative_path: old_grid_rel_path,
+                                new_relative_path: new_grid_rel_path,
+                            });
+                        }
+                    } else {
+                        info!("DB mode: Skipping grid file rename request for '{:?}/{}'", category, new_name);
                     }
 
-                    // Request meta file rename only if old name existed and names differ
-                    if !old_meta_rel_path.as_os_str().is_empty()
-                        && old_meta_rel_path != new_meta_rel_path
-                    {
-                        info!(
-                            "Requesting meta file rename: '{}' -> '{}'",
-                            old_meta_rel_path.display(),
-                            new_meta_rel_path.display()
-                        );
-                        file_rename_writer.write(RequestRenameSheetFile {
-                            old_relative_path: old_meta_rel_path,
-                            new_relative_path: new_meta_rel_path,
-                        });
+                    if meta_to_save.category.is_none() {
+                        // Request meta file rename only if old name existed and names differ
+                        if !old_meta_rel_path.as_os_str().is_empty()
+                            && old_meta_rel_path != new_meta_rel_path
+                        {
+                            info!(
+                                "Requesting meta file rename: '{}' -> '{}'",
+                                old_meta_rel_path.display(),
+                                new_meta_rel_path.display()
+                            );
+                            file_rename_writer.write(RequestRenameSheetFile {
+                                old_relative_path: old_meta_rel_path,
+                                new_relative_path: new_meta_rel_path,
+                            });
+                        }
+                    } else {
+                        info!("DB mode: Skipping meta file rename request for '{:?}/{}'", category, new_name);
                     }
                 } else {
                     // Should not happen if rename_sheet succeeded

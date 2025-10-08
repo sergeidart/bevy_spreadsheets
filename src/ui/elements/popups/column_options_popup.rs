@@ -153,6 +153,26 @@ pub fn show_column_options_popup(
                                     state.force_filter_recalculation = true;
                                     debug!("Filter changed for current sheet, forcing recalc.");
                                 }
+                                // Persist filter to DB if this is DB-backed
+                                if meta.category.is_some() {
+                                    if let Some(cat) = category {
+                                        let base = crate::sheets::systems::io::get_default_data_base_path();
+                                        let db_path = base.join(format!("{}.db", cat));
+                                        if db_path.exists() {
+                                            if let Ok(conn) = rusqlite::Connection::open(&db_path) {
+                                                let _ = crate::sheets::database::schema::ensure_global_metadata_table(&conn);
+                                                let _ = crate::sheets::database::writer::DbWriter::update_column_metadata(
+                                                    &conn,
+                                                    sheet_name,
+                                                    col_index,
+                                                    col_def.filter.as_deref(),
+                                                    None,
+                                                    None,
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
                             }
                             if context_changed {
                                 info!(
@@ -162,6 +182,26 @@ pub fn show_column_options_popup(
                                     sheet_name
                                 );
                                 col_def.ai_context = context_to_store;
+                                // Persist AI context to DB if this is DB-backed
+                                if meta.category.is_some() {
+                                    if let Some(cat) = category {
+                                        let base = crate::sheets::systems::io::get_default_data_base_path();
+                                        let db_path = base.join(format!("{}.db", cat));
+                                        if db_path.exists() {
+                                            if let Ok(conn) = rusqlite::Connection::open(&db_path) {
+                                                let _ = crate::sheets::database::schema::ensure_global_metadata_table(&conn);
+                                                let _ = crate::sheets::database::writer::DbWriter::update_column_metadata(
+                                                    &conn,
+                                                    sheet_name,
+                                                    col_index,
+                                                    None,
+                                                    col_def.ai_context.as_deref(),
+                                                    None,
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         } else {
                             warn!("Filter/Context update failed: Index out of bounds.");

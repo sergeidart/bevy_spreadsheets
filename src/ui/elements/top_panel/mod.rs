@@ -49,7 +49,7 @@ mod orchestrator {
         state: &mut EditorWindowState,
         registry: &mut SheetRegistry,
         sheet_writers: &mut SheetEventWriters<'w>, // Received as &mut
-        mut request_app_exit_writer: EventWriter<'w, RequestAppExit>,
+        mut _request_app_exit_writer: EventWriter<'w, RequestAppExit>,
         mut close_structure_writer: EventWriter<'w, crate::sheets::events::CloseStructureViewEvent>,
         runtime: &TokioTasksRuntime,
         session_api_key: &crate::SessionApiKey,
@@ -64,9 +64,17 @@ mod orchestrator {
                     // Back button (reserve width when hidden to prevent jumps)
                     let back_width = calc_button_width(ui_row, "⬅ Back");
                     let interact_h = ui_row.style().spacing.interact_size.y;
-                    if !state.virtual_structure_stack.is_empty() {
+                    let has_navigation = !state.virtual_structure_stack.is_empty() || !state.structure_navigation_stack.is_empty();
+                    if has_navigation {
                         if ui_row.add_sized([back_width, interact_h], egui::Button::new("⬅ Back")).clicked() {
-                            close_structure_writer.write(crate::sheets::events::CloseStructureViewEvent);
+                            // Priority: virtual structure navigation first, then real structure navigation
+                            if !state.virtual_structure_stack.is_empty() {
+                                close_structure_writer.write(crate::sheets::events::CloseStructureViewEvent);
+                            } else if let Some(nav_ctx) = state.structure_navigation_stack.pop() {
+                                // Navigate back to parent sheet
+                                state.selected_category = nav_ctx.parent_category;
+                                state.selected_sheet_name = Some(nav_ctx.parent_sheet_name);
+                            }
                         }
                         ui_row.add_space(6.0);
                     } else {
@@ -78,19 +86,9 @@ mod orchestrator {
                         state,
                         &*registry,
                     );
-                    // Right group: place App Exit at far-right by allocating the remaining width to a right-to-left child
-                    let remaining_w = ui_row.available_width();
-                    ui_row.allocate_ui_with_layout(
-                        egui::vec2(remaining_w, row_h),
-                        egui::Layout::right_to_left(egui::Align::Center),
-                        |r| {
-                            r.add_space(12.0);
-                            if r.add(egui::Button::new("❌ App Exit")).clicked() {
-                                info!("'App Exit' button clicked. Sending RequestAppExit event.");
-                                request_app_exit_writer.write(RequestAppExit);
-                            }
-                        },
-                    );
+                    // Right group was previously used for an explicit App Exit button.
+                    // In DB-focused mode, we hide the App Exit control from the UI.
+                    // Keep layout simple and avoid adding any right-aligned buttons here.
                 });
 
                 // Spacing between rows (slightly tighter)
@@ -337,7 +335,9 @@ mod orchestrator {
                                 }
                             }
                             if let Some(m) = meta_to_save {
-                                crate::sheets::systems::io::save::save_single_sheet(&*registry, &m);
+                                if m.category.is_none() {
+                                    crate::sheets::systems::io::save::save_single_sheet(&*registry, &m);
+                                }
                                 if let Some(rp) = &m.random_picker { trace!("Random Picker saved (top panel) mode={:?} weights={} exps={} mults={} summarizers={}", rp.mode, rp.weight_columns.len(), rp.weight_exponents.len(), rp.weight_multipliers.len(), rp.summarizer_columns.len()); }
                             }
                         }

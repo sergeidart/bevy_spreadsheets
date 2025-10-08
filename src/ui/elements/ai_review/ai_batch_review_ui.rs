@@ -488,6 +488,7 @@ pub(crate) fn draw_ai_batch_review_panel(
                 let mut new_accept = Vec::new();
                 let mut new_cancel = Vec::new();
                 let mut structure_nav_clicked: Option<(Option<usize>, Option<usize>, Vec<usize>)> = None;
+                let mut structure_quick_accept: Vec<(Option<usize>, Option<usize>, Vec<usize>)> = Vec::new();
 
                 // Clone structure reviews for reading (they're only needed for display, not mutation)
                 let ai_structure_reviews = state.ai_structure_reviews.clone();
@@ -558,6 +559,7 @@ pub(crate) fn draw_ai_batch_review_panel(
                         registry,
                         linked_column_options: &linked_column_options,
                         structure_nav_clicked: &mut structure_nav_clicked,
+                        structure_quick_accept: &mut structure_quick_accept,
                     },
                 );
 
@@ -577,6 +579,24 @@ pub(crate) fn draw_ai_batch_review_panel(
                     } else {
                         existing_cancel.extend(0..state.ai_row_reviews.len());
                         new_cancel.extend(0..state.ai_new_row_reviews.len());
+                    }
+                }
+
+                // Process quick accepts from context menu
+                for (parent_row, parent_new_row, path) in structure_quick_accept {
+                    if let Some(entry) = state.ai_structure_reviews.iter_mut().find(|sr| {
+                        sr.parent_row_index == parent_row.unwrap_or(usize::MAX)
+                        && sr.parent_new_row_index == parent_new_row
+                        && sr.structure_path == path
+                    }) {
+                        // Mark as accepted and decided
+                        entry.accepted = true;
+                        entry.rejected = false;
+                        entry.decided = true;
+                        // Use merged_rows if populated (contains user edits), otherwise use ai_rows
+                        if entry.merged_rows.is_empty() {
+                            entry.merged_rows = entry.ai_rows.clone();
+                        }
                     }
                 }
 

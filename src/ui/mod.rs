@@ -38,6 +38,7 @@ impl Plugin for EditorUiPlugin {
         app.init_resource::<UiFeedbackState>()
             // --- MODIFIED: Initialize EditorWindowState as a resource ---
             .init_resource::<EditorWindowState>()
+            .init_resource::<elements::popups::MigrationPopupState>()
             // Load UI prefs on startup
             .add_systems(Startup, load_ui_prefs_startup)
             .add_event::<OpenStructureViewEvent>()

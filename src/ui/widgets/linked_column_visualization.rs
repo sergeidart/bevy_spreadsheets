@@ -16,12 +16,14 @@ pub(super) fn add_linked_text_edit(
     // 1️⃣ Build the TextEdit widget, making it frameless
     let text_edit_widget = egui::TextEdit::singleline(input_text)
         .id(text_edit_id)
-        // .desired_width(f32::INFINITY) // Rely on add_sized in the caller
+        .desired_width(f32::INFINITY) // allow to expand within given size
         .hint_text("--Type or select--")
         .frame(false); // <-- MAKE TEXTEDIT FRAMELESS
 
-    // Use add_sized to fill available space provided by the calling frame/allocator
-    let response = ui.add_sized(ui.available_size(), text_edit_widget);
+    // Size text edit to match row height and available width of the container
+    let row_height = ui.style().spacing.interact_size.y; // standard row height
+    let size = egui::vec2(ui.available_width(), row_height);
+    let response = ui.add_sized(size, text_edit_widget);
 
     // Hover text and background color are handled by the caller (edit_cell_widget)
 

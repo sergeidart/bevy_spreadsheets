@@ -60,6 +60,7 @@ pub fn create_example_items_metadata() -> SheetMetadata {
         ai_active_schema_group: None,
         random_picker: None,
         structure_parent: None,
+        hidden: false,
         // --- END MODIFIED ---
     }
 }
@@ -104,6 +105,7 @@ pub fn create_simple_config_metadata() -> SheetMetadata {
         ai_active_schema_group: None,
         random_picker: None,
         structure_parent: None,
+        hidden: false,
         // --- END MODIFIED ---
     }
 }

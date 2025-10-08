@@ -646,7 +646,7 @@ pub(super) fn show_validator_section(
                             ui_k.label("(Optional context only, not overwritten)");
                         });
                     }
-                    ui.add(egui::Separator::default());
+                    // Removed separator between Key Column and Schema as requested
                     ui.label("Schema: choose source columns to copy into object fields.");
                     let (headers, _self_index) = meta_opt
                         .map(|m| {

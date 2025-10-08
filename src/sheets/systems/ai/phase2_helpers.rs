@@ -227,6 +227,11 @@ pub fn handle_deep_review_result_phase2(
                 return;
             };
 
+            // Mark Phase 2 as complete if we were expecting it
+            if state.ai_expecting_phase2_result {
+                state.ai_completed_tasks += 1;
+            }
+            
             if let Some(raw) = &ev.raw_response {
                 state.ai_raw_output_display = raw.clone();
                 let status = format!("Phase 2 complete - {} row(s) processed", rows.len());

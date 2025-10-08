@@ -124,7 +124,9 @@ pub fn apply_pending_structure_key_selection(
                         }
                         if changed {
                             let meta_clone = parent_meta.clone();
-                            save_single_sheet(registry.as_ref(), &meta_clone);
+                            if meta_clone.category.is_none() {
+                                save_single_sheet(registry.as_ref(), &meta_clone);
+                            }
                         }
                     }
                 }
@@ -190,7 +192,9 @@ pub fn apply_pending_structure_key_selection(
                     }
                     if changed {
                         let meta_clone = meta.clone();
-                        save_single_sheet(registry.as_ref(), &meta_clone);
+                        if meta_clone.category.is_none() {
+                            save_single_sheet(registry.as_ref(), &meta_clone);
+                        }
                     }
                 }
             }

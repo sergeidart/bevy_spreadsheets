@@ -142,13 +142,31 @@ fn handle_root_batch_result_phase1(
                 original_row_indices: ev.original_row_indices.clone(),
             });
 
-            // OPTIMIZATION: Skip Phase 2 if only one column is being processed
+            // OPTIMIZATION 1: Skip Phase 2 if only one column is being processed
             // With single column, there's no merge complexity, so use Phase 1 results directly
-            if ev.included_non_structure_columns.len() <= 1 {
-                info!(
-                    "SINGLE-COLUMN OPTIMIZATION: Skipping Phase 2 (only {} column(s)), using Phase 1 results directly",
-                    ev.included_non_structure_columns.len()
-                );
+            let skip_phase2_single_column = ev.included_non_structure_columns.len() <= 1;
+            
+            // OPTIMIZATION 2: Skip Phase 2 if in structure sheet and no planned structure paths
+            // When working within a real structure sheet directly, we don't need deep review
+            // since there are no parent structures to include in the context
+            let in_structure_sheet = !state.structure_navigation_stack.is_empty();
+            let skip_phase2_structure_context = in_structure_sheet && state.ai_planned_structure_paths.is_empty();
+            
+            if skip_phase2_single_column || skip_phase2_structure_context {
+                if skip_phase2_single_column {
+                    info!(
+                        "SINGLE-COLUMN OPTIMIZATION: Skipping Phase 2 (only {} column(s)), using Phase 1 results directly",
+                        ev.included_non_structure_columns.len()
+                    );
+                }
+                if skip_phase2_structure_context {
+                    info!(
+                        "STRUCTURE-CONTEXT OPTIMIZATION: Skipping Phase 2 (in structure view with no parent structures), using Phase 1 results directly"
+                    );
+                }
+                
+                // Phase 1 complete (and skipping Phase 2)
+                state.ai_completed_tasks += 1;
                 
                 // Process Phase 1 results directly as final results
                 let established_row_count = originals + duplicate_indices.len();
@@ -161,6 +179,11 @@ fn handle_root_batch_result_phase1(
                     feedback_writer,
                 );
             } else {
+                // Phase 1 complete, will trigger Phase 2
+                state.ai_completed_tasks += 1;
+                // Update total to include Phase 2
+                state.ai_total_tasks += 1;
+                
                 // Trigger Phase 2: Deep review call
                 phase2_helpers::trigger_phase2_deep_review(
                     state,

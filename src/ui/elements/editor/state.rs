@@ -124,6 +124,11 @@ pub struct EditorWindowState {
     // Stack of active virtual structure sheets (each represents a nested structure view)
     // Top of stack is current virtual sheet. Empty means not in structure view.
     pub virtual_structure_stack: Vec<VirtualStructureContext>,
+    
+    // NEW: Stack for real structure sheet navigation with hidden filters
+    // When user clicks a structure column cell, we push a context and navigate to the real structure sheet
+    // The filter is hidden and temporal - only active during this navigation path
+    pub structure_navigation_stack: Vec<StructureNavigationContext>,
 
     // Popups related to selected sheet
     pub show_rename_popup: bool,
@@ -160,6 +165,9 @@ pub struct EditorWindowState {
     pub new_sheet_name_input: String, // Re-using new_name_input is an option, but separate is cleaner
     pub new_sheet_target_category: Option<String>,
     pub new_sheet_show_validation_hint: bool,
+
+    // NEW: State for Add Table Popup (database mode)
+    pub show_add_table_popup: bool,
 
     // Category management UI state
     pub show_new_category_popup: bool,
@@ -237,6 +245,10 @@ pub struct EditorWindowState {
     pub ai_waiting_for_structure_results: bool,
     pub ai_structure_generation_counter: u64,
     pub ai_structure_active_generation: u64,
+    /// Total count of AI tasks for progress tracking (Phase 1 + Phase 2 + structures)
+    pub ai_total_tasks: usize,
+    /// Completed AI tasks for progress tracking
+    pub ai_completed_tasks: usize,
 
     // General Settings Popup
     pub show_settings_popup: bool,
@@ -324,6 +336,8 @@ pub struct EditorWindowState {
     pub toybox_mode: ToyboxMode,
     // App-wide FPS setting controlled from Settings popup
     pub fps_setting: FpsSetting,
+    // UI preference: show hidden sheets (persisted via AppSettings)
+    pub show_hidden_sheets: bool,
 
     // Throttled apply queue for Accept All (row_index, col_index, new_value)
     pub ai_throttled_apply_queue: VecDeque<ThrottledAiAction>,
@@ -341,6 +355,11 @@ pub struct EditorWindowState {
     pub ai_cached_included_columns_path: Vec<usize>,
     pub ai_cached_included_columns_dirty: bool,
     pub ai_cached_included_columns_valid: bool,
+    /// Cache for structure row counts in hover previews to avoid per-frame recomputation
+    /// Key: (category, structure_sheet_name, parent_row_index_in_root, structure_col_index, structure_path_len)
+    pub ui_structure_row_count_cache: std::collections::HashMap<(Option<String>, String, usize, usize, usize), usize>,
+    // Tracks the right edge of the last rendered header in content coordinates for Add Column placement
+    pub last_header_right_edge_x: f32,
 }
 
 impl Default for EditorWindowState {
@@ -349,6 +368,7 @@ impl Default for EditorWindowState {
             selected_category: None,
             selected_sheet_name: None,
             virtual_structure_stack: Vec::new(),
+            structure_navigation_stack: Vec::new(),
             show_rename_popup: false,
             rename_target_category: None,
             rename_target_sheet: String::new(),
@@ -376,6 +396,7 @@ impl Default for EditorWindowState {
             new_sheet_name_input: String::new(),
             new_sheet_target_category: None,
             new_sheet_show_validation_hint: false,
+            show_add_table_popup: false,
             show_new_category_popup: false,
             new_category_name_input: String::new(),
             show_delete_category_confirm_popup: false,
@@ -419,6 +440,8 @@ impl Default for EditorWindowState {
             ai_waiting_for_structure_results: false,
             ai_structure_generation_counter: 0,
             ai_structure_active_generation: 0,
+            ai_total_tasks: 0,
+            ai_completed_tasks: 0,
             show_settings_popup: false,
             settings_new_api_key_input: String::new(),
             was_settings_popup_open: false,
@@ -470,6 +493,7 @@ impl Default for EditorWindowState {
             show_toybox_menu: false,
             toybox_mode: ToyboxMode::Randomizer,
             fps_setting: FpsSetting::default(),
+            show_hidden_sheets: false,
             ai_throttled_apply_queue: VecDeque::new(),
             ai_batch_has_undecided_merge: false,
             show_ai_prompt_popup: false,
@@ -482,6 +506,8 @@ impl Default for EditorWindowState {
             ai_cached_included_columns_path: Vec::new(),
             ai_cached_included_columns_dirty: true,
             ai_cached_included_columns_valid: false,
+            ui_structure_row_count_cache: std::collections::HashMap::new(),
+            last_header_right_edge_x: 0.0,
         }
     }
 }
@@ -492,6 +518,22 @@ pub struct StructureParentContext {
     pub parent_sheet: String,
     pub parent_row: usize,
     pub parent_col: usize,
+}
+
+/// Navigation context for real structure sheets (not virtual)
+/// When navigating into a structure column, we open the real structure sheet
+/// with a hidden filter that shows only rows related to the parent row
+#[derive(Debug, Clone)]
+pub struct StructureNavigationContext {
+    /// The real structure sheet name (e.g., "TacticalFrontlines_Items")
+    pub structure_sheet_name: String,
+    /// Parent sheet information
+    pub parent_category: Option<String>,
+    pub parent_sheet_name: String,
+    /// Parent row's primary key value (for filtering)
+    pub parent_row_key: String,
+    /// Column name in parent that was clicked
+    pub parent_column_name: String,
 }
 
 #[derive(Debug, Clone)]
@@ -835,6 +877,8 @@ impl EditorWindowState {
         if self.ai_structure_results_expected < self.ai_structure_results_received {
             self.ai_structure_results_expected = self.ai_structure_results_received;
         }
+        // Increment completed tasks counter for progress tracking
+        self.ai_completed_tasks += 1;
         self.refresh_structure_waiting_state();
     }
 
@@ -873,6 +917,26 @@ impl EditorWindowState {
         self.ai_structure_new_row_token_counter =
             self.ai_structure_new_row_token_counter.saturating_add(1);
         token
+    }
+    
+    /// Returns true if we're currently viewing a structure sheet via navigation context
+    /// and should hide the technical id/parent_key columns (columns 0 and 1)
+    pub fn should_hide_structure_technical_columns(&self, category: &Option<String>, sheet_name: &str) -> bool {
+        self.structure_navigation_stack
+            .last()
+            .filter(|nav_ctx| &nav_ctx.structure_sheet_name == sheet_name && category == &nav_ctx.parent_category)
+            .is_some()
+    }
+    
+    /// Returns the list of visible column indices for the current sheet view
+    /// Hides column 0 (id) when viewing structure sheets via navigation, but shows Parent_key (col 1) as read-only
+    pub fn get_visible_column_indices(&self, category: &Option<String>, sheet_name: &str, total_columns: usize) -> Vec<usize> {
+        if self.should_hide_structure_technical_columns(category, sheet_name) {
+            // Skip only column 0 (id), keep Parent_key visible
+            (1..total_columns).collect()
+        } else {
+            (0..total_columns).collect()
+        }
     }
 }
 

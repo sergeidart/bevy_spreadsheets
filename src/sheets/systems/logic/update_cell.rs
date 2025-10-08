@@ -77,73 +77,140 @@ pub fn handle_cell_update(
             Ok(()) => {
                 if let Some(sheet_data) = registry.get_sheet_mut(&category, &sheet_name) {
                     if let Some(row) = sheet_data.grid.get_mut(row_idx) {
-                        if let Some(cell) = row.get_mut(col_idx) {
-                            if *cell != *new_value {
-                                let mut final_val = new_value.clone();
-                                // Normalize if structure column: wrap single object into array, ensure array of objects, remove legacy linkage keys
-                                if let Some(meta) = &sheet_data.metadata {
-                                    if let Some(col_def) = meta.columns.get(col_idx) {
-                                        if matches!(
-                                            col_def.validator,
-                                            Some(ColumnValidator::Structure)
-                                        ) {
-                                            if let Ok(parsed) =
-                                                serde_json::from_str::<serde_json::Value>(
-                                                    &final_val,
-                                                )
-                                            {
-                                                use serde_json::{Map, Value};
-                                                let mut arr: Vec<Value> = match parsed {
-                                                    Value::Object(o) => vec![Value::Object(o)],
-                                                    Value::Array(a) => a,
-                                                    other => {
-                                                        let mut m = Map::new();
-                                                        m.insert("value".into(), other);
-                                                        vec![Value::Object(m)]
+                        // Precompute column metadata details outside of the mutable cell borrow scope
+                        let (col_header, is_structure_col, looks_like_real_structure) = if let Some(meta) = &sheet_data.metadata {
+                            let header = meta
+                                .columns
+                                .get(col_idx)
+                                .map(|c| c.header.clone())
+                                .unwrap_or_default();
+                            let is_struct = meta
+                                .columns
+                                .get(col_idx)
+                                .map(|c| matches!(c.validator, Some(ColumnValidator::Structure)))
+                                .unwrap_or(false);
+                            let looks_like_struct = meta.columns.len() >= 2
+                                && meta.columns.get(0).map(|c| c.header.eq_ignore_ascii_case("id")).unwrap_or(false)
+                                && meta.columns.get(1).map(|c| c.header.eq_ignore_ascii_case("parent_key")).unwrap_or(false);
+                            (header, is_struct, looks_like_struct)
+                        } else {
+                            (String::new(), false, false)
+                        };
+
+                        let mut changed = false;
+                        let mut updated_val_for_db: Option<String> = None;
+
+                        // Narrow scope of the mutable borrow to avoid conflicts when later reading row id
+                        {
+                            if let Some(cell) = row.get_mut(col_idx) {
+                                if *cell != *new_value {
+                                    let mut final_val = new_value.clone();
+                                    // Normalize if structure column: wrap single object into array, ensure array of objects, remove legacy linkage keys
+                                    if let Some(meta) = &sheet_data.metadata {
+                                        if let Some(col_def) = meta.columns.get(col_idx) {
+                                            if matches!(
+                                                col_def.validator,
+                                                Some(ColumnValidator::Structure)
+                                            ) {
+                                                if let Ok(parsed) =
+                                                    serde_json::from_str::<serde_json::Value>(
+                                                        &final_val,
+                                                    )
+                                                {
+                                                    use serde_json::{Map, Value};
+                                                    let mut arr: Vec<Value> = match parsed {
+                                                        Value::Object(o) => vec![Value::Object(o)],
+                                                        Value::Array(a) => a,
+                                                        other => {
+                                                            let mut m = Map::new();
+                                                            m.insert("value".into(), other);
+                                                            vec![Value::Object(m)]
+                                                        }
+                                                    };
+                                                    for v in arr.iter_mut() {
+                                                        if let Value::Object(o) = v {
+                                                            o.remove("source_column_indices");
+                                                        }
                                                     }
-                                                };
-                                                for v in arr.iter_mut() {
-                                                    if let Value::Object(o) = v {
-                                                        o.remove("source_column_indices");
+                                                    final_val = Value::Array(arr).to_string();
+                                                } else {
+                                                    // If invalid JSON, store empty array
+                                                    final_val = "[]".to_string();
+                                                }
+                                            }
+                                        }
+                                    }
+                                    trace!(
+                                        "Updating cell [{},{}] in sheet '{:?}/{}' from '{}' to '{}'",
+                                        row_idx,
+                                        col_idx,
+                                        category,
+                                        sheet_name,
+                                        cell,
+                                        final_val
+                                    );
+                                    *cell = final_val.clone();
+                                    updated_val_for_db = Some(final_val);
+                                    changed = true;
+                                } else {
+                                    trace!("Cell value unchanged for '{:?}/{}' cell[{},{}]. Skipping update.", category, sheet_name, row_idx, col_idx);
+                                }
+                            } else {
+                                error!("Cell update failed for '{:?}/{}' cell[{},{}]: Column index invalid.", category, sheet_name, row_idx, col_idx);
+                            }
+                        }
+
+                        if changed {
+                            if let Some(metadata) = &sheet_data.metadata {
+                                let key = (category.clone(), sheet_name.clone());
+                                sheets_to_save.insert(key.clone(), metadata.clone());
+                                // Mark for revalidation
+                                sheets_to_revalidate.insert(key, ());
+
+                                data_modified_writer.write(SheetDataModifiedInRegistryEvent {
+                                    category: category.clone(),
+                                    sheet_name: sheet_name.clone(),
+                                });
+                                // Persist to DB for DB-backed sheets
+                                if let Some(cat) = &metadata.category {
+                                    let base = crate::sheets::systems::io::get_default_data_base_path();
+                                    let db_path = base.join(format!("{}.db", cat));
+                                    if db_path.exists() {
+                                        if let Ok(conn) = rusqlite::Connection::open(&db_path) {
+                                            if looks_like_real_structure {
+                                                // Skip id (0) and parent_key (1)
+                                                if col_idx >= 2 {
+                                                    // Safe to read id now as the mutable borrow to the cell is dropped
+                                                    let id_str_opt_from_row = row.get(0).cloned();
+                                                    if let (Some(id_str), Some(val)) = (id_str_opt_from_row, updated_val_for_db.as_ref()) {
+                                                        if let Ok(row_id) = id_str.parse::<i64>() {
+                                                            let _ = crate::sheets::database::writer::DbWriter::update_structure_cell_by_id(
+                                                                &conn,
+                                                                &sheet_name,
+                                                                row_id,
+                                                                &col_header,
+                                                                val,
+                                                            );
+                                                        }
                                                     }
                                                 }
-                                                final_val = Value::Array(arr).to_string();
-                                            } else {
-                                                // If invalid JSON, store empty array
-                                                final_val = "[]".to_string();
+                                            } else if !is_structure_col {
+                                                if let Some(val) = updated_val_for_db.as_ref() {
+                                                    let _ = crate::sheets::database::writer::DbWriter::update_cell(
+                                                        &conn,
+                                                        &sheet_name,
+                                                        row_idx,
+                                                        &col_header,
+                                                        val,
+                                                    );
+                                                }
                                             }
                                         }
                                     }
                                 }
-                                trace!(
-                                    "Updating cell [{},{}] in sheet '{:?}/{}' from '{}' to '{}'",
-                                    row_idx,
-                                    col_idx,
-                                    category,
-                                    sheet_name,
-                                    cell,
-                                    final_val
-                                );
-                                *cell = final_val;
-
-                                if let Some(metadata) = &sheet_data.metadata {
-                                    let key = (category.clone(), sheet_name.clone());
-                                    sheets_to_save.insert(key.clone(), metadata.clone());
-                                    // Mark for revalidation
-                                    sheets_to_revalidate.insert(key, ());
-
-                                    data_modified_writer.write(SheetDataModifiedInRegistryEvent {
-                                        category: category.clone(),
-                                        sheet_name: sheet_name.clone(),
-                                    });
-                                } else {
-                                    warn!("Cannot mark sheet '{:?}/{}' for save/revalidation after cell update: Metadata missing.", category, sheet_name);
-                                }
                             } else {
-                                trace!("Cell value unchanged for '{:?}/{}' cell[{},{}]. Skipping update.", category, sheet_name, row_idx, col_idx);
+                                warn!("Cannot mark sheet '{:?}/{}' for save/revalidation after cell update: Metadata missing.", category, sheet_name);
                             }
-                        } else {
-                            error!("Cell update failed for '{:?}/{}' cell[{},{}]: Column index invalid.", category, sheet_name, row_idx, col_idx);
                         }
                     } else {
                         error!(
@@ -259,7 +326,9 @@ pub fn handle_cell_update(
                 "Cell updated in '{:?}/{}', triggering immediate save.",
                 cat, name
             );
-            save_single_sheet(registry_immut, &metadata);
+            if metadata.category.is_none() {
+                save_single_sheet(registry_immut, &metadata);
+            }
         }
     }
 

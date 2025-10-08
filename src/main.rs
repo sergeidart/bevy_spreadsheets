@@ -78,7 +78,7 @@ fn main() {
             DefaultPlugins
                 .set(WindowPlugin {
                     primary_window: Some(Window {
-                        title: "Standalone Sheet Editor".into(),
+                        title: "SkylineDB - Spreadsheet Editor".into(),
                         ..default()
                     }),
                     ..default()
@@ -146,7 +146,11 @@ fn load_app_settings_startup(mut state: ResMut<EditorWindowState>) {
     // Best-effort: Load persisted AppSettings and populate UI state
     if let Ok(loaded) = settings::io::load_settings_from_file::<settings::AppSettings>() {
         state.fps_setting = loaded.fps_setting;
-        info!("Loaded app settings: fps_setting={:?}", state.fps_setting);
+        state.show_hidden_sheets = loaded.show_hidden_sheets;
+        info!(
+            "Loaded app settings: fps_setting={:?}, show_hidden_sheets={}",
+            state.fps_setting, state.show_hidden_sheets
+        );
     } else {
         info!("No persisted app settings found; using defaults.");
     }
@@ -158,6 +162,7 @@ fn initialize_api_key_status_startup(
     mut session_api_key: ResMut<SessionApiKey>,
 ) {
     // Only try to load from Windows Credential Manager
+    // Use the same keyring service as Settings & Python (consistency avoids needing to open Settings once)
     if let Ok(keyring) = keyring::Entry::new("GoogleGeminiAPI", whoami::username().as_str()) {
         match keyring.get_password() {
             Ok(cred) if !cred.is_empty() => {

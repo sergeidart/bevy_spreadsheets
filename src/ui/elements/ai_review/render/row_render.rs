@@ -1,4 +1,4 @@
-use super::cell_render::{render_review_ai_cell, render_review_ai_cell_linked, render_review_choice_cell, render_review_original_cell};
+use super::cell_render::{render_ai_choice_toggle, render_original_choice_toggle, render_review_ai_cell, render_review_ai_cell_linked, render_review_original_cell};
 use crate::sheets::definitions::SheetMetadata;
 use crate::sheets::resources::SheetRegistry;
 use crate::ui::common::{generate_structure_preview, generate_structure_preview_from_rows};
@@ -20,6 +20,7 @@ pub enum RowBlock {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RowKind { Existing, NewPlain, NewDuplicate }
 
+#[allow(unused)]
 pub struct RowContext<'a> {
     pub state: &'a mut EditorWindowState,
     pub ancestor_key_columns: &'a [(String, String)],
@@ -36,6 +37,9 @@ pub struct RowContext<'a> {
     pub registry: &'a SheetRegistry,
     pub linked_column_options: &'a std::collections::HashMap<usize, std::sync::Arc<HashSet<String>>>,
     pub structure_nav_clicked: &'a mut Option<(Option<usize>, Option<usize>, Vec<usize>)>,
+    /// Track structures that should be directly accepted via right-click context menu
+    /// Stores (parent_row_index, parent_new_row_index, structure_path) tuples
+    pub structure_quick_accept: &'a mut Vec<(Option<usize>, Option<usize>, Vec<usize>)>,
 }
 
 /// Helper function to get the appropriate rows for structure preview.
@@ -216,10 +220,17 @@ pub fn render_rows(body: &mut TableBody, mut ctx: RowContext) {
 fn render_original_preview_row(row: &mut egui_extras::TableRow, idx: usize, kind: RowKind, ctx: &mut RowContext) {
     match kind {
         RowKind::Existing => { if let Some(rr) = ctx.state.ai_row_reviews.get(idx) { 
+            // Extract data before checking undecided structures
+            let row_index = rr.row_index;
+            let non_structure_columns = rr.non_structure_columns.clone();
+            let original = rr.original.clone();
+            let ai = rr.ai.clone();
+            
             // Check if this row has any undecided structures in the current context
             let has_undecided_structures = has_undecided_structures_in_context(
-                ctx, Some(rr.row_index), None
+                ctx, Some(row_index), None
             );
+            
             row.col(|ui| { 
                 let btn = ui.add_enabled(!has_undecided_structures, egui::Button::new("Accept"));
                 if btn.clicked() && !has_undecided_structures { ctx.existing_accept.push(idx); } 
@@ -232,7 +243,7 @@ fn render_original_preview_row(row: &mut egui_extras::TableRow, idx: usize, kind
             for col_entry in ctx.merged_columns { row.col(|ui| match col_entry { 
                 ColumnEntry::Structure(col_idx) => {
                     let (preview, parse_failed, is_ai_added) = get_original_structure_preview_from_cache(
-                        ctx, Some(rr.row_index), None, *col_idx
+                        ctx, Some(row_index), None, *col_idx
                     );
                     if is_ai_added {
                         ui.colored_label(Color32::LIGHT_BLUE, "(AI added)");
@@ -242,11 +253,31 @@ fn render_original_preview_row(row: &mut egui_extras::TableRow, idx: usize, kind
                     }
                 } 
                 ColumnEntry::Regular(actual_col) => { 
-                    let pos = rr.non_structure_columns.iter().position(|c| c==actual_col); 
-                    let orig_val = pos.and_then(|p| rr.original.get(p)).map(|s| s.as_str()).unwrap_or(""); 
-                    let ai_val = pos.and_then(|p| rr.ai.get(p)).map(|s| s.as_str()); 
-                    let choice = pos.and_then(|p| rr.choices.get(p)).copied(); 
-                    render_review_original_cell(ui, orig_val, ai_val, choice); 
+                    // Check if in structure detail mode and this is parent_key column (index 1)
+                    let in_structure_detail = ctx.state.ai_structure_detail_context.is_some();
+                    let is_parent_key_col = in_structure_detail && *actual_col == 1;
+                    
+                    if is_parent_key_col {
+                        // Render parent_key as green non-editable label
+                        let pos = non_structure_columns.iter().position(|c| c==actual_col);
+                        let orig_val = pos.and_then(|p| original.get(p)).map(|s| s.as_str()).unwrap_or("");
+                        ui.colored_label(Color32::from_rgb(0, 150, 0), orig_val);
+                    } else {
+                        let pos = non_structure_columns.iter().position(|c| c==actual_col); 
+                        let orig_val = pos.and_then(|p| original.get(p)).map(|s| s.as_str()).unwrap_or(""); 
+                        let ai_val = pos.and_then(|p| ai.get(p)).map(|s| s.as_str()); 
+                        
+                        let rr = ctx.state.ai_row_reviews.get(idx).unwrap();
+                        let choice = pos.and_then(|p| rr.choices.get(p)).copied(); 
+                        // Text left, toggle right
+                        // Text on the left, Orig indicator aligned to the far right
+                        ui.columns(2, |cols| {
+                            cols[0].horizontal(|u| { render_review_original_cell(u, orig_val, ai_val, choice); });
+                            cols[1].with_layout(egui::Layout::right_to_left(egui::Align::Center), |u| {
+                                render_original_choice_toggle(u, choice, orig_val, ai_val);
+                            });
+                        });
+                    }
                 } 
             }); } 
         } }
@@ -307,9 +338,10 @@ fn render_original_preview_row(row: &mut egui_extras::TableRow, idx: usize, kind
                 let original_for_merge = nr.original_for_merge.clone();
                 let non_structure_columns = nr.non_structure_columns.clone();
                 let choices = nr.choices.clone();
+                let ai_values = nr.ai.clone();
                 
-                let nr = ctx.state.ai_new_row_reviews.get_mut(idx).unwrap();
                 row.col(|ui| {
+                    let nr = ctx.state.ai_new_row_reviews.get_mut(idx).unwrap();
                     if !merge_decided {
                         if ui.radio(merge_selected, "Merge").clicked() {
                             nr.merge_selected = true;
@@ -324,12 +356,15 @@ fn render_original_preview_row(row: &mut egui_extras::TableRow, idx: usize, kind
                         }
                     }
                 });
-                for _ in ctx.ancestor_key_columns { row.col(|ui| { ui.add_space(0.0); }); }
+                let ancestor_key_count = ctx.ancestor_key_columns.len();
+                let merged_cols = ctx.merged_columns.to_vec(); // Clone the slice to a vec
+                
+                for _ in 0..ancestor_key_count { row.col(|ui| { ui.add_space(0.0); }); }
                 // Treat all states except separate-decided (merge_decided && !merge_selected) as a legitimate row needing original structure preview.
                 let treat_as_regular = !merge_decided || merge_selected;
 
                 if treat_as_regular {
-                    for col_entry in ctx.merged_columns {
+                    for col_entry in &merged_cols {
                         row.col(|ui| match col_entry {
                             ColumnEntry::Structure(col_idx) => {
                                 // Use unified cache for duplicate row structure preview
@@ -352,12 +387,33 @@ fn render_original_preview_row(row: &mut egui_extras::TableRow, idx: usize, kind
                                 }
                             }
                             ColumnEntry::Regular(actual_col) => {
-                                if let Some(orig_vec) = original_for_merge.as_ref() {
+                                // Check if in structure detail mode and this is parent_key column (index 1)
+                                let in_structure_detail = ctx.state.ai_structure_detail_context.is_some();
+                                let is_parent_key_col = in_structure_detail && *actual_col == 1;
+                                
+                                if is_parent_key_col {
+                                    // Render parent_key as green non-editable label
+                                    if let Some(orig_vec) = original_for_merge.as_ref() {
+                                        if let Some(pos) = non_structure_columns.iter().position(|c| c==actual_col) {
+                                            let orig_val = orig_vec.get(pos).cloned().unwrap_or_default();
+                                            ui.colored_label(Color32::from_rgb(0, 150, 0), orig_val);
+                                        }
+                                    }
+                                } else if let Some(orig_vec) = original_for_merge.as_ref() {
                                     if let Some(pos) = non_structure_columns.iter().position(|c| c==actual_col) {
                                         let orig_val = orig_vec.get(pos).cloned().unwrap_or_default();
-                                        let mut struck = false;
-                                        if merge_decided && merge_selected { if let Some(choices_vec)=choices.as_ref() { if let Some(choice)=choices_vec.get(pos) { if matches!(choice, ReviewChoice::AI) { ui.label(RichText::new(orig_val.clone()).strikethrough()); struck = true; } } } }
-                                        if !struck { ui.label(orig_val); }
+                                        ui.horizontal(|ui| {
+                                            let mut struck = false;
+                                            if merge_decided && merge_selected { if let Some(choices_vec)=choices.as_ref() { if let Some(choice)=choices_vec.get(pos) { if matches!(choice, ReviewChoice::AI) { ui.label(RichText::new(orig_val.clone()).strikethrough()); struck = true; } } } }
+                                            if !struck { ui.label(orig_val.clone()); }
+                                            ui.add_space(4.0);
+                                            // Show Orig toggle if merge decided and selected
+                                            if merge_decided && merge_selected {
+                                                let ai_val = ai_values.get(pos).map(|s| s.as_str());
+                                                let choice = choices.as_ref().and_then(|c| c.get(pos)).copied();
+                                                render_original_choice_toggle(ui, choice, &orig_val, ai_val);
+                                            }
+                                        });
                                     } else { ui.label(""); }
                                 } else { ui.label("?"); }
                             }
@@ -365,7 +421,7 @@ fn render_original_preview_row(row: &mut egui_extras::TableRow, idx: usize, kind
                     }
                 } else {
                     // Separate-decided state: keep placeholders (acts like new separate row original preview is not relevant)
-                    for _ in ctx.merged_columns { row.col(|ui| { ui.label(""); }); }
+                    for _ in 0..merged_cols.len() { row.col(|ui| { ui.label(""); }); }
                 }
             }
         }
@@ -376,15 +432,16 @@ fn render_ai_suggested_row(row: &mut egui_extras::TableRow, idx: usize, kind: Ro
     match kind {
         RowKind::Existing => {
             if let Some(rr) = ctx.state.ai_row_reviews.get(idx) {
-                // Extract row_index before borrowing ctx immutably
+                // Extract row_index and non_structure_columns before borrowing
                 let row_index = rr.row_index;
+                let non_structure_columns = rr.non_structure_columns.clone();
+                let original = rr.original.clone();
                 
                 // Check if this row has any undecided structures in the current context
                 let has_undecided_structures = has_undecided_structures_in_context(
                     ctx, Some(row_index), None
                 );
                 
-                let rr = ctx.state.ai_row_reviews.get_mut(idx).unwrap();
                 row.col(|ui| { 
                     let btn = ui.add_enabled(!has_undecided_structures, egui::Button::new("Cancel"));
                     if btn.clicked() && !has_undecided_structures { ctx.existing_cancel.push(idx); } 
@@ -400,7 +457,7 @@ fn render_ai_suggested_row(row: &mut egui_extras::TableRow, idx: usize, kind: Ro
                             ColumnEntry::Structure(col_idx) => {
                                 // When in structure detail mode, match nested structures by checking if their path extends the current path
                                 let sr = ctx.ai_structure_reviews.iter().find(|sr| {
-                                    sr.parent_row_index == rr.row_index 
+                                    sr.parent_row_index == row_index 
                                     && sr.parent_new_row_index.is_none() 
                                     && if let Some(detail_ctx) = ctx.state.ai_structure_detail_context.as_ref() {
                                         // In structure detail mode: match structures whose path starts with current path + this column
@@ -429,9 +486,21 @@ fn render_ai_suggested_row(row: &mut egui_extras::TableRow, idx: usize, kind: Ro
                                     let mut btn = egui::Button::new(btn_txt);
                                     if let Some(color) = btn_color { btn = btn.fill(color); }
                                     // Only allow clicking if structure is NOT decided
-                                    let btn_response = ui.add_enabled(!sr.decided, btn);
+                                    // Use full width like the main editor for better visual consistency
+                                    let btn_response = ui.add_enabled_ui(!sr.decided, |btn_ui| {
+                                        btn_ui.add_sized(btn_ui.available_size(), btn)
+                                    }).inner;
                                     if btn_response.clicked() && !sr.decided {
-                                        *ctx.structure_nav_clicked = Some((Some(rr.row_index), None, sr.structure_path.clone()));
+                                        *ctx.structure_nav_clicked = Some((Some(row_index), None, sr.structure_path.clone()));
+                                    }
+                                    // Add context menu for quick accept (only if not decided and not in detail mode)
+                                    if !sr.decided && ctx.state.ai_structure_detail_context.is_none() {
+                                        btn_response.context_menu(|menu_ui| {
+                                            if menu_ui.button("✓ Accept Structure").clicked() {
+                                                ctx.structure_quick_accept.push((Some(row_index), None, sr.structure_path.clone()));
+                                                menu_ui.close_menu();
+                                            }
+                                        });
                                     }
                                     if sr.decided {
                                         btn_response.on_hover_text("Structure already decided");
@@ -441,21 +510,47 @@ fn render_ai_suggested_row(row: &mut egui_extras::TableRow, idx: usize, kind: Ro
                                 }
                             }
                             ColumnEntry::Regular(actual_col) => {
-                                if let Some(pos)= rr.non_structure_columns.iter().position(|c| c==actual_col) {
-                                    let orig_val = rr.original.get(pos).map(|s| s.as_str()).unwrap_or("");
+                                let pos = non_structure_columns.iter().position(|c| c==actual_col);
+                                if let Some(p) = pos {
+                                    // Check if in structure detail mode and this is parent_key column (index 1)
+                                    let in_structure_detail = ctx.state.ai_structure_detail_context.is_some();
+                                    let is_parent_key_col = in_structure_detail && *actual_col == 1;
                                     
-                                    let changed = if let Some(allowed_values) = ctx.linked_column_options.get(actual_col) {
-                                        if let Some(ai_val) = rr.ai.get_mut(pos) {
-                                            let cell_id = ui.id().with(("ai_linked_cell", rr.row_index, *actual_col, pos));
-                                            render_review_ai_cell_linked(ui, orig_val, ai_val, allowed_values, cell_id)
+                                    if is_parent_key_col {
+                                        // Render parent_key as green non-editable label
+                                        let rr = ctx.state.ai_row_reviews.get(idx).unwrap();
+                                        if let Some(ai_val) = rr.ai.get(p) {
+                                            ui.colored_label(Color32::from_rgb(0, 150, 0), ai_val);
                                         } else {
-                                            false
+                                            ui.label("");
                                         }
                                     } else {
-                                        render_review_ai_cell(ui, orig_val, rr.ai.get_mut(pos))
-                                    };
-                                    
-                                    if changed { if let Some(choice)= rr.choices.get_mut(pos) { *choice = ReviewChoice::AI; } }
+                                        let orig_val = original.get(p).map(|s| s.as_str()).unwrap_or("");
+                                        
+                                        let rr = ctx.state.ai_row_reviews.get_mut(idx).unwrap();
+                                        ui.horizontal(|ui| {
+                                            // Left: text editor
+                                            let changed = if let Some(allowed_values) = ctx.linked_column_options.get(actual_col) {
+                                                if let Some(ai_val) = rr.ai.get_mut(p) {
+                                                    let cell_id = ui.id().with(("ai_linked_cell", row_index, *actual_col, p));
+                                                    render_review_ai_cell_linked(ui, orig_val, ai_val, allowed_values, cell_id)
+                                                } else {
+                                                    false
+                                                }
+                                            } else {
+                                                render_review_ai_cell(ui, orig_val, rr.ai.get_mut(p))
+                                            };
+
+                                            // Right: AI toggle
+                                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |u| {
+                                                let ai_val_for_toggle = rr.ai.get(p).map(|s| s.as_str());
+                                                let choice_mut = rr.choices.get_mut(p);
+                                                let _ = render_ai_choice_toggle(u, choice_mut, orig_val, ai_val_for_toggle);
+                                            });
+
+                                            if changed { if let Some(choice)= rr.choices.get_mut(p) { *choice = ReviewChoice::AI; } }
+                                        });
+                                    }
                                 } else { ui.label(""); }
                             }
                         }
@@ -501,9 +596,21 @@ fn render_ai_suggested_row(row: &mut egui_extras::TableRow, idx: usize, kind: Ro
                                     };
                                     let mut btn = egui::Button::new(btn_txt);
                                     if let Some(color) = btn_color { btn = btn.fill(color); }
-                                    let btn_response = ui.add_enabled(!sr.decided, btn);
+                                    // Use full width like the main editor for better visual consistency
+                                    let btn_response = ui.add_enabled_ui(!sr.decided, |btn_ui| {
+                                        btn_ui.add_sized(btn_ui.available_size(), btn)
+                                    }).inner;
                                     if btn_response.clicked() && !sr.decided {
                                         *ctx.structure_nav_clicked = Some((None, Some(idx), sr.structure_path.clone()));
+                                    }
+                                    // Add context menu for quick accept (only if not decided and not in detail mode)
+                                    if !sr.decided && ctx.state.ai_structure_detail_context.is_none() {
+                                        btn_response.context_menu(|menu_ui| {
+                                            if menu_ui.button("✓ Accept Structure").clicked() {
+                                                ctx.structure_quick_accept.push((None, Some(idx), sr.structure_path.clone()));
+                                                menu_ui.close_menu();
+                                            }
+                                        });
                                     }
                                     if sr.decided {
                                         btn_response.on_hover_text("Structure already decided");
@@ -519,7 +626,8 @@ fn render_ai_suggested_row(row: &mut egui_extras::TableRow, idx: usize, kind: Ro
                                             let cell_id = ui.id().with(("ai_linked_new_plain", idx, *actual_col, pos));
                                             render_review_ai_cell_linked(ui, "", cell, allowed_values, cell_id);
                                         } else {
-                                            ui.add(egui::TextEdit::singleline(cell).desired_width(f32::INFINITY));
+                                            // Avoid per-frame column growth
+                                            ui.add(egui::TextEdit::singleline(cell).desired_width(ui.available_width()));
                                         }
                                     } else { ui.label(""); }
                                 } else {
@@ -539,6 +647,8 @@ fn render_ai_suggested_row(row: &mut egui_extras::TableRow, idx: usize, kind: Ro
                 let match_row = nr.duplicate_match_row;
                 let merge_decided = nr.merge_decided;
                 let merge_selected = nr.merge_selected;
+                let non_structure_columns = nr.non_structure_columns.clone();
+                let original_for_merge = nr.original_for_merge.clone();
                 
                 // Check if this new duplicate row has any undecided structures in the current context
                 // We need to check both the new row and its matched existing row
@@ -547,8 +657,8 @@ fn render_ai_suggested_row(row: &mut egui_extras::TableRow, idx: usize, kind: Ro
                         has_undecided_structures_in_context(ctx, Some(row_idx), None)
                     );
                 
-                let nr = ctx.state.ai_new_row_reviews.get_mut(idx).unwrap();
                 row.col(|ui| {
+                    let nr = ctx.state.ai_new_row_reviews.get_mut(idx).unwrap();
                     if merge_decided {
                         let btn = ui.add_enabled(!has_undecided_structures, egui::Button::new("Cancel"));
                         if btn.clicked() && !has_undecided_structures {
@@ -598,9 +708,21 @@ fn render_ai_suggested_row(row: &mut egui_extras::TableRow, idx: usize, kind: Ro
                                     };
                                     let mut btn = egui::Button::new(btn_txt);
                                     if let Some(color) = btn_color { btn = btn.fill(color); }
-                                    let btn_response = ui.add_enabled(!sr.decided, btn);
+                                    // Use full width like the main editor for better visual consistency
+                                    let btn_response = ui.add_enabled_ui(!sr.decided, |btn_ui| {
+                                        btn_ui.add_sized(btn_ui.available_size(), btn)
+                                    }).inner;
                                     if btn_response.clicked() && !sr.decided {
                                         *ctx.structure_nav_clicked = Some((None, Some(idx), sr.structure_path.clone()));
+                                    }
+                                    // Add context menu for quick accept (only if not decided and not in detail mode)
+                                    if !sr.decided && ctx.state.ai_structure_detail_context.is_none() {
+                                        btn_response.context_menu(|menu_ui| {
+                                            if menu_ui.button("✓ Accept Structure").clicked() {
+                                                ctx.structure_quick_accept.push((None, Some(idx), sr.structure_path.clone()));
+                                                menu_ui.close_menu();
+                                            }
+                                        });
                                     }
                                     if sr.decided {
                                         btn_response.on_hover_text("Structure already decided");
@@ -610,14 +732,28 @@ fn render_ai_suggested_row(row: &mut egui_extras::TableRow, idx: usize, kind: Ro
                                 }
                             }
                             ColumnEntry::Regular(actual_col) => {
-                                if let Some(pos)= nr.non_structure_columns.iter().position(|c| c==actual_col) {
-                                    if let Some(cell)= nr.ai.get_mut(pos) {
-                                        if let Some(allowed_values) = ctx.linked_column_options.get(actual_col) {
-                                            let cell_id = ui.id().with(("ai_linked_new_dup", idx, *actual_col, pos));
-                                            render_review_ai_cell_linked(ui, "", cell, allowed_values, cell_id);
-                                        } else {
-                                            ui.add(egui::TextEdit::singleline(cell).desired_width(f32::INFINITY));
-                                        }
+                                let pos = non_structure_columns.iter().position(|c| c==actual_col);
+                                if let Some(p) = pos {
+                                    let nr = ctx.state.ai_new_row_reviews.get_mut(idx).unwrap();
+                                    if let Some(cell)= nr.ai.get_mut(p) {
+                                        ui.horizontal(|ui| {
+                                            // Show AI toggle if merge decided and selected
+                                            if merge_decided && merge_selected {
+                                                let orig_val = original_for_merge.as_ref().and_then(|o| o.get(p)).map(|s| s.as_str()).unwrap_or("");
+                                                let ai_val = Some(cell.as_str());
+                                                let choice_mut = nr.choices.as_mut().and_then(|c| c.get_mut(p));
+                                                let _ = render_ai_choice_toggle(ui, choice_mut, orig_val, ai_val);
+                                                ui.add_space(4.0);
+                                            }
+                                            
+                                            if let Some(allowed_values) = ctx.linked_column_options.get(actual_col) {
+                                                let cell_id = ui.id().with(("ai_linked_new_dup", idx, *actual_col, p));
+                                                render_review_ai_cell_linked(ui, "", cell, allowed_values, cell_id);
+                                            } else {
+                                                // Avoid per-frame column growth
+                                                ui.add(egui::TextEdit::singleline(cell).desired_width(ui.available_width()));
+                                            }
+                                        });
                                     } else { ui.label(""); }
                                 } else {
                                     // Column is in schema but not in data
@@ -640,7 +776,7 @@ fn render_status_row(
 ) {
     match kind {
         RowKind::Existing => {
-            if let Some(rr) = ctx.state.ai_row_reviews.get_mut(idx) {
+            if let Some(_rr) = ctx.state.ai_row_reviews.get_mut(idx) {
                 row.col(|ui| { ui.add_space(2.0); });
                 for _ in ctx.ancestor_key_columns {
                     row.col(|ui| { ui.label(""); });
@@ -649,18 +785,9 @@ fn render_status_row(
                     row.col(|ui| {
                         match col_entry {
                             ColumnEntry::Structure(_) => { ui.label(""); },
-                            ColumnEntry::Regular(actual_col) => {
-                                if let Some(pos) = rr.non_structure_columns.iter().position(|c| c == actual_col) {
-                                    let orig_val = rr.original.get(pos).map(|s| s.as_str()).unwrap_or("");
-                                    let ai_val = rr.ai.get(pos).map(|s| s.as_str());
-                                    if let Some(choice) = rr.choices.get_mut(pos) {
-                                        let _changed = render_review_choice_cell(ui, Some(choice), orig_val, ai_val);
-                                    } else {
-                                        ui.label("");
-                                    }
-                                } else {
-                                    ui.label("");
-                                }
+                            ColumnEntry::Regular(_actual_col) => {
+                                // Toggles now shown in Original/AI rows, nothing to show here
+                                ui.label("");
                             }
                         }
                     });
@@ -723,20 +850,9 @@ fn render_status_row(
                                         ui.label("");
                                     }
                                 },
-                                ColumnEntry::Regular(actual_col) => {
-                                    if let Some(pos) = nr.non_structure_columns.iter().position(|c| c == actual_col) {
-                                        if nr.merge_selected && nr.merge_decided {
-                                            if let (Some(orig_vec), Some(choices)) = (nr.original_for_merge.as_ref(), nr.choices.as_mut()) {
-                                                let orig_val = orig_vec.get(pos).cloned().unwrap_or_default();
-                                                let ai_val = nr.ai.get(pos).map(|s| s.as_str());
-                                                if let Some(choice_ref) = choices.get_mut(pos) {
-                                                    let _changed = render_review_choice_cell(ui, Some(choice_ref), &orig_val, ai_val);
-                                                } else { ui.label(""); }
-                                            } else { ui.label(""); }
-                                        } else {
-                                            ui.label("");
-                                        }
-                                    } else { ui.label(""); }
+                                ColumnEntry::Regular(_actual_col) => {
+                                    // Toggles now shown in Original/AI rows, nothing to show here
+                                    ui.label("");
                                 }
                             }
                         });

@@ -16,13 +16,13 @@ pub fn show_new_category_popup(
     let mut create_clicked = false;
     let mut cancel_clicked = false;
 
-    egui::Window::new("Create New Category")
+    egui::Window::new("Create New Database")
         .collapsible(false)
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .open(&mut open)
         .show(ctx, |ui| {
-            ui.label("Enter a category (folder) name:");
+            ui.label("Enter a database name (without .db extension):");
             let resp = ui.add(
                 egui::TextEdit::singleline(&mut state.new_category_name_input).desired_width(220.0),
             );
@@ -78,7 +78,7 @@ pub fn show_delete_category_confirm_popups(
         let mut proceed = false;
         let mut cancel = false;
         let name = state.delete_category_name.clone().unwrap_or_default();
-        egui::Window::new("Delete Category?")
+        egui::Window::new("Delete Database?")
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
@@ -87,14 +87,14 @@ pub fn show_delete_category_confirm_popups(
                 ui.colored_label(
                     egui::Color32::YELLOW,
                     format!(
-                        "You're about to delete the category '{}' and all its sheets.",
+                        "You're about to delete the database '{}' and all its tables.",
                         name
                     ),
                 );
                 ui.label("This will remove:");
-                ui.label(" • All sheets under this category from the registry");
-                ui.label(" • All associated JSON files on disk (grid and metadata)");
-                ui.label(" • Any nested structure references within those sheets");
+                ui.label(" • All tables (sheets) in this database");
+                ui.label(" • The entire database file from disk");
+                ui.label(" • All data will be permanently lost");
                 ui.separator();
                 ui.horizontal(|ui_h| {
                     if ui_h
@@ -123,7 +123,7 @@ pub fn show_delete_category_confirm_popups(
         let mut really_delete = false;
         let mut cancel = false;
         let name = state.delete_category_name.clone().unwrap_or_default();
-        egui::Window::new("Really delete category?")
+        egui::Window::new("Really delete database?")
             .collapsible(false)
             .resizable(false)
             .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
@@ -132,7 +132,7 @@ pub fn show_delete_category_confirm_popups(
                 ui.colored_label(
                     egui::Color32::RED,
                     format!(
-                        "This is permanent: '{}' and all its sheets will be deleted.",
+                        "This is permanent: Database '{}' and all its tables will be deleted.",
                         name
                     ),
                 );

@@ -5,8 +5,8 @@ use std::io::{self, BufReader, BufWriter, ErrorKind};
 use std::path::PathBuf;
 
 const QUALIFIER: &str = "com";
-const ORGANIZATION: &str = "BevyAppOrg";
-const APPLICATION: &str = "BevySpreadsheetsApp";
+const ORGANIZATION: &str = "SkylineApps";
+const APPLICATION: &str = "SkylineDB";
 const CONFIG_FILE: &str = "app_settings.json";
 
 fn get_config_path() -> io::Result<PathBuf> {

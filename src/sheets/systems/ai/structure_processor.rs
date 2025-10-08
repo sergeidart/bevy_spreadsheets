@@ -15,6 +15,16 @@ use pyo3::prelude::*;
 use pyo3::types::PyString;
 use std::ffi::CString;
 
+/// Rewrite the Python processor file to ensure it's up to date before execution
+fn rewrite_python_processor() {
+    const AI_PROCESSOR_PY: &str = include_str!("../../../../script/ai_processor.py");
+    let script_path = std::path::Path::new("script/ai_processor.py");
+    if let Some(parent) = script_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(script_path, AI_PROCESSOR_PY);
+}
+
 /// System that processes queued structure jobs and spawns AI tasks
 pub fn process_structure_ai_jobs(
     mut state: ResMut<EditorWindowState>,
@@ -717,25 +727,29 @@ pub fn process_structure_ai_jobs(
         total_rows
     );
 
-    // Build payload using the same BatchPayload struct as regular requests
+    // Build payload using FLAT rows (no parent_groups)
     let structure_label = job.label.as_deref().unwrap_or("structure");
     let user_prompt = format!(
-        "Fill in the missing structure data for '{}'. Provide complete and accurate information for each field based on the context.",
+        "Fill in or correct the '{}' rows. Return a JSON array of row arrays matching column contexts.",
         structure_label
     );
+
+    // Flatten rows from all parent groups (we'll provide partitions separately in context)
+    let rows_data: Vec<Vec<String>> = parent_groups
+        .iter()
+        .flat_map(|g| g.rows.clone())
+        .collect();
 
     let payload = BatchPayload {
         ai_model_id: default_ai_model_id(),
         general_sheet_rule: root_meta.ai_general_rule.clone(),
         column_contexts,
-        rows_data: Vec::new(), // Empty for structure requests - use parent_groups instead
+        rows_data,
         requested_grounding_with_google_search: root_meta.requested_grounding_with_google_search.unwrap_or(false),
         allow_row_additions,
-        // For structures, don't use key prefix (legacy approach)
         key_prefix_count: None,
         key_prefix_headers: None,
-        // Use grouped parent-child structure for clarity
-        parent_groups: Some(parent_groups),
+        parent_groups: None,
         user_prompt,
     };
 
@@ -755,6 +769,9 @@ pub fn process_structure_ai_jobs(
         state.add_ai_call_log(status, None, Some(pretty_payload), false);
     }
 
+    // Rewrite Python processor file to ensure it's up to date
+    rewrite_python_processor();
+    
     // Clone data for the async task
     let api_key_for_task = session_api_key.0.clone();
     // For structure batches, included_cols should be the actual indices of included fields

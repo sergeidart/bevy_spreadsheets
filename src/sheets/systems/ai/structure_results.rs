@@ -445,6 +445,7 @@ mod tests {
             ai_active_schema_group: None,
             random_picker: None,
             structure_parent: None,
+            hidden: false,
         };
         let sheet = crate::sheets::definitions::SheetGridData { grid: vec![vec![json.to_string()]], metadata: Some(meta) };
 

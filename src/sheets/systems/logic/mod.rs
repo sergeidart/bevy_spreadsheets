@@ -17,6 +17,7 @@ pub mod update_cell;
 pub mod update_column_name;
 pub mod update_column_validator;
 pub mod update_render_cache;
+pub mod migrate_inline_structures;
 
 pub use add_column::handle_add_column_request;
 pub use add_row::handle_add_row_request;
@@ -44,3 +45,5 @@ pub use update_cell::handle_cell_update;
 pub use update_column_name::handle_update_column_name;
 pub use update_column_validator::handle_update_column_validator;
 pub use update_render_cache::handle_sheet_render_cache_update;
+pub use migrate_inline_structures::migrate_inline_structure_data;
+pub use migrate_inline_structures::run_inline_structure_migration_once;

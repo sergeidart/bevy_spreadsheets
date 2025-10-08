@@ -147,7 +147,7 @@ pub fn generate_structure_preview_from_rows(rows: &[Vec<String>]) -> String {
 /// Renders interactive UI for editing a single cell based on its validator.
 /// Handles displaying the appropriate widget and visual validation state.
 /// Returns Some(new_value) if the value was changed by the user interaction *this frame*, None otherwise.
-#[allow(clippy::too_many_arguments)] // We accept the number of args for this central function
+#[allow(clippy::too_many_arguments, unused_variables, unused_assignments)] // Accept many args and allow some unused depending on validator branch
 pub fn edit_cell_widget(
     ui: &mut egui::Ui,
     id: egui::Id,
@@ -165,7 +165,7 @@ pub fn edit_cell_widget(
     state: &mut EditorWindowState,
     // NEW: event writer for structure navigation
     structure_open_events: &mut EventWriter<OpenStructureViewEvent>,
-    toggle_ai_events: &mut EventWriter<RequestToggleAiRowGeneration>,
+    _toggle_ai_events: &mut EventWriter<RequestToggleAiRowGeneration>,
     // NEW: event writers for copy/paste
     copy_events: &mut EventWriter<RequestCopyCell>,
     paste_events: &mut EventWriter<RequestPasteCell>,
@@ -225,7 +225,30 @@ pub fn edit_cell_widget(
         }
     }
 
-    // --- 2. Allocate Space & Draw Frame ---
+    // --- 2. Parent_key read-only in structure tables ---
+    if state.should_hide_structure_technical_columns(category, sheet_name) && col_index == 1 {
+        let display = if current_display_text.is_empty() { "(empty)" } else { current_display_text };
+        // Center horizontally and vertically within the cell for Parent_key
+        let desired_size = egui::vec2(ui.available_width(), ui.style().spacing.interact_size.y);
+        let (_id, rect) = ui.allocate_space(desired_size);
+        ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |inner| {
+            inner.allocate_ui_with_layout(
+                rect.size(),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |row_ui| {
+                    row_ui.vertical_centered(|vc| {
+                        vc.label(
+                            egui::RichText::new(display)
+                                .color(egui::Color32::from_rgb(0, 180, 0)),
+                        );
+                    });
+                },
+            );
+        });
+        return None;
+    }
+
+    // --- 3. Allocate Space & Draw Frame ---
     let desired_size = egui::vec2(ui.available_width(), ui.style().spacing.interact_size.y);
     let (frame_id, frame_rect) = ui.allocate_space(desired_size);
 
@@ -267,6 +290,12 @@ pub fn edit_cell_widget(
         .map(|v| matches!(v, crate::sheets::definitions::ColumnValidator::Structure))
         .unwrap_or(false);
 
+    // Determine whether this is a linked column
+    let is_linked_column = validator_opt
+        .as_ref()
+        .map(|v| matches!(v, crate::sheets::definitions::ColumnValidator::Linked { .. }))
+        .unwrap_or(false);
+
     // Determine whether selected structure columns are included in AI sends
     let is_structure_ai_included = if is_structure_column
         && state.ai_cached_included_columns_valid
@@ -301,7 +330,7 @@ pub fn edit_cell_widget(
                 // Fall back to validation colors for structure columns
                 match effective_validation_state {
                     ValidationState::Empty => Color32::TRANSPARENT,
-                    ValidationState::Valid => Color32::from_gray(40),
+                    ValidationState::Valid => Color32::TRANSPARENT,
                     ValidationState::Invalid => Color32::from_rgba_unmultiplied(80, 20, 20, 180),
                 }
             } else {
@@ -310,9 +339,28 @@ pub fn edit_cell_widget(
         }
         // Fall back to validation-based colors
         else {
+            // Use a unified dark background slightly darker than the column header (which is rgb(40,40,40))
+            let dark_cell_fill = Color32::from_rgb(35, 35, 35);
             match effective_validation_state {
-                ValidationState::Empty => Color32::TRANSPARENT,
-                ValidationState::Valid => Color32::from_gray(40),
+                ValidationState::Empty => {
+                    // For numeric and string cells, show the dark background even when empty to keep visual consistency
+                    if matches!(basic_type, ColumnDataType::I64 | ColumnDataType::F64 | ColumnDataType::String) {
+                        dark_cell_fill
+                    } else {
+                        Color32::TRANSPARENT
+                    }
+                }
+                ValidationState::Valid => {
+                    if is_linked_column {
+                        // Correct (matching) linked values use the same dark background
+                        dark_cell_fill
+                    } else if matches!(basic_type, ColumnDataType::Bool | ColumnDataType::I64 | ColumnDataType::F64 | ColumnDataType::String) {
+                        // Bool and numeric cells use the same dark background
+                        dark_cell_fill
+                    } else {
+                        Color32::TRANSPARENT
+                    }
+                }
                 ValidationState::Invalid => Color32::from_rgba_unmultiplied(80, 20, 20, 180),
             }
         }
@@ -325,8 +373,7 @@ pub fn edit_cell_widget(
     // --- 3. Draw the Frame and Widget Logic Inside ---
     let inner_response = ui
         .allocate_new_ui(egui::UiBuilder::new().max_rect(frame_rect), |frame_ui| {
-            frame
-                .show(frame_ui, |widget_ui| {
+            frame.show(frame_ui, |widget_ui| {
                     let mut response_opt: Option<Response> = None;
                     let mut temp_new_value: Option<String> = None;
 
@@ -334,9 +381,20 @@ pub fn edit_cell_widget(
                         ($ui:ident, $T:ty, $id_suffix:expr, $default:expr, $speed:expr) => {{
                             let mut value_for_widget: $T =
                                 current_display_text.parse().unwrap_or($default);
-                            // CORRECTED: Removed .frame(false) from DragValue
-                            let resp =
-                                $ui.add(egui::DragValue::new(&mut value_for_widget).speed($speed));
+                            // Make numeric control fill the entire column width (height = row height)
+                            let size = egui::vec2($ui.available_width(), $ui.style().spacing.interact_size.y);
+                            // Force the DragValue's internal background to the same dark color as the cell frame
+                            let resp = $ui.scope(|ui_num| {
+                                let dark = Color32::from_rgb(35, 35, 35);
+                                let visuals = &mut ui_num.style_mut().visuals;
+                                visuals.widgets.inactive.weak_bg_fill = dark;
+                                visuals.widgets.inactive.bg_fill = dark;
+                                visuals.widgets.hovered.weak_bg_fill = dark;
+                                visuals.widgets.hovered.bg_fill = dark;
+                                visuals.widgets.active.weak_bg_fill = dark;
+                                visuals.widgets.active.bg_fill = dark;
+                                ui_num.add_sized(size, egui::DragValue::new(&mut value_for_widget).speed($speed))
+                            }).inner;
                             if resp.changed() {
                                 temp_new_value = Some(value_for_widget.to_string());
                             }
@@ -366,8 +424,101 @@ pub fn edit_cell_widget(
                     }
                     // Option<T> support removed
 
-                    widget_ui.vertical_centered(|centered_widget_ui| {
-                        match validator_opt {
+                    // Render content aligned to the top-left without vertical centering wrappers
+                    match validator_opt {
+                            Some(ColumnValidator::Structure) => {
+                                // Structure columns render as buttons that navigate to the structure sheet
+                                // Get the structure table name
+                                let column_def = registry
+                                    .get_sheet(category, sheet_name)
+                                    .and_then(|sd| sd.metadata.as_ref())
+                                    .and_then(|meta| meta.columns.get(col_index));
+                                
+                                if let Some(col_def) = column_def {
+                                    let structure_sheet_name = format!("{}_{}", sheet_name, col_def.header);
+                                    
+                                    // Get the parent row's key (first column value) for filtering
+                                    let parent_key = registry
+                                        .get_sheet(category, sheet_name)
+                                        .and_then(|sd| sd.grid.get(row_index))
+                                        .and_then(|row| row.first())
+                                        .map(|s| s.clone())
+                                        .unwrap_or_else(|| row_index.to_string());
+                                    
+                                    // Use render cache preview text for this cell as primary button label.
+                                    // When empty, fall back to a friendly column label.
+                                    let button_text = if current_display_text.trim().is_empty() {
+                                        col_def.header.clone()
+                                    } else {
+                                        current_display_text.to_string()
+                                    };
+                                    // Use default button styling (no custom fill)
+                                    let button = egui::Button::new(button_text);
+                                    let mut resp = widget_ui.add_sized(
+                                        widget_ui.available_size(),
+                                        button
+                                    );
+                                    
+                                    // Add tooltip with details including cached row count
+                                    // Build cache key matching state.ui_structure_row_count_cache signature
+                                    // parent_row_index_in_root = row_index, structure_col_index = col_index, path_len = 1 (root level)
+                                    let cache_key = (
+                                        category.clone(),
+                                        structure_sheet_name.clone(),
+                                        row_index,
+                                        col_index,
+                                        1usize,
+                                    );
+                                    let mut count_opt = state.ui_structure_row_count_cache.get(&cache_key).copied();
+                                    if count_opt.is_none() {
+                                        // Compute quickly from grid by counting rows with matching parent_key in col 1
+                                        if let Some(struct_sheet) = registry.get_sheet(category, &structure_sheet_name) {
+                                            let c = struct_sheet
+                                                .grid
+                                                .iter()
+                                                .filter(|r| r.get(1).map(|v| v == &parent_key).unwrap_or(false))
+                                                .count();
+                                            state.ui_structure_row_count_cache.insert(cache_key.clone(), c);
+                                            count_opt = Some(c);
+                                        }
+                                    }
+                                    let rows_count = count_opt.unwrap_or(0);
+                                    resp = resp.on_hover_text(format!(
+                                        "Structure: {}\nParent: {}\nRows: {}\nPreview: {}\n\nClick to open",
+                                        structure_sheet_name, parent_key, rows_count, current_display_text
+                                    ));
+                                    
+                                    if resp.clicked() {
+                                        // If the real structure sheet exists, navigate to it. Otherwise, open virtual view.
+                                        if registry.get_sheet(category, &structure_sheet_name).is_some() {
+                                            let nav_context = crate::ui::elements::editor::state::StructureNavigationContext {
+                                                structure_sheet_name: structure_sheet_name.clone(),
+                                                parent_category: category.clone(),
+                                                parent_sheet_name: sheet_name.to_string(),
+                                                parent_row_key: parent_key.clone(),
+                                                parent_column_name: col_def.header.clone(),
+                                            };
+                                            state.structure_navigation_stack.push(nav_context);
+                                            state.selected_category = category.clone();
+                                            state.selected_sheet_name = Some(structure_sheet_name);
+                                        } else {
+                                            // Fallback to virtual view for editing/adding when no structure sheet yet
+                                            structure_open_events.write(OpenStructureViewEvent {
+                                                parent_category: category.clone(),
+                                                parent_sheet: sheet_name.to_string(),
+                                                row_index,
+                                                col_index,
+                                            });
+                                        }
+                                    }
+                                    
+                                    response_opt = Some(resp);
+                                } else {
+                                    // Fallback if metadata not found
+                                    let resp = widget_ui.label("?");
+                                    response_opt = Some(resp);
+                                }
+                            }
                             Some(ColumnValidator::Linked {
                                 target_sheet_name,
                                 target_column_index,
@@ -381,15 +532,73 @@ pub fn edit_cell_widget(
                                         empty_backing_local = HashSet::new();
                                         &empty_backing_local
                                     };
-                                let (new_val, resp) = handle_linked_column_edit(
-                                    centered_widget_ui,
-                                    id,
-                                    current_display_text,
-                                    target_sheet_name,
-                                    *target_column_index,
-                                    registry,
-                                    allowed_values,
-                                );
+                                // Layout: [TextEdit (grows)] [→ Nav Button (fixed small square)]
+                                // Ensure vertical centering for both controls
+                                let (new_val, resp) = widget_ui
+                                    .allocate_ui_with_layout(
+                                        egui::vec2(
+                                            widget_ui.available_width(),
+                                            widget_ui.style().spacing.interact_size.y,
+                                        ),
+                                        egui::Layout::left_to_right(egui::Align::Center),
+                                        |row_ui| {
+                                            row_ui.horizontal(|ui_h| {
+                                                // Calculate available width for text edit (reserve space for nav button)
+                                                let nav_button_size = ui_h.style().spacing.interact_size.y; // square button matching row height
+                                                let spacing = ui_h.spacing().item_spacing.x;
+                                                let available_for_edit =
+                                                    (ui_h.available_width() - nav_button_size - spacing)
+                                                        .max(8.0);
+
+                                                // Draw text edit in a sized container (horizontally centered inside row height)
+                                                let (new_val, resp) = ui_h
+                                                    .allocate_ui_with_layout(
+                                                        egui::vec2(available_for_edit, nav_button_size),
+                                                        egui::Layout::left_to_right(egui::Align::Center),
+                                                        |edit_ui| {
+                                                            edit_ui.vertical_centered(|vc| {
+                                                                handle_linked_column_edit(
+                                                                    vc,
+                                                                    id,
+                                                                    current_display_text,
+                                                                    target_sheet_name,
+                                                                    *target_column_index,
+                                                                    registry,
+                                                                    allowed_values,
+                                                                )
+                                                            })
+                                                            .inner
+                                                        },
+                                                    )
+                                                    .inner;
+
+                                                // Draw small navigation button; use ASCII '>' to avoid font issues
+                                                let nav_btn = ui_h
+                                                    .add_sized([
+                                                        nav_button_size,
+                                                        nav_button_size,
+                                                    ], egui::Button::new(">"))
+                                                    .on_hover_text(format!(
+                                                        "Navigate to sheet: {}",
+                                                        target_sheet_name
+                                                    ));
+
+                                                if nav_btn.clicked() {
+                                                    // Navigate to the target sheet
+                                                    state.selected_category = category.clone();
+                                                    state.selected_sheet_name =
+                                                        Some(target_sheet_name.clone());
+                                                    state.reset_interaction_modes_and_selections();
+                                                    state.force_filter_recalculation = true;
+                                                }
+
+                                                (new_val, resp)
+                                            })
+                                            .inner
+                                        },
+                                    )
+                                    .inner;
+                                
                                 temp_new_value = new_val;
                                 // Add context menu to the linked column response
                                 resp.context_menu(|menu_ui| {
@@ -420,8 +629,8 @@ pub fn edit_cell_widget(
                                 match basic_type {
                                     ColumnDataType::String => {
                                         let mut temp_string = current_display_text.to_string();
-                                        let resp = centered_widget_ui.add_sized(
-                                            centered_widget_ui.available_size(),
+                                        let resp = widget_ui.add_sized(
+                                            widget_ui.available_size(),
                                             egui::TextEdit::singleline(&mut temp_string)
                                                 .frame(false),
                                         );
@@ -456,8 +665,19 @@ pub fn edit_cell_widget(
                                             current_display_text.to_lowercase().as_str(),
                                             "true" | "1"
                                         );
-                                        let resp = centered_widget_ui
-                                            .add(egui::Checkbox::new(&mut value_for_widget, ""));
+                                        // Center the checkbox horizontally and vertically within the cell
+                                        let mut resp_opt: Option<Response> = None;
+                                        widget_ui.allocate_ui_with_layout(
+                                            egui::vec2(widget_ui.available_width(), widget_ui.style().spacing.interact_size.y),
+                                            egui::Layout::left_to_right(egui::Align::Center),
+                                            |row_ui| {
+                                                row_ui.vertical_centered(|vc| {
+                                                    let r = vc.add(egui::Checkbox::new(&mut value_for_widget, ""));
+                                                    resp_opt = Some(r);
+                                                });
+                                            },
+                                        );
+                                        let resp = resp_opt.expect("bool widget response should be set");
                                         if resp.changed() {
                                             temp_new_value = Some(value_for_widget.to_string());
                                         }
@@ -485,13 +705,15 @@ pub fn edit_cell_widget(
                                         response_opt = Some(resp);
                                     }
                                     ColumnDataType::I64 => {
-                                        handle_numeric!(centered_widget_ui, i64, "i64", 0, 1.0)
+                                        handle_numeric!(widget_ui, i64, "i64", 0, 1.0)
                                     }
                                     ColumnDataType::F64 => {
-                                        handle_numeric!(centered_widget_ui, f64, "f64", 0.0, 0.1)
+                                        handle_numeric!(widget_ui, f64, "f64", 0.0, 0.1)
                                     }
                                 }
                             }
+                            // REMOVED: Old virtual structure implementation - replaced with real sheet navigation buttons above
+                            /*
                             Some(ColumnValidator::Structure) => {
                                 // Parse raw structure cell (not the render cache display text) to provide consistent preview and actions.
                                 let raw_cell_json = registry
@@ -659,8 +881,8 @@ pub fn edit_cell_widget(
                                 }
                                 response_opt = Some(response_btn);
                             }
+                            */
                         }
-                    });
                     (response_opt, temp_new_value)
                 })
                 .inner
@@ -681,6 +903,7 @@ pub fn edit_cell_widget(
     final_new_value
 }
 
+#[allow(dead_code)]
 fn compute_structure_root_and_path(
     state: &EditorWindowState,
     current_sheet_name: &str,
@@ -713,6 +936,7 @@ fn compute_structure_root_and_path(
     Some((root_category, root_sheet, path))
 }
 
+#[allow(dead_code)]
 fn resolve_structure_override_for_menu(meta: &SheetMetadata, path: &[usize]) -> Option<bool> {
     if path.is_empty() {
         return None;

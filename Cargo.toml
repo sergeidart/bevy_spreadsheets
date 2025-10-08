@@ -1,5 +1,5 @@
 [package]
-name = "bevy_spreadsheets"
+name = "skylinedb"
 version = "0.1.0"
 edition = "2021"
 
@@ -28,6 +28,8 @@ pyo3 = "0.25.0"
 whoami = "1.6.0"
 bevy_framepace = "0.19"
 unicode-normalization = "0.1"
+rusqlite = { version = "0.32", features = ["bundled", "serde_json"] }
+uuid = { version = "1.11", features = ["v4"] }
 
 [profile.dev.package."*"]
 opt-level = 3

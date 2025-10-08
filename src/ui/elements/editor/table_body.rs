@@ -73,9 +73,16 @@ pub(crate) fn get_filtered_row_indices_cached(
 ) -> Arc<Vec<usize>> {
     let cache_key = (category.clone(), sheet_name.to_string());
 
+    // Check if we're in a structure navigation context for this sheet
+    let structure_filter = state.structure_navigation_stack.last()
+        .filter(|nav_ctx| &nav_ctx.structure_sheet_name == sheet_name && category == &nav_ctx.parent_category);
+
     if !state.force_filter_recalculation {
         if let Some(entry) = state.filtered_row_indices_cache.get(&cache_key) {
-            return Arc::clone(&entry.rows);
+            // If we're in structure navigation, we need to recalculate with the hidden filter
+            if structure_filter.is_none() {
+                return Arc::clone(&entry.rows);
+            }
         }
     }
 
@@ -84,17 +91,37 @@ pub(crate) fn get_filtered_row_indices_cached(
     let total_rows = grid.len();
 
     if let Some(entry) = state.filtered_row_indices_cache.get(&cache_key) {
-        if entry.filters_hash == filters_hash && entry.total_rows == total_rows {
+        if entry.filters_hash == filters_hash && entry.total_rows == total_rows && structure_filter.is_none() {
             state.force_filter_recalculation = false;
             return Arc::clone(&entry.rows);
         }
     }
 
     debug!(
-        "Recalculating filtered indices for '{:?}/{}' (hash: {}, force_recalc: {})",
-        category, sheet_name, filters_hash, state.force_filter_recalculation
+        "Recalculating filtered indices for '{:?}/{}' (hash: {}, force_recalc: {}, structure_filter: {})",
+        category, sheet_name, filters_hash, state.force_filter_recalculation, structure_filter.is_some()
     );
-    let indices = Arc::new(get_filtered_row_indices_internal(grid, metadata));
+    
+    let mut indices = get_filtered_row_indices_internal(grid, metadata);
+    
+    // Apply hidden structure filter if present
+    if let Some(nav_ctx) = structure_filter {
+        indices = indices.into_iter().filter(|&row_idx| {
+            grid.get(row_idx)
+                .and_then(|row| row.get(1)) // parent_key is in column 1
+                .map(|parent_key_value| parent_key_value == &nav_ctx.parent_row_key)
+                .unwrap_or(false)
+        }).collect();
+    }
+    
+    // Rule: if a row was just added (row 0), do not filter it out until UI processes the add
+    // Include row 0 temporarily while request_scroll_to_new_row is set
+    if state.request_scroll_to_new_row && !grid.is_empty() && !indices.contains(&0) {
+        indices.insert(0, 0);
+        indices.sort_unstable();
+    }
+
+    let indices = Arc::new(indices);
     state.filtered_row_indices_cache.insert(
         cache_key,
         FilteredRowsCacheEntry {
@@ -157,12 +184,16 @@ pub fn sheet_table_body(
     };
 
     let grid_data = &sheet_data_ref.grid;
+    // Now include structure columns - they will be rendered as buttons
     let num_cols = metadata_ref.columns.len();
     let validators: Vec<Option<ColumnValidator>> = metadata_ref
         .columns
         .iter()
         .map(|c| c.validator.clone())
         .collect();
+    
+    // Get visible column indices (hides id/parent_key in structure navigation mode)
+    let visible_columns = state.get_visible_column_indices(category, sheet_name, num_cols);
 
     let filtered_indices =
         get_filtered_row_indices_cached(state, category, sheet_name, grid_data, metadata_ref);
@@ -220,20 +251,33 @@ pub fn sheet_table_body(
                     return;
                 }
 
-                for c_idx in 0..num_cols {
+                for (col_display_idx, c_idx) in visible_columns.iter().copied().enumerate() {
                     ui_row.col(|ui| {
                         // MODIFIED: Use current_interaction_mode to determine if checkboxes are shown
                         let show_checkbox =
                             (state.current_interaction_mode == SheetInteractionState::AiModeActive && state.ai_mode == AiModeState::Preparing) ||
                             matches!(state.current_interaction_mode, SheetInteractionState::DeleteModeActive);
 
-                        if c_idx == 0 && show_checkbox {
+                        if col_display_idx == 0 && show_checkbox {
                             let mut is_selected = state.ai_selected_rows.contains(&original_row_index);
                             let response = ui.add(egui::Checkbox::without_text(&mut is_selected));
                             if response.changed() {
                                 if is_selected { state.ai_selected_rows.insert(original_row_index); }
                                 else { state.ai_selected_rows.remove(&original_row_index); }
                             }
+                            // Right-click context menu for bulk row selection on visible rows
+                            response.context_menu(|menu_ui| {
+                                if menu_ui.button("Select all visible rows").clicked() {
+                                    for &ri in filtered_indices.iter() { state.ai_selected_rows.insert(ri); }
+                                    menu_ui.close_menu();
+                                    ui.ctx().request_repaint();
+                                }
+                                if menu_ui.button("Remove selection from all visible rows").clicked() {
+                                    for &ri in filtered_indices.iter() { state.ai_selected_rows.remove(&ri); }
+                                    menu_ui.close_menu();
+                                    ui.ctx().request_repaint();
+                                }
+                            });
                         }
 
                         let validator_opt_for_cell = validators.get(c_idx).cloned().flatten();

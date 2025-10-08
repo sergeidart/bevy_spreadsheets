@@ -199,7 +199,28 @@ pub fn show_ai_rule_popup(
             }
             if let Some(meta_for_saving) = meta_to_save_cloned {
                 let registry_immut_save = &*registry;
-                save_single_sheet(registry_immut_save, &meta_for_saving);
+                if meta_for_saving.category.is_none() {
+                    save_single_sheet(registry_immut_save, &meta_for_saving);
+                } else {
+                    // Persist to DB: table context and grounding flag
+                    if let Some(cat) = &state.selected_category {
+                        let base = crate::sheets::systems::io::get_default_data_base_path();
+                        let db_path = base.join(format!("{}.db", cat));
+                        if db_path.exists() {
+                            if let Ok(conn) = rusqlite::Connection::open(&db_path) {
+                                let _ = crate::sheets::database::schema::ensure_global_metadata_table(&conn);
+                                let _ = crate::sheets::database::writer::DbWriter::update_table_ai_settings(
+                                    &conn,
+                                    &meta_for_saving.sheet_name,
+                                    None,
+                                    meta_for_saving.ai_general_rule.as_deref(),
+                                    None,
+                                    meta_for_saving.requested_grounding_with_google_search,
+                                );
+                            }
+                        }
+                    }
+                }
             }
         } else {
             warn!("Save AI Config requested, but no sheet is selected.");

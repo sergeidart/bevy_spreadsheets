@@ -52,6 +52,18 @@ pub fn handle_update_column_name(
 
         // --- Apply Update (Mutable Borrow) ---
         // Get sheet using category
+        // Precompute context flags without holding immutable borrows during mutation
+        let (was_structure_before, is_real_structure_sheet_now) = {
+            let was_structure = registry
+                .get_sheet(category, sheet_name)
+                .and_then(|s| s.metadata.as_ref())
+                .and_then(|m| m.columns.get(col_index))
+                .map(|c| matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure)))
+                .unwrap_or(false);
+            let is_structure_sheet = registry.is_structure_table(category, sheet_name);
+            (was_structure, is_structure_sheet)
+        };
+
         if let Some(sheet_data) = registry.get_sheet_mut(category, sheet_name) {
             if let Some(metadata) = &mut sheet_data.metadata {
                 // --- CORRECTED: Check bounds using columns.len() ---
@@ -94,6 +106,52 @@ pub fn handle_update_column_name(
                             message: msg,
                             is_error: false,
                         });
+                        // Persist rename to DB when DB-backed
+                        if let Some(cat) = &metadata.category {
+                            let base = crate::sheets::systems::io::get_default_data_base_path();
+                            let db_path = base.join(format!("{}.db", cat));
+                            if db_path.exists() {
+                                if let Ok(conn) = rusqlite::Connection::open(&db_path) {
+                                    if is_real_structure_sheet_now {
+                                        // Rename actual column in structure table data + metadata
+                                        let _ = crate::sheets::database::writer::DbWriter::rename_data_column(
+                                            &conn,
+                                            sheet_name,
+                                            &old_name,
+                                            new_name,
+                                        );
+                                    } else {
+                                        // Parent main table column rename
+                                        // If it's a Structure validator column being renamed, rename the underlying structure table as well
+                                        if was_structure_before {
+                                            let _ = crate::sheets::database::writer::DbWriter::rename_structure_table(
+                                                &conn,
+                                                sheet_name,
+                                                &old_name,
+                                                new_name,
+                                            );
+                                        }
+                                        // Rename data column if it exists physically (non-structure)
+                                        if !was_structure_before {
+                                            let _ = crate::sheets::database::writer::DbWriter::rename_data_column(
+                                                &conn,
+                                                sheet_name,
+                                                &old_name,
+                                                new_name,
+                                            );
+                                        } else {
+                                            // Update metadata column_name for the parent (structure columns still have metadata)
+                                            let _ = crate::sheets::database::writer::DbWriter::update_metadata_column_name(
+                                                &conn,
+                                                sheet_name,
+                                                col_index,
+                                                new_name,
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         success = true;
                         // Emit data modified event so virtual structure sheets trigger parent schema sync
                         data_modified_writer.write(SheetDataModifiedInRegistryEvent {

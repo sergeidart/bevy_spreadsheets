@@ -1,28 +1,29 @@
 // src/sheets/systems/logic/categories.rs
 use crate::sheets::{
+    database::connection::DbConnection,
     definitions::SheetMetadata,
     events::{
-        RequestCreateCategory, RequestCreateCategoryDirectory, RequestDeleteCategory,
-        RequestDeleteSheetFile, RequestRenameCategory, RequestRenameCategoryDirectory,
+        RequestCreateCategory, RequestDeleteCategory,
+        RequestDeleteSheetFile, RequestRenameCategory,
         SheetOperationFeedback,
     },
     resources::SheetRegistry,
+    systems::io::get_default_data_base_path,
 };
 use bevy::prelude::*;
 use std::path::PathBuf;
 
-/// Handles creating a new empty category (folder)
+/// Handles creating a new empty category (database file)
 pub fn handle_create_category_request(
     mut events: EventReader<RequestCreateCategory>,
     mut registry: ResMut<SheetRegistry>,
     mut feedback: EventWriter<SheetOperationFeedback>,
-    mut mkdir_writer: EventWriter<RequestCreateCategoryDirectory>,
 ) {
     for ev in events.read() {
         let name = ev.name.trim();
         if name.is_empty() {
             feedback.write(SheetOperationFeedback {
-                message: "Category name cannot be empty".to_string(),
+                message: "Database name cannot be empty".to_string(),
                 is_error: true,
             });
             continue;
@@ -30,25 +31,62 @@ pub fn handle_create_category_request(
         // Basic validation: disallow path separators and reserved chars
         if name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|']) {
             feedback.write(SheetOperationFeedback {
-                message: format!("Invalid category name: '{}'", name),
+                message: format!("Invalid database name: '{}'", name),
                 is_error: true,
             });
             continue;
         }
-        match registry.create_category(name.to_string()) {
-            Ok(_) => {
-                // Create directory on disk so the category persists across restarts
-                mkdir_writer.write(RequestCreateCategoryDirectory {
-                    name: name.to_string(),
-                });
-                feedback.write(SheetOperationFeedback {
-                    message: format!("Category '{}' created.", name),
-                    is_error: false,
-                });
+        
+        // Create database file on disk
+        let base_path = get_default_data_base_path();
+        let db_filename = format!("{}.db", name);
+        let db_path = base_path.join(&db_filename);
+        
+        if db_path.exists() {
+            feedback.write(SheetOperationFeedback {
+                message: format!("Database '{}' already exists", name),
+                is_error: true,
+            });
+            continue;
+        }
+        
+        // Ensure base directory exists
+        if let Err(e) = std::fs::create_dir_all(&base_path) {
+            error!("Failed to create base directory: {}", e);
+            feedback.write(SheetOperationFeedback {
+                message: format!("Failed to create base directory: {}", e),
+                is_error: true,
+            });
+            continue;
+        }
+        
+        // Create empty database with initialized schema
+        match DbConnection::create_new(&db_path) {
+            Ok(_conn) => {
+                info!("Created new database file: {}", db_path.display());
+                
+                // Register in memory
+                match registry.create_category(name.to_string()) {
+                    Ok(_) => {
+                        feedback.write(SheetOperationFeedback {
+                            message: format!("Database '{}' created successfully", name),
+                            is_error: false,
+                        });
+                    }
+                    Err(e) => {
+                        // Database file created but registry failed - clean up
+                        let _ = std::fs::remove_file(&db_path);
+                        feedback.write(SheetOperationFeedback {
+                            message: format!("Failed to register database: {}", e),
+                            is_error: true,
+                        });
+                    }
+                }
             }
             Err(e) => {
+                error!("Failed to create database file '{}': {}", db_path.display(), e);
                 feedback.write(SheetOperationFeedback {
-                    message: e,
+                    message: format!("Failed to create database: {}", e),
                     is_error: true,
                 });
             }
@@ -56,54 +94,51 @@ pub fn handle_create_category_request(
     }
 }
 
-/// Handles deleting a category and all of its sheets (and requesting file deletions)
+/// Handles deleting a category (database file) and all of its sheets
 pub fn handle_delete_category_request(
     mut events: EventReader<RequestDeleteCategory>,
     mut registry: ResMut<SheetRegistry>,
     mut feedback: EventWriter<SheetOperationFeedback>,
-    mut file_delete_writer: EventWriter<RequestDeleteSheetFile>,
 ) {
     for ev in events.read() {
         let name = ev.name.trim();
         if name.is_empty() {
             continue;
         }
-        // Capture metadata before deleting to know file paths
-        let sheets_to_delete: Vec<(Option<String>, String, Option<SheetMetadata>)> = registry
-            .iter_sheets()
-            .filter(|(cat, _, _)| cat.as_deref() == Some(name))
-            .map(|(cat, sheet, data)| (cat.clone(), sheet.clone(), data.metadata.clone()))
-            .collect();
-
+        
+        // Delete from registry first
         let result = registry.delete_category(name);
         match result {
             Ok(_list) => {
-                // Request file deletions based on captured metadata
-                for (_cat, _sheet_name, meta_opt) in sheets_to_delete {
-                    if let Some(meta) = meta_opt {
-                        // base not needed here; deletion handler joins base path
-                        // data file
-                        let mut rel = PathBuf::new();
-                        if let Some(cat) = &meta.category {
-                            rel.push(cat);
+                // Delete database file from disk
+                let base_path = get_default_data_base_path();
+                let db_filename = format!("{}.db", name);
+                let db_path = base_path.join(&db_filename);
+                
+                if db_path.exists() {
+                    match std::fs::remove_file(&db_path) {
+                        Ok(_) => {
+                            info!("Deleted database file: {}", db_path.display());
+                            feedback.write(SheetOperationFeedback {
+                                message: format!("Database '{}' deleted successfully", name),
+                                is_error: false,
+                            });
                         }
-                        rel.push(&meta.data_filename);
-                        file_delete_writer.write(RequestDeleteSheetFile { relative_path: rel });
-                        // meta file
-                        let mut relm = PathBuf::new();
-                        if let Some(cat) = &meta.category {
-                            relm.push(cat);
+                        Err(e) => {
+                            error!("Failed to delete database file '{}': {}", db_path.display(), e);
+                            feedback.write(SheetOperationFeedback {
+                                message: format!("Database deleted from memory but file removal failed: {}", e),
+                                is_error: true,
+                            });
                         }
-                        relm.push(format!("{}.meta.json", meta.sheet_name));
-                        file_delete_writer.write(RequestDeleteSheetFile {
-                            relative_path: relm,
-                        });
                     }
+                } else {
+                    warn!("Database file not found: {}", db_path.display());
+                    feedback.write(SheetOperationFeedback {
+                        message: format!("Database '{}' removed from memory (file not found on disk)", name),
+                        is_error: false,
+                    });
                 }
-                feedback.write(SheetOperationFeedback {
-                    message: format!("Category '{}' deleted.", name),
-                    is_error: false,
-                });
             }
             Err(e) => {
                 feedback.write(SheetOperationFeedback {
@@ -115,12 +150,11 @@ pub fn handle_delete_category_request(
     }
 }
 
-/// Handles renaming a category (folder): registry update + directory rename request
+/// Handles renaming a category (database file): registry update + file rename
 pub fn handle_rename_category_request(
     mut events: EventReader<RequestRenameCategory>,
     mut registry: ResMut<SheetRegistry>,
     mut feedback: EventWriter<SheetOperationFeedback>,
-    mut dir_rename: EventWriter<RequestRenameCategoryDirectory>,
 ) {
     for ev in events.read() {
         let old_name = ev.old_name.trim();
@@ -130,21 +164,55 @@ pub fn handle_rename_category_request(
         }
         if new_name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|']) {
             feedback.write(SheetOperationFeedback {
-                message: format!("Invalid category name: '{}'", new_name),
+                message: format!("Invalid database name: '{}'", new_name),
                 is_error: true,
             });
             continue;
         }
+        
+        // Check if new database file already exists
+        let base_path = get_default_data_base_path();
+        let new_db_path = base_path.join(format!("{}.db", new_name));
+        
+        if new_db_path.exists() {
+            feedback.write(SheetOperationFeedback {
+                message: format!("Database '{}' already exists", new_name),
+                is_error: true,
+            });
+            continue;
+        }
+        
         match registry.rename_category(old_name, new_name) {
             Ok(_) => {
-                dir_rename.write(RequestRenameCategoryDirectory {
-                    old_name: old_name.to_string(),
-                    new_name: new_name.to_string(),
-                });
-                feedback.write(SheetOperationFeedback {
-                    message: format!("Category '{}' renamed to '{}'.", old_name, new_name),
-                    is_error: false,
-                });
+                // Rename database file on disk
+                let old_db_path = base_path.join(format!("{}.db", old_name));
+                
+                if old_db_path.exists() {
+                    match std::fs::rename(&old_db_path, &new_db_path) {
+                        Ok(_) => {
+                            info!("Renamed database file from '{}' to '{}'", old_db_path.display(), new_db_path.display());
+                            feedback.write(SheetOperationFeedback {
+                                message: format!("Database '{}' renamed to '{}'", old_name, new_name),
+                                is_error: false,
+                            });
+                        }
+                        Err(e) => {
+                            error!("Failed to rename database file: {}", e);
+                            // Rollback registry change
+                            let _ = registry.rename_category(new_name, old_name);
+                            feedback.write(SheetOperationFeedback {
+                                message: format!("Failed to rename database file: {}", e),
+                                is_error: true,
+                            });
+                        }
+                    }
+                } else {
+                    warn!("Old database file not found: {}", old_db_path.display());
+                    feedback.write(SheetOperationFeedback {
+                        message: format!("Database renamed in memory but file not found on disk"),
+                        is_error: true,
+                    });
+                }
             }
             Err(e) => {
                 feedback.write(SheetOperationFeedback {

@@ -22,6 +22,15 @@ use crate::sheets::{
 pub fn save_single_sheet(registry: &SheetRegistry, metadata_to_save: &SheetMetadata) {
     let sheet_name = &metadata_to_save.sheet_name;
     let category = &metadata_to_save.category;
+    // If a category is set, we treat this as a database-backed sheet and skip JSON persistence.
+    // This prevents re-spawning JSON files when using the DB storage path.
+    if category.is_some() {
+        trace!(
+            "Skipping JSON save for DB-backed sheet '{:?}/{}'",
+            category, sheet_name
+        );
+        return;
+    }
     // Skip saving virtual (ephemeral) sheets
     if sheet_name.starts_with("__virtual__") {
         trace!(

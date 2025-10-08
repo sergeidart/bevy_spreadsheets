@@ -74,6 +74,27 @@ pub fn handle_reorder_column_request(
                         category: category.clone(),
                         sheet_name: sheet_name.clone(),
                     });
+
+                    // Persist column order to DB if DB-backed
+                    if let Some(cat) = &metadata.category {
+                        let base = crate::sheets::systems::io::get_default_data_base_path();
+                        let db_path = base.join(format!("{}.db", cat));
+                        if db_path.exists() {
+                            if let Ok(conn) = rusqlite::Connection::open(&db_path) {
+                                // Build ordered pairs (column_name, new_index) for non-structure columns only
+                                let mut pairs: Vec<(String, i32)> = Vec::new();
+                                for (idx, c) in metadata.columns.iter().enumerate() {
+                                    // Skip technical columns for structure sheets: id/parent_key stay 0/1 in metadata reader; our metadata here includes them only for real structure sheets
+                                    pairs.push((c.header.clone(), idx as i32));
+                                }
+                                let _ = crate::sheets::database::writer::DbWriter::update_column_indices(
+                                    &conn,
+                                    sheet_name,
+                                    &pairs,
+                                );
+                            }
+                        }
+                    }
                 } else {
                     error_message = Some(format!(
                         "Invalid indices for reorder. Old: {}, New: {}. Total columns: {}.",
@@ -125,7 +146,9 @@ pub fn handle_reorder_column_request(
         let registry_immut = registry.as_ref();
         for ((cat, name), metadata) in sheets_to_save {
             info!("Column reordered in '{:?}/{}', triggering save.", cat, name);
-            save_single_sheet(registry_immut, &metadata);
+            if metadata.category.is_none() {
+                save_single_sheet(registry_immut, &metadata);
+            }
         }
     }
 }

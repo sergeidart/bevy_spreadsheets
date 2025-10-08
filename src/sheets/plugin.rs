@@ -11,7 +11,6 @@ use super::events::{
     RequestCreateAiSchemaGroup,
     // Category events
     RequestCreateCategory,
-    RequestCreateCategoryDirectory,
     // NEW: Import RequestCreateNewSheet
     RequestCreateNewSheet,
     RequestDeleteAiSchemaGroup,
@@ -26,7 +25,6 @@ use super::events::{
     RequestProcessUpload,
     RequestRenameAiSchemaGroup,
     RequestRenameCategory,
-    RequestRenameCategoryDirectory,
     RequestRenameSheet,
     RequestRenameSheetFile,
     RequestReorderColumn,
@@ -40,9 +38,15 @@ use super::events::{
     SheetDataModifiedInRegistryEvent,
     SheetOperationFeedback,
     UpdateCellEvent,
+    // Database migration events
+    RequestMigrateJsonToDb,
+    RequestUploadJsonToCurrentDb,
+    MigrationCompleted,
+    RequestExportSheetToJson,
 };
 use super::resources::{ClipboardBuffer, SheetRegistry, SheetRenderCache};
 use super::systems;
+use crate::sheets::database::systems::poll_migration_background;
 use super::systems::logic::handle_sheet_render_cache_update;
 use super::systems::logic::sync_structure::{
     handle_emit_structure_cascade_events, PendingStructureCascade,
@@ -77,10 +81,11 @@ impl Plugin for SheetsPlugin {
             ),
         );
 
-        app.init_resource::<SheetRegistry>();
+    app.init_resource::<SheetRegistry>();
         app.init_resource::<SheetRenderCache>();
         app.init_resource::<PendingStructureCascade>();
         app.init_resource::<ClipboardBuffer>();
+    app.init_resource::<super::database::systems::MigrationBackgroundState>();
 
         app.add_event::<AddSheetRowRequest>()
             .add_event::<RequestAddColumn>()
@@ -115,12 +120,17 @@ impl Plugin for SheetsPlugin {
         // Category management events
         app.add_event::<RequestCreateCategory>()
             .add_event::<RequestDeleteCategory>()
-            .add_event::<RequestCreateCategoryDirectory>()
-            .add_event::<RequestRenameCategory>()
-            .add_event::<RequestRenameCategoryDirectory>();
+            .add_event::<RequestRenameCategory>();
         // Clipboard events
         app.add_event::<RequestCopyCell>()
             .add_event::<RequestPasteCell>();
+        
+        // Database migration events
+        app.add_event::<RequestMigrateJsonToDb>()
+            .add_event::<RequestUploadJsonToCurrentDb>()
+            .add_event::<MigrationCompleted>()
+            .add_event::<crate::sheets::events::MigrationProgress>()
+            .add_event::<RequestExportSheetToJson>();
 
         app.add_systems(
             Startup,
@@ -130,6 +140,8 @@ impl Plugin for SheetsPlugin {
                 systems::io::startup::load_data_for_registered_sheets,
                 ApplyDeferred,
                 systems::io::startup::scan_filesystem_for_unregistered_sheets,
+                ApplyDeferred,
+                systems::io::startup::scan_and_load_database_files,
                 ApplyDeferred,
                 handle_sheet_render_cache_update,
                 ApplyDeferred,
@@ -217,6 +229,10 @@ impl Plugin for SheetsPlugin {
                 handle_sheet_render_cache_update,
                 systems::logic::handle_sync_virtual_structure_sheet,
                 handle_emit_structure_cascade_events,
+                // Run inline structure migration once after sheets are loaded and caches are building
+                systems::logic::run_inline_structure_migration_once,
+                // UI progress updater for migration
+                crate::ui::elements::popups::migration_popup::update_migration_progress_ui,
             )
                 .in_set(SheetSystemSet::UpdateCaches),
         );
@@ -226,8 +242,12 @@ impl Plugin for SheetsPlugin {
             (
                 systems::io::handle_delete_sheet_file_request,
                 systems::io::handle_rename_sheet_file_request,
-                systems::io::handle_create_category_directory_request,
-                systems::io::handle_rename_category_directory_request,
+                // Database migration systems
+                super::database::handle_migration_requests,
+                poll_migration_background,
+                super::database::handle_upload_json_to_current_db,
+                super::database::handle_export_requests,
+                super::database::handle_migration_completion,
             )
                 .in_set(SheetSystemSet::FileOperations),
         );

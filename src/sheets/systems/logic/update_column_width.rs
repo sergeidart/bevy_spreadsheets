@@ -112,7 +112,9 @@ pub fn handle_update_column_width(
                 "Column width updated for '{:?}/{}', triggering save.",
                 cat, name
             );
-            save_single_sheet(registry_immut, &metadata); // Pass metadata
+            if metadata.category.is_none() {
+                save_single_sheet(registry_immut, &metadata); // Pass metadata
+            }
         }
     }
 }

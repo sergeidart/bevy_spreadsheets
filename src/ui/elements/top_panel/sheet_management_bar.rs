@@ -39,7 +39,7 @@ pub struct SheetManagementEventWriters<'a, 'w> {
 pub fn show_sheet_management_controls<'a, 'w>(
     ui: &mut egui::Ui,
     state: &mut EditorWindowState,
-    registry: &SheetRegistry,
+    registry: &mut SheetRegistry,
     event_writers: &mut SheetManagementEventWriters<'a, 'w>,
 ) {
     ui.vertical(|ui_v| {
@@ -53,7 +53,7 @@ pub fn show_sheet_management_controls<'a, 'w>(
 pub fn show_category_picker<'a, 'w>(
     ui: &mut egui::Ui,
     state: &mut EditorWindowState,
-    registry: &SheetRegistry,
+    registry: &mut SheetRegistry,
     event_writers: &mut SheetManagementEventWriters<'a, 'w>,
 ) {
     // Category dropdown row: [Category button] [scrollable category tabs...]
@@ -415,10 +415,10 @@ pub fn show_category_picker<'a, 'w>(
             {
                 state.ai_output_panel_visible = !state.ai_output_panel_visible;
             }
-            // Place + Category left of Log
+            // Place + DB left of Log
             if r
-                .button("📁+ Category")
-                .on_hover_text("Create a new category (folder)")
+                .button("�+ DB")
+                .on_hover_text("Create a new database file")
                 .clicked()
             {
                 state.show_new_category_popup = true;
@@ -444,11 +444,14 @@ pub fn show_category_picker<'a, 'w>(
 pub fn show_sheet_controls<'a, 'w>(
     ui: &mut egui::Ui,
     state: &mut EditorWindowState,
-    registry: &SheetRegistry,
+    registry: &mut SheetRegistry,
     _event_writers: &mut SheetManagementEventWriters<'a, 'w>,
 ) {
-    // Compute sheets in current category
-    let sheets_in_category = registry.get_sheet_names_in_category(&state.selected_category);
+    // Compute sheets in current category (respect toggle to show/hide structure sheets)
+    let sheets_in_category = registry.get_sheet_names_in_category_filtered(
+        &state.selected_category,
+        state.show_hidden_sheets,
+    );
 
     // Layout row with rightmost Add button
     let line_h = ui.text_style_height(&egui::TextStyle::Body) + ui.style().spacing.item_spacing.y;
@@ -457,16 +460,20 @@ pub fn show_sheet_controls<'a, 'w>(
         row_size,
         egui::Layout::right_to_left(egui::Align::Min),
         |ui_r| {
-            // Rightmost: Add button
+            // Rightmost: Add buttons
             ui_r.add_space(12.0); // right padding
-            if ui_r
-                .button("➕ New Sheet")
-                .on_hover_text("Create a new empty sheet in the current category")
-                .clicked()
-            {
-                state.new_sheet_target_category = state.selected_category.clone();
-                state.new_sheet_name_input.clear();
-                state.show_new_sheet_popup = true;
+            
+            // New Sheet button (creates table in current DB) - only shown when a DB/category is selected
+            if state.selected_category.is_some() {
+                if ui_r
+                    .button("➕ New Sheet")
+                    .on_hover_text("Create a new table in the current database")
+                    .clicked()
+                {
+                    state.new_sheet_target_category = state.selected_category.clone();
+                    state.new_sheet_name_input.clear();
+                    state.show_new_sheet_popup = true;
+                }
             }
 
             // Left side contents (sheet dropdown + rename/delete + tabs)
@@ -672,6 +679,61 @@ pub fn show_sheet_controls<'a, 'w>(
                                         state.selected_sheet_name.as_deref() == Some(name.as_str());
                                     let resp =
                                         ui_th.selectable_label(is_sel, name).on_hover_text(name);
+                                    
+                                    // Right-click: toggle metadata.hidden for this sheet, always visible in menu
+                                    resp.context_menu(|ctx_menu| {
+                                        // We'll capture a metadata clone for saving after ending the mutable borrow
+                                        let mut to_save: Option<crate::sheets::definitions::SheetMetadata> = None;
+                                        let selected_category = state.selected_category.clone();
+                                        {
+                                            if let Some(data) = registry.get_sheet_mut(&state.selected_category, name) {
+                                                if let Some(meta) = &mut data.metadata {
+                                                    let mut hidden = meta.hidden;
+                                                    if ctx_menu.checkbox(&mut hidden, "Hidden").changed() {
+                                                        meta.hidden = hidden;
+                                                        to_save = Some(meta.clone());
+                                                    }
+                                                } else {
+                                                    ctx_menu.label("No metadata available");
+                                                }
+                                            } else {
+                                                ctx_menu.label("Sheet not found");
+                                            }
+                                        }
+                                        if let Some(meta_to_save) = to_save {
+                                            // Persist metadata change: if this sheet belongs to a database category, update SQLite _Metadata; otherwise save JSON metadata
+                                            if let Some(ref cat_name) = selected_category {
+                                                // Database-backed category: category name equals the database file stem
+                                                // Try to open its database file under default data path
+                                                let base_path = crate::sheets::systems::io::get_default_data_base_path();
+                                                let db_path = base_path.join(format!("{}.db", cat_name));
+                                                if db_path.exists() {
+                                                    match rusqlite::Connection::open(&db_path) {
+                                                        Ok(conn) => {
+                                                            // Ensure metadata table has 'hidden' column (migrate if needed)
+                                                            if let Err(e) = crate::sheets::database::schema::ensure_global_metadata_table(&conn) {
+                                                                error!("Failed to ensure _Metadata schema in DB '{}': {}", db_path.display(), e);
+                                                            }
+                                                            if let Err(e) = crate::sheets::database::writer::DbWriter::update_table_hidden(&conn, &meta_to_save.sheet_name, meta_to_save.hidden) {
+                                                                error!("Failed to update hidden flag in DB for '{}': {}", &meta_to_save.sheet_name, e);
+                                                            }
+                                                        }
+                                                        Err(e) => error!("Failed to open database '{}': {}", db_path.display(), e),
+                                                    }
+                                                } else {
+                                                    // Fallback to JSON metadata save if DB file not found
+                                                    crate::sheets::systems::io::save::save_single_sheet(&*registry, &meta_to_save);
+                                                }
+                                            } else {
+                                                // JSON-backed root category
+                                                crate::sheets::systems::io::save::save_single_sheet(&*registry, &meta_to_save);
+                                            }
+                                            // Force UI to refresh list
+                                            state.force_filter_recalculation = true;
+                                            ctx_menu.close_menu();
+                                        }
+                                    });
+                                    
                                     // Start dragging using interact pattern (consistent with column DnD)
                                     let dnd_id_source = egui::Id::new("sheet_dnd_context")
                                         .with(&state.selected_category);

@@ -20,6 +20,23 @@ pub fn register_default_sheets_if_needed(mut registry: ResMut<SheetRegistry>) {
     let data_dir_path = get_default_data_base_path();
     let mut needs_creation = false;
 
+    // If any SkylineDB database files exist, we consider the workspace to be DB-first
+    // and skip registering JSON-based default templates to avoid spawning JSON files.
+    if data_dir_path.exists() {
+        if let Ok(read_dir) = fs::read_dir(&data_dir_path) {
+            let has_db = read_dir
+                .filter_map(Result::ok)
+                .any(|e| e.path().extension().map_or(false, |ext| ext.eq_ignore_ascii_case("db")));
+            if has_db {
+                info!(
+                    "Data directory '{:?}' contains a database file. Skipping registration of JSON template sheets.",
+                    data_dir_path
+                );
+                return;
+            }
+        }
+    }
+
     // Check if directory exists and is empty
     if !data_dir_path.exists() {
         info!(

@@ -222,7 +222,9 @@ pub fn handle_delete_rows_request(
         let registry_immut = registry.as_ref(); // Get immutable borrow for saving
         for ((cat, name), metadata) in sheets_to_save {
             info!("Rows deleted in '{:?}/{}', triggering save.", cat, name);
-            save_single_sheet(registry_immut, &metadata); // Pass metadata
+            if metadata.category.is_none() {
+                save_single_sheet(registry_immut, &metadata); // Pass metadata
+            }
         }
     }
 }

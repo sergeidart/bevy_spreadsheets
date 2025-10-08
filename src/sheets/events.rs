@@ -315,3 +315,38 @@ pub struct RequestPasteCell {
     pub row_index: usize,
     pub col_index: usize,
 }
+
+// --- Database Migration events ---
+#[derive(Event, Debug, Clone)]
+pub struct RequestMigrateJsonToDb {
+    pub json_folder_path: PathBuf,
+    pub target_db_path: PathBuf,
+    pub create_new_db: bool,
+}
+
+/// Request to upload a single JSON file and migrate it into the current database as a table
+#[derive(Event, Debug, Clone)]
+pub struct RequestUploadJsonToCurrentDb {
+    pub target_db_name: String,  // The database (category) to add the table to
+}
+
+#[derive(Event, Debug, Clone)]
+pub struct MigrationCompleted {
+    pub success: bool,
+    pub report: String,
+}
+
+#[derive(Event, Debug, Clone)]
+pub struct MigrationProgress {
+    pub total: usize,
+    pub completed: usize,
+    pub current_sheet: Option<String>,
+    pub message: String,
+}
+
+#[derive(Event, Debug, Clone)]
+pub struct RequestExportSheetToJson {
+    pub db_path: PathBuf,
+    pub table_name: String,
+    pub output_folder: PathBuf,
+}

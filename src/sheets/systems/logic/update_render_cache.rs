@@ -159,10 +159,27 @@ pub fn handle_sheet_render_cache_update(
                             .get_mut(r_idx)
                             .and_then(|row| row.get_mut(c_idx))
                         {
-                            // Custom preview for structure cells: show first row only, truncated
+                            // Custom preview for structure cells: friendly label using parent key and column name
                             let preview_text = if let Some(col_def) = col_def_opt {
                                 if matches!(col_def.validator, Some(ColumnValidator::Structure)) {
-                                    generate_structure_preview(cell_value_str).0
+                                    // Try to form "<Key> <ColumnName>" if possible
+                                    let mut label: Option<String> = None;
+                                    if let Some(parent_row) = registry
+                                        .get_sheet(&category, &sheet_name)
+                                        .and_then(|sd| sd.grid.get(r_idx))
+                                    {
+                                        // Parent key is usually first column (index 0)
+                                        let parent_key = parent_row.get(0).cloned().unwrap_or_default();
+                                        let col_name = col_def.header.trim();
+                                        if !parent_key.trim().is_empty() {
+                                            label = Some(format!("{} {}", parent_key, col_name));
+                                        } else {
+                                            label = Some(col_name.to_string());
+                                        }
+                                    }
+
+                                    // Fallback to parsed JSON preview
+                                    label.unwrap_or_else(|| generate_structure_preview(cell_value_str).0)
                                 } else {
                                     cell_value_str.to_string()
                                 }

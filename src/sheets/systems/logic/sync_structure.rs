@@ -352,7 +352,9 @@ pub fn handle_sync_virtual_structure_sheet(
     if !metas_to_save.is_empty() {
         let reg_ref = registry.as_ref();
         for meta in metas_to_save {
-            save_single_sheet(reg_ref, &meta);
+            if meta.category.is_none() {
+                save_single_sheet(reg_ref, &meta);
+            }
         }
     }
 }

@@ -1,22 +1,25 @@
 // src/sheets/systems/logic/delete_columns.rs
 use crate::sheets::{
-    definitions::SheetMetadata,
-    events::{RequestDeleteColumns, SheetDataModifiedInRegistryEvent, SheetOperationFeedback},
+    definitions::{SheetMetadata, ColumnValidator},
+    events::{RequestDeleteColumns, RequestDeleteSheetFile, SheetDataModifiedInRegistryEvent, SheetOperationFeedback},
     resources::SheetRegistry,
     systems::io::save::save_single_sheet,
 };
 use crate::ui::elements::editor::state::EditorWindowState;
 use bevy::prelude::*;
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 pub fn handle_delete_columns_request(
     mut events: EventReader<RequestDeleteColumns>,
     mut registry: ResMut<SheetRegistry>,
     mut feedback_writer: EventWriter<SheetOperationFeedback>,
     mut data_modified_writer: EventWriter<SheetDataModifiedInRegistryEvent>,
+    mut file_delete_writer: EventWriter<RequestDeleteSheetFile>,
     editor_state: Option<Res<EditorWindowState>>,
 ) {
     let mut sheets_to_save: HashMap<(Option<String>, String), SheetMetadata> = HashMap::new();
+    let mut structure_sheets_to_delete: Vec<(Option<String>, String)> = Vec::new();
 
     for event in events.read() {
         let (category, sheet_name) = if let Some(state) = editor_state.as_ref() {
@@ -54,6 +57,13 @@ pub fn handle_delete_columns_request(
 
                 for &col_idx_to_remove in &sorted_indices {
                     if col_idx_to_remove < metadata.columns.len() {
+                        // Check if this column has Structure validator - collect for cascade delete
+                        if let Some(col_def) = metadata.columns.get(col_idx_to_remove) {
+                            if matches!(col_def.validator, Some(ColumnValidator::Structure)) {
+                                let structure_sheet_name = format!("{}_{}", sheet_name, col_def.header);
+                                structure_sheets_to_delete.push((category.clone(), structure_sheet_name));
+                            }
+                        }
                         // Remove from metadata
                         metadata.columns.remove(col_idx_to_remove);
                         // metadata.column_headers.remove(col_idx_to_remove);
@@ -148,7 +158,52 @@ pub fn handle_delete_columns_request(
         let registry_immut = registry.as_ref();
         for ((cat, name), metadata) in sheets_to_save {
             info!("Columns deleted in '{:?}/{}', triggering save.", cat, name);
-            save_single_sheet(registry_immut, &metadata);
+            if metadata.category.is_none() {
+                save_single_sheet(registry_immut, &metadata);
+            }
+        }
+    }
+
+    // Cascade delete structure sheets
+    if !structure_sheets_to_delete.is_empty() {
+        for (struct_category, struct_sheet_name) in structure_sheets_to_delete {
+            // Remove from registry
+            if let Ok(_removed) = registry.delete_sheet(&struct_category, &struct_sheet_name) {
+                info!(
+                    "Removed structure sheet '{:?}/{}' from registry due to cascade delete.",
+                    struct_category, struct_sheet_name
+                );
+
+                // Delete physical files (.json and .meta.json)
+                let category_path = if let Some(ref cat) = struct_category {
+                    format!("{}/", cat)
+                } else {
+                    String::new()
+                };
+                
+                let json_path = PathBuf::from(format!("{}{}.json", category_path, struct_sheet_name));
+                let meta_path = PathBuf::from(format!("{}{}.meta.json", category_path, struct_sheet_name));
+
+                file_delete_writer.write(RequestDeleteSheetFile {
+                    relative_path: json_path,
+                });
+                file_delete_writer.write(RequestDeleteSheetFile {
+                    relative_path: meta_path,
+                });
+
+                feedback_writer.write(SheetOperationFeedback {
+                    message: format!(
+                        "Cascade deleted structure sheet '{:?}/{}'.",
+                        struct_category, struct_sheet_name
+                    ),
+                    is_error: false,
+                });
+            } else {
+                warn!(
+                    "Attempted to cascade delete structure sheet '{:?}/{}' but it was not found in registry.",
+                    struct_category, struct_sheet_name
+                );
+            }
         }
     }
 }

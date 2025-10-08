@@ -382,6 +382,9 @@ pub struct SheetMetadata {
     // If this is a virtual structure sheet, link back to parent sheet & column
     #[serde(default)]
     pub structure_parent: Option<StructureParentLink>,
+    /// New: whether the sheet is hidden from lists by default (can be overridden in Settings)
+    #[serde(default)]
+    pub hidden: bool,
     // structures_meta removed; legacy field is migrated during deserialization into column-level fields
 }
 
@@ -441,6 +444,8 @@ impl<'de> Deserialize<'de> for SheetMetadata {
             #[serde(default)]
             structure_parent: Option<StructureParentLink>,
             #[serde(default)]
+            hidden: bool,
+            #[serde(default)]
             structures_meta: HashMap<String, LegacyStructureColumnMeta>,
         }
 
@@ -484,6 +489,7 @@ impl<'de> Deserialize<'de> for SheetMetadata {
                 ai_active_schema_group: cur.ai_active_schema_group,
                 random_picker: cur.random_picker,
                 structure_parent: cur.structure_parent,
+                hidden: cur.hidden,
             };
             // Auto-migrate deprecated AI sampling params if they equal legacy defaults
             if matches!(meta.ai_temperature, Some(t) if (t - 0.9).abs() < f32::EPSILON || (t - 1.0).abs() < f32::EPSILON)
@@ -593,6 +599,7 @@ impl<'de> Deserialize<'de> for SheetMetadata {
             ai_active_schema_group: None,
             random_picker: legacy.random_picker,
             structure_parent: None,
+            hidden: false,
         };
         if matches!(meta.ai_temperature, Some(t) if (t - 0.9).abs() < f32::EPSILON || (t - 1.0).abs() < f32::EPSILON)
         {
@@ -694,6 +701,7 @@ impl SheetMetadata {
             ai_active_schema_group: None,
             random_picker: None,
             structure_parent: None,
+            hidden: false,
         };
         meta.ensure_ai_schema_groups_initialized();
         meta

@@ -16,7 +16,7 @@ use crate::sheets::{
         AddSheetRowRequest, CloseStructureViewEvent, RequestAddColumn, RequestCopyCell,
         RequestCreateAiSchemaGroup, RequestCreateCategory, RequestCreateNewSheet,
         RequestDeleteAiSchemaGroup, RequestDeleteCategory, RequestDeleteColumns,
-        RequestDeleteRows, RequestDeleteSheet, RequestInitiateFileUpload, RequestPasteCell,
+    RequestDeleteRows, RequestDeleteSheet, RequestPasteCell,
         RequestRenameAiSchemaGroup, RequestRenameSheet, RequestReorderColumn,
         RequestSelectAiSchemaGroup, RequestSheetRevalidation, RequestToggleAiRowGeneration,
         RequestUpdateAiSendSchema, RequestUpdateAiStructureSend, RequestUpdateColumnName,
@@ -44,7 +44,7 @@ pub struct SheetEventWriters<'w> {
     pub rename_sheet: EventWriter<'w, RequestRenameSheet>,
     pub rename_category: EventWriter<'w, crate::sheets::events::RequestRenameCategory>,
     pub delete_sheet: EventWriter<'w, RequestDeleteSheet>,
-    pub upload_req: EventWriter<'w, RequestInitiateFileUpload>,
+    pub upload_json_to_db: EventWriter<'w, crate::sheets::events::RequestUploadJsonToCurrentDb>,
     pub column_rename: EventWriter<'w, RequestUpdateColumnName>,
     pub column_validator: EventWriter<'w, RequestUpdateColumnValidator>,
     pub cell_update: EventWriter<'w, UpdateCellEvent>,
@@ -67,6 +67,9 @@ pub struct SheetEventWriters<'w> {
     // Clipboard
     pub copy_cell: EventWriter<'w, RequestCopyCell>,
     pub paste_cell: EventWriter<'w, RequestPasteCell>,
+    // Database migration
+    pub migrate_json_to_db: EventWriter<'w, crate::sheets::events::RequestMigrateJsonToDb>,
+    pub feedback: EventWriter<'w, crate::sheets::events::SheetOperationFeedback>,
 }
 
 // Quick Copy controls moved into Settings popup; no dedicated top-row event writers required here.
@@ -96,6 +99,7 @@ pub struct EditorMiscParams<'w> {
 pub fn generic_sheet_editor_ui(
     mut contexts: EguiContexts,
     mut state: ResMut<EditorWindowState>,
+    mut migration_state: ResMut<crate::ui::elements::popups::MigrationPopupState>,
     mut sheet_writers: SheetEventWriters,
     mut copier_writers: CopierEventWriters,
     mut misc: EditorMiscParams,
@@ -125,6 +129,7 @@ pub fn generic_sheet_editor_ui(
     editor_popups_integration::display_active_popups(
         ctx,
         &mut state,
+        &mut migration_state,
         &mut sheet_writers,
         &mut misc.registry,
         &misc.ui_feedback,
@@ -143,7 +148,7 @@ pub fn generic_sheet_editor_ui(
         crate::ui::elements::top_panel::sheet_management_bar::show_sheet_management_controls(
             ui_b,
             &mut state,
-            &*misc.registry,
+            &mut *misc.registry,
             &mut crate::ui::elements::top_panel::sheet_management_bar::SheetManagementEventWriters {
                 close_structure_writer: None,
                 move_sheet_to_category: &mut sheet_writers.move_sheet_to_category,
@@ -155,8 +160,14 @@ pub fn generic_sheet_editor_ui(
 
     // Render central panel (main content)
     egui::CentralPanel::default().show(ctx, |ui| {
-        if keys.just_pressed(KeyCode::Escape) && !state.virtual_structure_stack.is_empty() {
-            misc.close_structure_writer.write(CloseStructureViewEvent);
+        if keys.just_pressed(KeyCode::Escape) {
+            if !state.virtual_structure_stack.is_empty() {
+                misc.close_structure_writer.write(CloseStructureViewEvent);
+            } else if let Some(nav_ctx) = state.structure_navigation_stack.pop() {
+                // Navigate back to parent sheet in real navigation
+                state.selected_category = nav_ctx.parent_category;
+                state.selected_sheet_name = Some(nav_ctx.parent_sheet_name);
+            }
         }
         // Fix row height to the checkbox/interact size so cell height never changes when the left checkbox appears
         let row_height = ui.style().spacing.interact_size.y;

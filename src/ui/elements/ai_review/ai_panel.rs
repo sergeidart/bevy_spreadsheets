@@ -40,12 +40,17 @@ pub fn send_selected_rows(
     // Determine root sheet (for structure planning) before we potentially navigate virtual view
     let (root_category, root_sheet_opt) = state.resolve_root_sheet(registry);
 
-    // Collect non-structure columns included (already influenced by active schema group via metadata flags)
+    // Collect non-structure columns to include (influenced by schema groups) and
+    // when in a structure sheet: exclude the internal 'id' column, keep 'parent_key'.
     let mut included_indices: Vec<usize> = Vec::new();
     let mut column_contexts: Vec<Option<String>> = Vec::new();
+    // Check if we're in a real structure sheet (not virtual)
+    let in_structure_sheet = !state.structure_navigation_stack.is_empty();
     for (idx, col) in meta.columns.iter().enumerate() {
         if matches!(col.validator, Some(crate::sheets::definitions::ColumnValidator::Structure)) { continue; }
         if matches!(col.ai_include_in_send, Some(false)) { continue; }
+        // Omit ID from structure sheets payloads (structure sheets have id column at index 0)
+        if in_structure_sheet && col.header.eq_ignore_ascii_case("id") { continue; }
         included_indices.push(idx);
         column_contexts.push(decorate_context_with_type(col.ai_context.as_ref(), col.data_type));
     }
@@ -110,73 +115,18 @@ pub fn send_selected_rows(
     let key_prefix_count = 0usize; // For spawn_batch_task compatibility
 
     // Build payload differently based on whether we're in a structure context
-    let payload = if !state.virtual_structure_stack.is_empty() {
-        // Inside structure - send as parent_groups with parent key
-        use crate::sheets::systems::ai::control_handler::{ParentGroup, ParentKeyInfo};
-        
-        // Get parent key information from the immediate parent (last in virtual_structure_stack)
-        let parent_key = if let Some(parent_ctx) = state.virtual_structure_stack.last() {
-            let parent_cat = parent_ctx.parent.parent_category.clone();
-            let parent_sheet = parent_ctx.parent.parent_sheet.clone();
-            let parent_row_idx = parent_ctx.parent.parent_row;
-            
-            // Get parent key column and value
-            let (key_context, key_value) = if let Some(parent_sheet_obj) = registry.get_sheet(&parent_cat, &parent_sheet) {
-                if let Some(parent_meta) = &parent_sheet_obj.metadata {
-                    // Find the structure key column
-                    let key_col_idx = parent_meta.columns.iter().enumerate()
-                        .find_map(|(_i, c)| {
-                            if matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure)) {
-                                c.structure_key_parent_column_index
-                            } else {
-                                None
-                            }
-                        });
-                    
-                    if let Some(key_idx) = key_col_idx {
-                        let context = parent_meta.columns.get(key_idx).and_then(|col| col.ai_context.clone());
-                        let value = parent_sheet_obj.grid.get(parent_row_idx)
-                            .and_then(|r| r.get(key_idx))
-                            .cloned()
-                            .unwrap_or_default();
-                        (context, value)
-                    } else {
-                        (None, String::new())
-                    }
-                } else {
-                    (None, String::new())
-                }
-            } else {
-                (None, String::new())
-            };
-            
-            ParentKeyInfo {
-                context: key_context,
-                key: key_value,
-            }
-        } else {
-            ParentKeyInfo {
-                context: None,
-                key: String::new(),
-            }
-        };
-        
-        // Create parent group with rows (no key prefix in rows)
-        let parent_group = ParentGroup {
-            parent_key,
-            rows: rows_data.clone(),
-        };
-        
+    let payload = if in_structure_sheet {
+        // Inside structure - send FLAT rows (no parent_groups). Rows already include parent_key column.
         BatchPayload {
             ai_model_id: model_id,
             general_sheet_rule: rule,
             column_contexts: column_contexts.clone(),
-            rows_data: Vec::new(), // Empty for structure requests
+            rows_data: rows_data.clone(),
             requested_grounding_with_google_search: grounding,
             allow_row_additions: allow_additions_flag,
             key_prefix_count: None,
             key_prefix_headers: None,
-            parent_groups: Some(vec![parent_group]),
+            parent_groups: None,
             user_prompt: user_prompt.clone().unwrap_or_default(),
         }
     } else {
@@ -205,10 +155,10 @@ pub fn send_selected_rows(
     state.ai_last_send_root_category = root_category.clone();
     state.ai_last_send_root_sheet = root_sheet_opt.clone();
     
-    // Plan structure paths from root metadata ONLY if we're NOT already inside a structure
-    // When inside a structure, we're sending a single-row request and don't want to trigger
+    // Plan structure paths from root metadata ONLY if we're NOT already inside a structure sheet
+    // When inside a structure sheet, we're sending a single-row request and don't want to trigger
     // additional structure processing jobs (which would cause duplicate requests)
-    if state.virtual_structure_stack.is_empty() {
+    if !in_structure_sheet {
         if let Some(root_sheet_name) = &root_sheet_opt { 
             if let Some(root_meta_ref) = registry.get_sheet(&root_category, root_sheet_name).and_then(|s| s.metadata.as_ref()) { 
                 state.ai_planned_structure_paths = root_meta_ref.ai_included_structure_paths(); 
@@ -220,6 +170,11 @@ pub fn send_selected_rows(
         // Also clear any existing structure reviews since we're doing a direct review
         state.ai_structure_reviews.clear();
     }
+    
+    // Initialize progress tracking: 1 for Phase 1, potentially 1 for Phase 2, N for structures
+    // We'll know the actual count after Phase 1, but estimate conservatively
+    state.ai_total_tasks = 1 + state.ai_planned_structure_paths.len();
+    state.ai_completed_tasks = 0;
 
     // Debug text (pretty) - keep for backward compatibility
     if let Ok(pretty) = serde_json::to_string_pretty(&payload) { 
@@ -336,7 +291,14 @@ pub fn draw_ai_panel(
         // Review Batch (if results ready)
         if state.ai_mode == AiModeState::ResultsReady { let total = state.ai_row_reviews.len() + state.ai_new_row_reviews.len(); if ui.add_enabled(total>0, egui::Button::new(format!("📋 Review Batch ({} rows)", total))).clicked() { state.ai_batch_review_active = true; state.ai_mode = AiModeState::Reviewing; } }
 
-        if state.ai_mode == AiModeState::Submitting { ui.spinner(); }
+        // Show progress when submitting
+        if state.ai_mode == AiModeState::Submitting {
+            ui.spinner();
+            if state.ai_total_tasks > 0 {
+                let percentage = (state.ai_completed_tasks as f32 / state.ai_total_tasks as f32 * 100.0).min(100.0);
+                ui.label(format!("{}/{} tasks ({:.0}%)", state.ai_completed_tasks, state.ai_total_tasks, percentage));
+            }
+        }
     });
 
     // AI Prompt Popup (when no rows selected)

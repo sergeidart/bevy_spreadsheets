@@ -26,21 +26,62 @@ pub fn handle_add_row_request(
     for event in events.read() {
         let mut category = event.category.clone();
         let mut sheet_name = event.sheet_name.clone();
+        let mut structure_context: Option<String> = None; // parent_key for structure sheets
+        
         if let Some(state) = editor_state.as_ref() {
             if let Some(vctx) = state.virtual_structure_stack.last() {
                 sheet_name = vctx.virtual_sheet_name.clone();
                 category = vctx.parent.parent_category.clone();
                 // virtual context just redirects target
             }
+            // Check if we're in a structure navigation context
+            if let Some(nav_ctx) = state.structure_navigation_stack.last() {
+                if &nav_ctx.structure_sheet_name == &sheet_name && &nav_ctx.parent_category == &category {
+                    structure_context = Some(nav_ctx.parent_row_key.clone());
+                }
+            }
         }
 
         let mut metadata_cache: Option<SheetMetadata> = None;
 
-        if let Some(sheet_data) = registry.get_sheet_mut(&category, &sheet_name) {
+    // Track metadata we might need to save after we release the mutable borrow
+    let mut pending_json_save: Option<SheetMetadata> = None;
+
+    if let Some(sheet_data) = registry.get_sheet_mut(&category, &sheet_name) {
             if let Some(metadata) = &sheet_data.metadata {
                 let num_cols = metadata.columns.len();
                 // Unified behavior: always insert at top for consistency
                 sheet_data.grid.insert(0, vec![String::new(); num_cols]);
+                
+                // Detect if this is a structure sheet by checking if it has 'id' and 'parent_key' columns at indices 0 and 1
+                let is_structure_sheet = num_cols >= 2 
+                    && metadata.columns.get(0).map(|c| c.header.eq_ignore_ascii_case("id")).unwrap_or(false)
+                    && metadata.columns.get(1).map(|c| c.header.eq_ignore_ascii_case("parent_key")).unwrap_or(false);
+                
+                // Auto-fill structure sheet columns if in structure navigation context OR if this is a structure sheet
+                if is_structure_sheet {
+                    if let Some(row0) = sheet_data.grid.get_mut(0) {
+                        // Auto-fill id column (index 0) with unique ID
+                        if row0.len() > 0 && row0[0].is_empty() {
+                            // Generate unique ID using timestamp + random component
+                            let unique_id = format!("{}-{}", 
+                                std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis(),
+                                uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("0")
+                            );
+                            row0[0] = unique_id;
+                        }
+                        // Auto-fill parent_key column (index 1) if we have a parent_key from navigation context
+                        if row0.len() > 1 && row0[1].is_empty() {
+                            if let Some(parent_key) = &structure_context {
+                                row0[1] = parent_key.clone();
+                            }
+                        }
+                    }
+                }
+                
                 // If initial values provided, set them now to avoid race with subsequent events
                 if let Some(init) = &event.initial_values {
                     if let Some(row0) = sheet_data.grid.get_mut(0) {
@@ -65,6 +106,8 @@ pub fn handle_add_row_request(
                 // Invalidate any cached filtered indices for this sheet to force UI refresh
                 if let Some(state_mut) = editor_state.as_mut() {
                     state_mut.force_filter_recalculation = true;
+                    // Ensure we scroll to the newly added row at the top
+                    state_mut.request_scroll_to_new_row = true;
                     let keys_to_remove: Vec<_> = state_mut
                         .filtered_row_indices_cache
                         .keys()
@@ -77,6 +120,35 @@ pub fn handle_add_row_request(
                 }
 
                 metadata_cache = Some(metadata.clone());
+
+                // Persist to DB if DB-backed, otherwise save JSON
+                if let Some(meta) = &sheet_data.metadata {
+                    if let Some(cat) = &meta.category {
+                        // DB-backed: prepend row in database too
+                        let base_path = crate::sheets::systems::io::get_default_data_base_path();
+                        let db_path = base_path.join(format!("{}.db", cat));
+                        if db_path.exists() {
+                            if let Ok(conn) = rusqlite::Connection::open(&db_path) {
+                                let column_names: Vec<String> = meta.columns
+                                    .iter()
+                                    .filter(|c| !matches!(c.validator, Some(ColumnValidator::Structure)))
+                                    .map(|c| c.header.clone())
+                                    .collect();
+                                // Build row data from grid row 0 limited to non-structure columns length
+                                let row0 = sheet_data.grid.get(0).cloned().unwrap_or_default();
+                                let mut row_data: Vec<String> = Vec::new();
+                                for (i, col_def) in meta.columns.iter().enumerate() {
+                                    if matches!(col_def.validator, Some(ColumnValidator::Structure)) { continue; }
+                                    row_data.push(row0.get(i).cloned().unwrap_or_default());
+                                }
+                                let _ = crate::sheets::database::writer::DbWriter::prepend_row(&conn, &sheet_name, &row_data, &column_names);
+                            }
+                        }
+                    } else {
+                        // Legacy JSON: defer save until after mutable borrow ends
+                        pending_json_save = Some(meta.clone());
+                    }
+                }
 
                 data_modified_writer.write(SheetDataModifiedInRegistryEvent {
                     category: category.clone(),
@@ -111,7 +183,15 @@ pub fn handle_add_row_request(
                 category, sheet_name
             );
             let registry_immut = registry.as_ref();
-            save_single_sheet(registry_immut, &meta_to_save);
+            // Skip JSON save if DB-backed (category is Some)
+            if meta_to_save.category.is_none() {
+                save_single_sheet(registry_immut, &meta_to_save);
+            }
+        }
+
+        // Perform deferred JSON save after mutable borrows are released
+        if let Some(meta) = pending_json_save.take() {
+            save_single_sheet(registry.as_ref(), &meta);
         }
     }
 }
@@ -218,6 +298,30 @@ pub fn handle_toggle_ai_row_generation(
                     );
                 }
             }
+            // Persist to DB if this is a DB-backed sheet and we're toggling the root table-level flag
+            if meta_clone.category.is_some() && e.structure_path.is_none() {
+                // Resolve DB path and persist
+                if let Some(cat) = &e.category {
+                    let base_path = crate::sheets::systems::io::get_default_data_base_path();
+                    let db_path = base_path.join(format!("{}.db", cat));
+                    if db_path.exists() {
+                        if let Ok(conn) = rusqlite::Connection::open(&db_path) {
+                            let _ = crate::sheets::database::schema::ensure_global_metadata_table(&conn);
+                            let _ = crate::sheets::database::writer::DbWriter::update_table_ai_settings(
+                                &conn,
+                                &e.sheet_name,
+                                Some(e.enabled),
+                                None,
+                                None,
+                                None,
+                            );
+                        }
+                    }
+                }
+            } else if meta_clone.category.is_none() {
+                // Legacy JSON
+                save_single_sheet(registry.as_ref(), &meta_clone);
+            }
             
             feedback.write(SheetOperationFeedback {
                 message: message.clone(),
@@ -302,7 +406,32 @@ pub fn handle_update_ai_send_schema(
                         format!("{} group state updated (no column changes).", base_message)
                     };
                     let meta_clone = meta.clone();
-                    save_single_sheet(registry.as_ref(), &meta_clone);
+                    if meta_clone.category.is_none() {
+                        save_single_sheet(registry.as_ref(), &meta_clone);
+                    } else {
+                        // Persist ai_include_in_send per column to DB
+                        if let Some(cat) = &e.category {
+                            let base = crate::sheets::systems::io::get_default_data_base_path();
+                            let db_path = base.join(format!("{}.db", cat));
+                            if db_path.exists() {
+                                if let Ok(conn) = rusqlite::Connection::open(&db_path) {
+                                    let _ = crate::sheets::database::schema::ensure_global_metadata_table(&conn);
+                                    // Update all non-structure columns
+                                    for (idx, c) in meta_clone.columns.iter().enumerate() {
+                                        if matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure)) { continue; }
+                                        let _ = crate::sheets::database::writer::DbWriter::update_column_metadata(
+                                            &conn,
+                                            &e.sheet_name,
+                                            idx,
+                                            None,
+                                            None,
+                                            c.ai_include_in_send,
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
                     
                     // Update virtual sheets if this is a structure path update
                     if let Some(path) = &e.structure_path {
@@ -398,7 +527,35 @@ pub fn handle_update_ai_structure_send(
                         format!("{} group state updated.", base_message)
                     };
                     let meta_clone = meta.clone();
-                    save_single_sheet(registry.as_ref(), &meta_clone);
+                    if meta_clone.category.is_none() {
+                        save_single_sheet(registry.as_ref(), &meta_clone);
+                    } else {
+                        // Persist structure-level include flag at the structure root or field level where applicable
+                        if let Some(cat) = &e.category {
+                            let base = crate::sheets::systems::io::get_default_data_base_path();
+                            let db_path = base.join(format!("{}.db", cat));
+                            if db_path.exists() {
+                                if let Ok(conn) = rusqlite::Connection::open(&db_path) {
+                                    let _ = crate::sheets::database::schema::ensure_global_metadata_table(&conn);
+                                    // If targeting a direct structure column (path len 1), update that column's include
+                                    if e.structure_path.len() == 1 {
+                                        let idx = e.structure_path[0];
+                                        if let Some(col) = meta_clone.columns.get(idx) {
+                                            let _ = crate::sheets::database::writer::DbWriter::update_column_metadata(
+                                                &conn,
+                                                &e.sheet_name,
+                                                idx,
+                                                None,
+                                                None,
+                                                col.ai_include_in_send,
+                                            );
+                                        }
+                                    }
+                                    // For nested fields, persistence would target the virtual structure sheet's metadata table (future work)
+                                }
+                            }
+                        }
+                    }
                     
                     // Update virtual sheets that might be displaying this structure
                     update_virtual_sheets_from_parent_structure(
@@ -488,7 +645,9 @@ pub fn handle_create_ai_schema_group(
         meta.ai_active_schema_group = Some(unique_name.clone());
 
         let meta_clone = meta.clone();
-        save_single_sheet(registry.as_ref(), &meta_clone);
+        if meta_clone.category.is_none() {
+            save_single_sheet(registry.as_ref(), &meta_clone);
+        }
         feedback.write(SheetOperationFeedback {
             message: format!(
                 "Created AI schema group '{}' for {:?}/{}",
@@ -591,7 +750,9 @@ pub fn handle_rename_ai_schema_group(
         }
 
         let meta_clone = meta.clone();
-        save_single_sheet(registry.as_ref(), &meta_clone);
+        if meta_clone.category.is_none() {
+            save_single_sheet(registry.as_ref(), &meta_clone);
+        }
         feedback.write(SheetOperationFeedback {
             message: format!(
                 "Renamed AI schema group '{}' to '{}' for {:?}/{}",
@@ -684,7 +845,9 @@ pub fn handle_delete_ai_schema_group(
         }
 
         let meta_clone = meta.clone();
-        save_single_sheet(registry.as_ref(), &meta_clone);
+        if meta_clone.category.is_none() {
+            save_single_sheet(registry.as_ref(), &meta_clone);
+        }
         feedback.write(SheetOperationFeedback {
             message: format!(
                 "Deleted AI schema group '{}' from {:?}/{}",
@@ -733,7 +896,9 @@ pub fn handle_select_ai_schema_group(
         match meta.apply_ai_schema_group(&e.group_name) {
             Ok(changed) => {
                 let meta_clone = meta.clone();
-                save_single_sheet(registry.as_ref(), &meta_clone);
+                if meta_clone.category.is_none() {
+                    save_single_sheet(registry.as_ref(), &meta_clone);
+                }
                 if changed {
                     feedback.write(SheetOperationFeedback {
                         message: format!(

@@ -61,11 +61,13 @@ pub(super) fn show_sheet_table(
     }
     // If a virtual structure sheet is active, temporarily override selected sheet for rendering
     let backup_sheet = state.selected_sheet_name.clone();
+    let mut used_virtual_override = false;
     if let Some(vctx) = state.virtual_structure_stack.last() {
         if let Some(vsheet) = registry.get_sheet(&state.selected_category, &vctx.virtual_sheet_name)
         {
             if vsheet.metadata.is_some() {
                 state.selected_sheet_name = Some(vctx.virtual_sheet_name.clone());
+                used_virtual_override = true;
             }
         }
     }
@@ -96,8 +98,13 @@ pub(super) fn show_sheet_table(
         if let Some(sheet_data_ref) = sheet_data_ref_opt {
             if let Some(metadata) = &sheet_data_ref.metadata {
                 // Notice for standard sheets only (structure view handled earlier)
+                // Now include structure columns - they will be rendered as buttons
                 let num_cols = metadata.columns.len();
-                if metadata.get_filters().len() != num_cols && num_cols > 0 {
+                let visible_columns = state.get_visible_column_indices(&current_category_clone, selected_name, num_cols);
+                let num_visible_cols = visible_columns.len();
+                // Consistency check now includes all columns
+                let total_filters_including_empty = metadata.get_filters().len();
+                if total_filters_including_empty != num_cols && num_cols > 0 {
                     error!("Metadata inconsistency detected (cols vs filters) for sheet '{:?}/{}'. Revalidation might be needed.", current_category_clone, selected_name);
                     ui.colored_label(egui::Color32::RED, "Metadata inconsistency detected...");
                     return;
@@ -145,18 +152,18 @@ pub(super) fn show_sheet_table(
                 // Capture the start position to anchor floating buttons later
                 let table_start_pos = ui.next_widget_position();
 
-                let scroll_resp = egui::ScrollArea::both()
+                let _scroll_resp = egui::ScrollArea::both()
                     .id_salt("main_sheet_table_scroll_area")
                     .auto_shrink([false; 2])
                     .show(ui, |ui| {
                        let mut table_builder = TableBuilder::new(ui)
                            .striped(true)
                            .resizable(true)
-                           .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                           .cell_layout(egui::Layout::left_to_right(egui::Align::Min))
                            .min_scrolled_height(0.0);
 
                        let prefix_count = ancestor_key_columns.len();
-                       let total_cols = num_cols + prefix_count;
+                       let total_cols = num_visible_cols + prefix_count;
 
                        if total_cols == 0 {
                             if state.scroll_to_row_index.is_some() { state.scroll_to_row_index = None; }
@@ -170,11 +177,41 @@ pub(super) fn show_sheet_table(
 
                             // Build prefix (read-only key) columns next (if any)
                             for _ in 0..prefix_count { table_builder = table_builder.column(Column::initial(110.0).at_least(60.0).resizable(true).clip(true)); }
-                            const DEFAULT_COL_WIDTH: f32 = 120.0; // width field deprecated
-                            for _i in 0..num_cols {
-                                let col = Column::initial(DEFAULT_COL_WIDTH).at_least(40.0).resizable(true).clip(true);
+                            // Reduce default width for compactness, but customize per column type
+                            // Collect validators to choose per-type defaults
+                            let validators: Vec<Option<crate::sheets::definitions::ColumnValidator>> = metadata
+                                .columns
+                                .iter()
+                                .map(|c| c.validator.clone())
+                                .collect();
+                            let data_types: Vec<crate::sheets::definitions::ColumnDataType> = metadata
+                                .columns
+                                .iter()
+                                .map(|c| c.data_type)
+                                .collect();
+                            for vis_idx in 0..num_visible_cols {
+                                let col_index = visible_columns[vis_idx];
+                                let dtype = data_types.get(col_index).copied().unwrap_or(crate::sheets::definitions::ColumnDataType::String);
+                                let validator = validators.get(col_index).cloned().flatten();
+                                // Decide width
+                                let (init_w, min_w) = match (validator, dtype) {
+                                    // Bool: smaller, since only a checkbox is shown
+                                    (_, crate::sheets::definitions::ColumnDataType::Bool) => (48.0, 36.0),
+                                    // Linked text columns: allow wider default
+                                    (Some(crate::sheets::definitions::ColumnValidator::Linked { .. }), _) => (140.0, 60.0),
+                                    // Structure columns render as a button with text; give them wider room
+                                    (Some(crate::sheets::definitions::ColumnValidator::Structure), _) => (140.0, 60.0),
+                                    // Numbers: keep compact
+                                    (_, crate::sheets::definitions::ColumnDataType::I64) => (70.0, 36.0),
+                                    (_, crate::sheets::definitions::ColumnDataType::F64) => (78.0, 36.0),
+                                    // Default/text: a bit wider than base to improve readability
+                                    _ => (120.0, 48.0),
+                                };
+                                let col = Column::initial(init_w).at_least(min_w).resizable(true).clip(true);
                                 table_builder = table_builder.column(col);
                             }
+                            // Add a non-resizable remainder filler column to prevent the last data column from stretching to the full viewport width
+                            table_builder = table_builder.column(Column::remainder().resizable(false));
                        }
                        if let Some(row_idx) = state.scroll_to_row_index {
                             if total_cols > 0 {
@@ -183,6 +220,8 @@ pub(super) fn show_sheet_table(
                             state.scroll_to_row_index = None;
                        }
 
+                       // Reset header anchor each frame before header render
+                       state.last_header_right_edge_x = 0.0;
                        table_builder
                            .header(row_height, |mut header_row| {
                                // Left control header cell: keep minimal content and do NOT draw a separator to avoid visual clash with Add Row
@@ -213,6 +252,8 @@ pub(super) fn show_sheet_table(
                                    send_schema_writer,
                                    structure_send_writer,
                                );
+                               // Add empty header cell for the filler remainder column appended to the builder
+                               if total_cols > 0 { header_row.col(|_ui| { /* filler */ }); }
                             })
                            .body(|body: TableBody| {
                                state.ensure_ai_included_columns_cache(
@@ -231,6 +272,18 @@ pub(super) fn show_sheet_table(
                                    grid,
                                    meta_ref,
                                );
+                               // If there are absolutely no columns, show a friendly hint row
+                               if num_visible_cols == 0 && prefix_count == 0 {
+                                   let inner_body = body;
+                                   inner_body.rows(row_height, 1, |mut row| {
+                                       // control col (empty hover area to keep row height consistent)
+                                       row.col(|ui| { ui.allocate_exact_size(egui::vec2(18.0, row_height), egui::Sense::hover()); });
+                                       // message
+                                       row.col(|ui| { ui.label("(No columns)"); });
+                                   });
+                                   return;
+                               }
+
                                if ancestor_key_columns.is_empty() {
                                    // Render standard body with the control column prepended
                                    use crate::sheets::definitions::ColumnValidator;
@@ -257,7 +310,7 @@ pub(super) fn show_sheet_table(
 
                                        if let Some(row_data) = grid.get(original_row_index) {
                                            if row_data.len() != num_cols { row.col(|ui| { ui.colored_label(egui::Color32::RED, "Row Len Err"); }); return; }
-                                           for c_idx in 0..num_cols { row.col(|ui| {
+                                           for c_idx in visible_columns.iter().copied() { row.col(|ui| {
                                                let validator_opt = validators.get(c_idx).cloned().flatten();
                                                let cell_id = egui::Id::new("cell")
                                                    .with(current_category_clone.as_deref().unwrap_or("root"))
@@ -284,6 +337,8 @@ pub(super) fn show_sheet_table(
                                                    cell_update_writer.write(crate::sheets::events::UpdateCellEvent { category: current_category_clone.clone(), sheet_name: selected_name.to_string(), row_index: original_row_index, col_index: c_idx, new_value });
                                                }
                                            }); }
+                                           // filler remainder cell to avoid stretching
+                                           row.col(|ui| { ui.allocate_exact_size(egui::vec2(0.0, row_height), egui::Sense::hover()); });
                                        } else { row.col(|ui| { ui.colored_label(egui::Color32::RED, "Row Idx Err"); }); }
                                    });
                                } else {
@@ -291,8 +346,10 @@ pub(super) fn show_sheet_table(
                                    let inner_body = body;
                                    let original_category = current_category_clone.clone();
                                    use crate::sheets::definitions::ColumnValidator;
+                                   // Now include structure columns - they will be rendered as buttons
                                    let validators: Vec<Option<ColumnValidator>> =
-                                       meta_ref.columns.iter().map(|c| c.validator.clone()).collect();
+                                       meta_ref.columns.iter()
+                                       .map(|c| c.validator.clone()).collect();
                                    let num_cols_local = meta_ref.columns.len();
                                    inner_body.rows(row_height, filtered_indices.len(), |mut row| {
                                        let idx_in_list = row.index();
@@ -318,7 +375,8 @@ pub(super) fn show_sheet_table(
                                        }
                                        if let Some(row_data) = grid.get(original_row_index) {
                                            if row_data.len() != num_cols_local { row.col(|ui| { ui.colored_label(egui::Color32::RED, "Row Len Err"); }); return; }
-                                           for c_idx in 0..num_cols_local { row.col(|ui| {
+                                           let visible_cols_local = state.get_visible_column_indices(&original_category, selected_name, num_cols_local);
+                                           for c_idx in visible_cols_local.iter().copied() { row.col(|ui| {
                                                let validator_opt = validators.get(c_idx).cloned().flatten();
                                                let cell_id = egui::Id::new("cell")
                                                    .with(original_category.as_deref().unwrap_or("root"))
@@ -345,6 +403,8 @@ pub(super) fn show_sheet_table(
                                                    cell_update_writer.write(crate::sheets::events::UpdateCellEvent { category: original_category.clone(), sheet_name: selected_name.to_string(), row_index: original_row_index, col_index: c_idx, new_value });
                                                }
                                            }); }
+                                           // filler remainder cell to avoid stretching
+                                           row.col(|ui| { ui.allocate_exact_size(egui::vec2(0.0, row_height), egui::Sense::hover()); });
                                        } else { row.col(|ui| { ui.colored_label(egui::Color32::RED, "Row Idx Err"); }); }
                                    });
                                }
@@ -359,7 +419,7 @@ pub(super) fn show_sheet_table(
                     || state.show_toybox_menu;
                 let add_controls_visible = !any_toolbox_open;
                 if add_controls_visible {
-                    let scroll_rect = scroll_resp.inner_rect;
+                    // let scroll_rect = scroll_resp.inner_rect; // not needed for placement anymore
                     // Add Row: place on the delimiter (bottom of header), near left edge of the table
                     let pos_left =
                         egui::pos2(table_start_pos.x + 6.0, table_start_pos.y + header_h - 9.0);
@@ -380,17 +440,21 @@ pub(super) fn show_sheet_table(
                         });
 
                     // Add Column placement:
-                    // - If no horizontal scrolling: place right after the last header delimiter
-                    // - If horizontal scrolling exists: place at the rightmost edge of the viewport
-                    let has_h_scroll = scroll_resp.inner_rect.width() < scroll_resp.content_size.x;
-                    // Estimate rightmost delimiter position: when no horizontal scroll, use table_start_pos.x + scroll content width
-                    let right_x = if !has_h_scroll {
-                        // content_size.x is approximate full table width; keep 6px gap
-                        table_start_pos.x + scroll_resp.content_size.x + 6.0
+                    // Desired behavior: place just a bit to the right of the rightmost data column header.
+                    // Implementation: anchor to the content's right edge (content_size.x) when columns exist,
+                    // and choose a sensible small offset for the empty-columns case.
+                    // let has_h_scroll = scroll_resp.inner_rect.width() < scroll_resp.content_size.x; // not needed after anchoring to content width
+                    let right_x = if num_visible_cols == 0 {
+                        // No columns: keep button near the left header zone
+                        table_start_pos.x + 24.0
+                    } else if state.last_header_right_edge_x.is_finite() && state.last_header_right_edge_x > 0.0 {
+                        // Place just to the right of the last actual header
+                        state.last_header_right_edge_x + 6.0
                     } else {
-                        // viewport right with padding
-                        scroll_rect.right() + 12.0
+                        // As a conservative fallback, keep it near the left header zone
+                        table_start_pos.x + 24.0
                     };
+                    // Vertically align in the header band
                     let pos_right = egui::pos2(right_x, table_start_pos.y + 2.0);
                     egui::Area::new("floating_add_col_btn".into())
                         .order(egui::Order::Foreground)
@@ -432,15 +496,17 @@ pub(super) fn show_sheet_table(
             });
         }
     }
-    // Restore selection if we temporarily switched to virtual
-    if let Some(vctx) = state.virtual_structure_stack.last() {
-        if let Some(orig_sheet) = &backup_sheet {
-            if *orig_sheet != vctx.virtual_sheet_name {
-                state.selected_sheet_name = backup_sheet;
+    // Restore selection only if we temporarily switched to a virtual sheet
+    if used_virtual_override {
+        if let Some(vctx) = state.virtual_structure_stack.last() {
+            if let Some(orig_sheet) = &backup_sheet {
+                if *orig_sheet != vctx.virtual_sheet_name {
+                    state.selected_sheet_name = backup_sheet;
+                }
             }
+        } else {
+            // No virtual sheet active anymore, restore previous selection
+            state.selected_sheet_name = backup_sheet;
         }
-    } else {
-        // No virtual sheet active, ensure selection remains original
-        state.selected_sheet_name = backup_sheet;
     }
 }

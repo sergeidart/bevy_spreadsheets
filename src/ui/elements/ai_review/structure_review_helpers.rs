@@ -182,12 +182,18 @@ pub fn build_structure_columns(
             continue;
         }
         
+        // Skip column 0 (id) in structure sheets - it's internal and should remain hidden
+        if col_idx == 0 {
+            continue;
+        }
+        
         if is_structure {
             result.push(ColumnEntry::Structure(col_idx));
         } else {
             // Show ALL regular columns from the structure schema, not just those in union_cols
             // This is necessary because linked columns might not have AI-generated data initially
             // but still need to be displayed for user input
+            // Note: Column 1 (parent_key) will be shown as green non-editable in the renderer
             result.push(ColumnEntry::Regular(col_idx));
         }
     }
