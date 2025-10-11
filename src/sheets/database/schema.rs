@@ -105,10 +105,11 @@ pub fn create_data_table(
     conn.execute(&create_sql, [])?;
 
     // Create index
+    let index_name = table_name.replace(" ", "_");
     conn.execute(
         &format!(
             "CREATE INDEX IF NOT EXISTS idx_{}_row_index ON \"{}\"(row_index)",
-            table_name, table_name
+            index_name, table_name
         ),
         [],
     )?;
@@ -371,10 +372,11 @@ pub fn create_structure_table(
     conn.execute(&create_sql, [])?;
 
     // Indexes
+    let index_name = structure_table.replace(" ", "_");
     conn.execute(
         &format!(
             "CREATE INDEX IF NOT EXISTS idx_{}_parent ON \"{}\"(parent_id)",
-            structure_table, structure_table
+            index_name, structure_table
         ),
         [],
     )?;

@@ -298,10 +298,11 @@ mod tests {
         );
         conn.execute(&sql, []).unwrap();
         // Helpful index similar to production
+        let index_name = table.replace(" ", "_");
         conn.execute(
             &format!(
                 "CREATE INDEX IF NOT EXISTS idx_{}_row_index ON \"{}\"(row_index)",
-                table, table
+                index_name, table
             ),
             [],
         )
