@@ -12,10 +12,9 @@ use crate::{
             RequestSheetRevalidation,
             SheetDataModifiedInRegistryEvent,
         },
-        resources::{SheetRegistry, SheetRenderCache},
+        resources::{SheetRegistry, SheetRenderCache}, systems::logic::generate_structure_preview,
     },
     ui::{
-        common::generate_structure_preview,
         elements::editor::state::EditorWindowState, // Needed for linked cache access during validation
         validation::{validate_basic_cell, validate_linked_cell, ValidationState},
     },

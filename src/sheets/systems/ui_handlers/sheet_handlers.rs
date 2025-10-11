@@ -12,6 +12,10 @@ pub fn handle_sheet_selection(
         state.selected_sheet_name = new_sheet;
         if state.selected_sheet_name.is_none() {
             state.reset_interaction_modes_and_selections();
+        } else {
+            // On direct sheet open, clear hidden navigation filters
+            state.structure_navigation_stack.clear();
+            state.filtered_row_indices_cache.clear();
         }
         state.force_filter_recalculation = true;
         state.show_column_options_popup = false;

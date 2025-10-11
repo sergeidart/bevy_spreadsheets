@@ -23,13 +23,7 @@ impl EditorWindowState {
         self.pending_validator_target_is_structure = false;
 
         // NOTE: virtual structure stack intentionally preserved so user can back out after mode changes
-        // Clear real structure navigation stack (hidden temporal filters) and cached filters when resetting interaction modes.
-        // This ensures that selecting a sheet from the table list does not continue to apply a hidden
-        // parent_key filter or any lingering custom filters from a previous navigation path.
-        self.structure_navigation_stack.clear();
-        // Clear filtered row indices cache and force recalculation to remove stale filters
-        self.filtered_row_indices_cache.clear();
-        self.force_filter_recalculation = true;
+    // Note: structure navigation stack and filtered cache cleared only on direct sheet open
         // Clear column options popup filter inputs
         self.options_column_filter_input.clear();
         self.options_column_filter_terms.clear();

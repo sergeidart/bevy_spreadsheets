@@ -1,6 +1,6 @@
 use bevy_egui::egui::Color32;
 
-use crate::ui::common::{generate_structure_preview, generate_structure_preview_from_rows};
+use crate::sheets::systems::logic::{generate_structure_preview, generate_structure_preview_from_rows};
 use crate::sheets::systems::ai_review::review_logic::ColumnEntry;
 use crate::ui::elements::editor::state::{
     EditorWindowState, ReviewChoice, StructureDetailContext, StructureReviewEntry,
