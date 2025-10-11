@@ -41,6 +41,9 @@ pub fn sheet_table_header(
 
     let mut _header_row_y_range: Option<std::ops::RangeInclusive<f32>> = None;
     let primary_released_this_frame = ctx.input(|i| i.pointer.primary_released());
+    
+    // Track column rects for drop detection
+    let mut column_rects: Vec<(usize, egui::Rect)> = Vec::new();
 
     for c_idx in visible_columns.iter().copied() {
         // Skip columns that are marked deleted in metadata
@@ -59,6 +62,9 @@ pub fn sheet_table_header(
             let can_drag = is_column_mode;
 
             let (_id, mut response) = ui.allocate_at_least(ui.available_size_before_wrap(), Sense::click_and_drag());
+            
+            // Store column rect for later drop detection
+            column_rects.push((c_idx, response.rect));
 
             ui.allocate_new_ui(egui::UiBuilder::new().max_rect(response.rect), |header_content_ui| {
                 header_content_ui.horizontal(|ui_h| {
@@ -309,30 +315,54 @@ pub fn sheet_table_header(
                     }
                 }
 
-                // --- Handle Drop ---
-                if primary_released_this_frame {
-                    if let Some(source_idx) = state.column_drag_state.source_index {
-                        if response.hovered() {
-                            if let Some(pointer_pos) = ctx.input(|i| i.pointer.hover_pos()) {
-                                let rect = response.rect;
-                                let mut dest = if pointer_pos.x < rect.center().x { c_idx } else { c_idx + 1 };
-                                let max_len = metadata.columns.len();
-                                if dest > max_len { dest = max_len; }
-                                let new_index = if dest > source_idx { dest - 1 } else { dest };
-                                if source_idx != new_index {
-                                    reorder_writer.write(RequestReorderColumn {
-                                        category: category.clone(),
-                                        sheet_name: sheet_name.to_string(),
-                                        old_index: source_idx,
-                                        new_index,
-                                    });
-                                }
-                            }
-                        }
-                    }
-                    state.column_drag_state.source_index = None;
-                }
+                // Drop handling moved outside the loop for better detection
             }
         });
+    }
+    
+    // --- Handle Drop Outside Column Loop ---
+    // This ensures drop works even if pointer is between columns or timing is off
+    if primary_released_this_frame {
+        if let Some(source_idx) = state.column_drag_state.source_index {
+            // Get pointer position
+            if let Some(pointer_pos) = ctx.input(|i| i.pointer.hover_pos()) {
+                // Find which column the pointer is over or closest to
+                let mut target_col_idx: Option<usize> = None;
+                let mut insert_before = false;
+                
+                for (col_idx, rect) in column_rects.iter() {
+                    if rect.contains(pointer_pos) {
+                        // Pointer is directly over this column
+                        target_col_idx = Some(*col_idx);
+                        insert_before = pointer_pos.x < rect.center().x;
+                        break;
+                    }
+                }
+                
+                // If we found a target column, calculate the destination index
+                if let Some(target_idx) = target_col_idx {
+                    let mut dest = if insert_before { target_idx } else { target_idx + 1 };
+                    let max_len = metadata.columns.len();
+                    if dest > max_len { 
+                        dest = max_len; 
+                    }
+                    let new_index = if dest > source_idx { dest - 1 } else { dest };
+                    
+                    if source_idx != new_index {
+                        info!("Dropping column {} at position {}", source_idx, new_index);
+                        reorder_writer.write(RequestReorderColumn {
+                            category: category.clone(),
+                            sheet_name: sheet_name.to_string(),
+                            old_index: source_idx,
+                            new_index,
+                        });
+                    }
+                } else {
+                    info!("Drop cancelled - pointer not over any column");
+                }
+            }
+            // Always clear the drag state when mouse is released
+            state.column_drag_state.source_index = None;
+        }
     }
 }

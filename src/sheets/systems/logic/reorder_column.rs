@@ -14,6 +14,7 @@ pub fn handle_reorder_column_request(
     mut registry: ResMut<SheetRegistry>,
     mut feedback_writer: EventWriter<SheetOperationFeedback>,
     mut data_modified_writer: EventWriter<SheetDataModifiedInRegistryEvent>,
+    mut render_cache: ResMut<crate::sheets::resources::SheetRenderCache>,
     editor_state: Option<Res<EditorWindowState>>,
 ) {
     let mut sheets_to_save: HashMap<(Option<String>, String), SheetMetadata> = HashMap::new();
@@ -70,6 +71,10 @@ pub fn handle_reorder_column_request(
                     metadata.ensure_column_consistency(); // Just in case
                     operation_successful = true;
                     metadata_cache = Some(metadata.clone());
+                    
+                    // Clear render cache to force UI refresh with new column order
+                    render_cache.clear_sheet_render_data(category, sheet_name);
+                    
                     data_modified_writer.write(SheetDataModifiedInRegistryEvent {
                         category: category.clone(),
                         sheet_name: sheet_name.clone(),
