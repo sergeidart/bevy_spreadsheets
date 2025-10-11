@@ -51,6 +51,7 @@ impl DbReader {
                     structure_key_parent_column_index: None,
                     structure_ancestor_key_parent_column_indices: None,
                     deleted: false,
+                    hidden: false,
                 })
             })? {
                 columns_meta.push(row?);
@@ -166,6 +167,7 @@ impl DbReader {
                     structure_key_parent_column_index: None,
                     structure_ancestor_key_parent_column_indices: None,
                     deleted: deleted_flag.map(|v| v != 0).unwrap_or(false),
+                    hidden: false, // Loaded from DB, not a runtime technical column
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
@@ -179,56 +181,63 @@ impl DbReader {
             meta_headers
         );
 
-        // Prepend technical columns for structure tables (id, parent_key)
-        // For structure tables, we normally prepend technical columns (id, parent_key).
-        // However, some metadata tables may already contain these rows (caused by earlier content insertion).
-        // Avoid double-prepending if headers already contain 'id' or 'parent_key'.
+        // Prepend technical columns for structure tables (id, parent_key, row_index)
+        // For structure tables, we always prepend technical columns.
+        // If they already exist in persisted metadata (from older versions), remove them first.
         let columns = if matches!(table_type.as_deref(), Some("structure")) {
-            let has_id = columns.iter().any(|c| c.header == "id");
-            let has_parent = columns.iter().any(|c| c.header == "parent_key");
-            if has_id || has_parent {
+            // Filter out any existing technical columns from persisted metadata
+            let original_len = columns.len();
+            let filtered: Vec<ColumnDefinition> = columns
+                .into_iter()
+                .filter(|c| c.header != "id" && c.header != "parent_key" && c.header != "row_index")
+                .collect();
+            
+            if filtered.len() < original_len {
                 bevy::log::warn!(
-                    "read_metadata: structure table '{}' metadata already contains technical columns: id={}, parent_key={}. Skipping prepend.",
-                    table_name,
-                    has_id,
-                    has_parent
+                    "read_metadata: structure table '{}' had technical columns in persisted metadata (removed and will re-prepend)",
+                    table_name
                 );
-                columns
-            } else {
-                let mut with_tech = Vec::with_capacity(columns.len() + 2);
-                with_tech.push(ColumnDefinition {
-                    header: "id".to_string(),
-                    validator: None,
-                    data_type: ColumnDataType::String,
-                    filter: None,
-                    ai_context: None,
-                    ai_enable_row_generation: None,
-                    ai_include_in_send: None,
-                    width: None,
-                    structure_schema: None,
-                    structure_column_order: None,
-                    structure_key_parent_column_index: None,
-                    structure_ancestor_key_parent_column_indices: None,
-                    deleted: false, // new field
-                });
-                with_tech.push(ColumnDefinition {
-                    header: "parent_key".to_string(),
-                    validator: None,
-                    data_type: ColumnDataType::String,
-                    filter: None,
-                    ai_context: None,
-                    ai_enable_row_generation: None,
-                    ai_include_in_send: None,
-                    width: None,
-                    structure_schema: None,
-                    structure_column_order: None,
-                    structure_key_parent_column_index: None,
-                    structure_ancestor_key_parent_column_indices: None,
-                    deleted: false, // new field
-                });
-                with_tech.extend(columns);
-                with_tech
             }
+            
+            // Always prepend technical columns in order: row_index (0), parent_key (1)
+            // Note: 'id' is not prepended as it's redundant with row_index for user visibility
+            // - row_index: hidden (internal-only, used for sorting/indexing)
+            // - parent_key: visible as read-only green text (users need to see parent relationships)
+            let mut with_tech = Vec::with_capacity(filtered.len() + 2);
+            with_tech.push(ColumnDefinition {
+                header: "row_index".to_string(),
+                validator: None,
+                data_type: ColumnDataType::I64,
+                filter: None,
+                ai_context: None,
+                ai_enable_row_generation: None,
+                ai_include_in_send: None,
+                width: None,
+                structure_schema: None,
+                structure_column_order: None,
+                structure_key_parent_column_index: None,
+                structure_ancestor_key_parent_column_indices: None,
+                deleted: false,
+                hidden: true, // Hidden - internal indexing column
+            });
+            with_tech.push(ColumnDefinition {
+                header: "parent_key".to_string(),
+                validator: None,
+                data_type: ColumnDataType::String,
+                filter: None,
+                ai_context: None,
+                ai_enable_row_generation: None,
+                ai_include_in_send: None,
+                width: None,
+                structure_schema: None,
+                structure_column_order: None,
+                structure_key_parent_column_index: None,
+                structure_ancestor_key_parent_column_indices: None,
+                deleted: false,
+                hidden: false, // Visible as read-only green text (see ui/common.rs col_index == 1 handling)
+            });
+            with_tech.extend(filtered);
+            with_tech
         } else {
             columns
         };
@@ -311,25 +320,15 @@ impl DbReader {
             return Ok(Vec::new());
         }
 
-        // For structure tables, avoid selecting id twice (we always select id separately)
         // Cast all values to TEXT to avoid rusqlite type mismatch when retrieving as String
-        let select_cols = if is_structure {
-            non_structure_cols
-                .iter()
-                .filter(|(_, name)| name != "id")
-                .map(|(_, name)| format!("CAST(\"{}\" AS TEXT) AS \"{}\"", name, name))
-                .collect::<Vec<_>>()
-                .join(", ")
-        } else {
-            non_structure_cols
-                .iter()
-                .map(|(_, name)| format!("CAST(\"{}\" AS TEXT) AS \"{}\"", name, name))
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
+        let select_cols = non_structure_cols
+            .iter()
+            .map(|(_, name)| format!("CAST(\"{}\" AS TEXT) AS \"{}\"", name, name))
+            .collect::<Vec<_>>()
+            .join(", ");
 
         let query = format!(
-            "SELECT id, {} FROM \"{}\" ORDER BY row_index",
+            "SELECT id, {} FROM \"{}\" ORDER BY row_index DESC",
             select_cols, table_name
         );
         bevy::log::info!("Prepared read_grid_data SQL for '{}': {}", table_name, query);
@@ -353,11 +352,8 @@ impl DbReader {
 
                 // Read non-structure columns
                 let mut non_structure_values = Vec::new();
-                let mut value_cols_count = if is_structure {
-                    non_structure_cols.len().saturating_sub(1)
-                } else {
-                    non_structure_cols.len()
-                };
+                let value_cols_count = non_structure_cols.len();
+                
                 // Ensure we don't try to read more columns than the statement returns
                 if stmt_col_count > 0 {
                     let max_values = stmt_col_count.saturating_sub(1); // minus id
@@ -368,10 +364,12 @@ impl DbReader {
                             max_values,
                             table_name
                         );
-                        value_cols_count = max_values;
                     }
                 }
-                for i in 0..value_cols_count {
+                
+                // Read values (skip column 0 which is always 'id' in SELECT)
+                let actual_count = value_cols_count.min(stmt_col_count.saturating_sub(1));
+                for i in 0..actual_count {
                     let value: Option<String> = row.get(i + 1).unwrap_or(None); // +1 because id is first
                     non_structure_values.push(value.unwrap_or_default());
                 }
@@ -401,38 +399,10 @@ impl DbReader {
 
                 // Merge all columns back in correct order
                 let mut cells = vec![String::new(); metadata.columns.len()];
-                if is_structure {
-                    // Map back skipping id (which is at index 0 in metadata for structure tables)
-                    let mut vi = 0usize;
-                    for (col_idx, name) in &non_structure_cols {
-                        if name == "id" {
-                            continue;
-                        }
-                        if let Some(val) = non_structure_values.get(vi) {
-                            cells[*col_idx] = val.clone();
-                        }
-                        vi = vi.saturating_add(1);
-                    }
-                    // Explicitly set the id column from the selected row_id
-                    if let Some((id_idx, _)) = non_structure_cols.iter().find(|(_, n)| n == "id") {
-                        if *id_idx < cells.len() {
-                            cells[*id_idx] = row_id.to_string();
-                        }
-                    } else {
-                        // Fallback: try to locate 'id' by header name in metadata
-                        if let Some(id_idx) = metadata.columns.iter().position(|c| c.header == "id")
-                        {
-                            if id_idx < cells.len() {
-                                cells[id_idx] = row_id.to_string();
-                            }
-                        }
-                    }
-                } else {
-                    for ((col_idx, _), value) in
-                        non_structure_cols.iter().zip(non_structure_values.iter())
-                    {
-                        cells[*col_idx] = value.clone();
-                    }
+                
+                // Map non-structure column values back to their positions
+                for ((col_idx, _), value) in non_structure_cols.iter().zip(non_structure_values.iter()) {
+                    cells[*col_idx] = value.clone();
                 }
                 for (col_idx, count_str) in structure_counts {
                     cells[col_idx] = count_str;

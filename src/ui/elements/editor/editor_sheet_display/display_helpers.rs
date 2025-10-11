@@ -68,25 +68,15 @@ pub fn restore_original_selection(
     }
 }
 
-/// Computes visible columns for the sheet, filtering out deleted columns
+/// Computes visible columns for the sheet, filtering out deleted and hidden columns
 pub fn compute_visible_columns(
     state: &EditorWindowState,
     category: &Option<String>,
     sheet_name: &str,
     metadata: &crate::sheets::definitions::SheetMetadata,
 ) -> Vec<usize> {
-    let num_cols = metadata.columns.len();
-    state
-        .get_visible_column_indices(category, sheet_name, num_cols)
-        .into_iter()
-        .filter(|&i| {
-            metadata
-                .columns
-                .get(i)
-                .map(|c| !c.deleted)
-                .unwrap_or(true)
-        })
-        .collect()
+    // get_visible_column_indices already filters by hidden and deleted
+    state.get_visible_column_indices(category, sheet_name, metadata)
 }
 
 /// Builds table column definitions with appropriate widths

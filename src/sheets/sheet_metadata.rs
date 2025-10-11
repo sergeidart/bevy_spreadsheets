@@ -263,6 +263,7 @@ impl<'de> Deserialize<'de> for SheetMetadata {
                 ai_enable_row_generation: None,
                 ai_include_in_send: None,
                 deleted: false,
+                hidden: false, // Legacy migration: default to visible
                 width: None,
                 structure_schema: None,
                 structure_column_order: None,

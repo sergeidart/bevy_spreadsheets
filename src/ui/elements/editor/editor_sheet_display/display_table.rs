@@ -417,16 +417,7 @@ fn render_virtual_structure_body(
             }
 
             let visible_cols_local: Vec<usize> = state
-                .get_visible_column_indices(current_category, selected_name, num_cols_local)
-                .into_iter()
-                .filter(|&i| {
-                    metadata
-                        .columns
-                        .get(i)
-                        .map(|c| !c.deleted)
-                        .unwrap_or(true)
-                })
-                .collect();
+                .get_visible_column_indices(current_category, selected_name, metadata);
 
             for c_idx in visible_cols_local.iter().copied() {
                 row.col(|ui| {

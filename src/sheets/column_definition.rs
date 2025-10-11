@@ -23,6 +23,9 @@ pub struct ColumnDefinition {
     /// Marked deleted (hidden for reuse)
     #[serde(default)]
     pub deleted: bool,
+    /// Marked as hidden (for technical columns that shouldn't be shown by default)
+    #[serde(default)]
+    pub hidden: bool,
     // Legacy width accepted but never serialized (feature removed)
     #[serde(default, skip_serializing)]
     pub width: Option<f32>,
@@ -69,6 +72,7 @@ impl ColumnDefinition {
             ai_enable_row_generation: None,
             ai_include_in_send: None,
             deleted: false,
+            hidden: false,
             width: None,
             structure_schema: None,
             structure_column_order: None,

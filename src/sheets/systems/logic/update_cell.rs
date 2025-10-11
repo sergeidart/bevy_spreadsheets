@@ -1,7 +1,6 @@
 // src/sheets/systems/logic/update_cell.rs
 use crate::sheets::{
     definitions::{ColumnValidator, SheetMetadata},
-    // ADDED RequestSheetRevalidation
     events::{
         RequestSheetRevalidation, SheetDataModifiedInRegistryEvent, SheetOperationFeedback,
         UpdateCellEvent,
@@ -18,12 +17,10 @@ pub fn handle_cell_update(
     mut registry: ResMut<SheetRegistry>,
     mut feedback_writer: EventWriter<SheetOperationFeedback>,
     mut data_modified_writer: EventWriter<SheetDataModifiedInRegistryEvent>,
-    // ADDED revalidation writer
     mut revalidate_writer: EventWriter<RequestSheetRevalidation>,
     editor_state: Option<Res<EditorWindowState>>, // To map virtual sheets to parent contexts
 ) {
     let mut sheets_to_save: HashMap<(Option<String>, String), SheetMetadata> = HashMap::new();
-    // ADDED: Track sheets needing revalidation
     let mut sheets_to_revalidate: HashMap<(Option<String>, String), ()> = HashMap::new();
 
     for event in events.read() {
@@ -111,7 +108,6 @@ pub fn handle_cell_update(
                         let mut changed = false;
                         let mut updated_val_for_db: Option<String> = None;
 
-                        // Narrow scope of the mutable borrow to avoid conflicts when later reading row id
                         {
                             if let Some(cell) = row.get_mut(col_idx) {
                                 if *cell != *new_value {
@@ -145,7 +141,6 @@ pub fn handle_cell_update(
                                                     }
                                                     final_val = Value::Array(arr).to_string();
                                                 } else {
-                                                    // If invalid JSON, store empty array
                                                     final_val = "[]".to_string();
                                                 }
                                             }
@@ -210,14 +205,33 @@ pub fn handle_cell_update(
                                                     }
                                                 }
                                             } else if !is_structure_col {
+                                                // For regular tables, map visual index to DB row ID
+                                                // Since we display DESC, visual index 0 = highest row_index in DB
                                                 if let Some(val) = updated_val_for_db.as_ref() {
-                                                    let _ = crate::sheets::database::writer::DbWriter::update_cell(
-                                                        &conn,
-                                                        &sheet_name,
-                                                        row_idx,
-                                                        &col_header,
-                                                        val,
+                                                    // Query: SELECT id FROM table ORDER BY row_index DESC LIMIT 1 OFFSET visual_idx
+                                                    let row_id_result: Result<i64, _> = conn.query_row(
+                                                        &format!(
+                                                            "SELECT id FROM \"{}\" ORDER BY row_index DESC LIMIT 1 OFFSET {}",
+                                                            sheet_name, row_idx
+                                                        ),
+                                                        [],
+                                                        |row| row.get(0),
                                                     );
+                                                    if let Ok(row_id) = row_id_result {
+                                                        // Update by ID instead of row_index
+                                                        let _ = conn.execute(
+                                                            &format!(
+                                                                "UPDATE \"{}\" SET \"{}\" = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                                                                sheet_name, col_header
+                                                            ),
+                                                            rusqlite::params![val, row_id],
+                                                        );
+                                                    } else {
+                                                        warn!(
+                                                            "Could not find row ID for visual index {} in '{:?}/{}' during cell update",
+                                                            row_idx, category, sheet_name
+                                                        );
+                                                    }
                                                 }
                                             } else {
                                                 // Main-sheet structure JSON updated: reflect into structure table rows
@@ -232,11 +246,16 @@ pub fn handle_cell_update(
                                                                 &col_def.structure_schema
                                                             {
                                                                 // Resolve parent_id of this main row
-                                                                if let Ok(parent_id) = conn.query_row(
-                                                                    &format!("SELECT id FROM \"{}\" WHERE row_index = ?", sheet_name),
-                                                                    [row_idx as i32],
-                                                                    |r| r.get::<_, i64>(0),
-                                                                ) {
+                                                                // Map visual index to actual DB row ID
+                                                                let parent_id_result: Result<i64, _> = conn.query_row(
+                                                                    &format!(
+                                                                        "SELECT id FROM \"{}\" ORDER BY row_index DESC LIMIT 1 OFFSET {}",
+                                                                        sheet_name, row_idx
+                                                                    ),
+                                                                    [],
+                                                                    |r| r.get(0),
+                                                                );
+                                                                if let Ok(parent_id) = parent_id_result {
                                                                     let structure_table = format!("{}_{}", sheet_name, col_header);
                                                                     // Build parent_key: prefer configured key column
                                                                     let parent_key: String = if let Some(kidx) = col_def.structure_key_parent_column_index {
@@ -454,7 +473,6 @@ pub fn handle_cell_update(
             }
         }
     }
-
     // Save sheets that were modified
     if !sheets_to_save.is_empty() {
         let registry_immut = registry.as_ref();

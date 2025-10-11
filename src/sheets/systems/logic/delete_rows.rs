@@ -56,11 +56,11 @@ pub fn handle_delete_rows_request(
         let mut error_message: Option<String> = None;
         let mut metadata_cache: Option<SheetMetadata> = None;
 
-        // Pre-capture info for DB deletion (need IDs for structure tables) before mutating the grid
+        // Pre-capture info for DB deletion (need row IDs) before mutating the grid
         let mut db_backed: Option<(
             String,   /*db_name*/
             bool,     /*is_structure_table*/
-            Vec<i64>, /*structure_ids*/
+            Vec<i64>, /*row_ids to delete*/
         )> = None;
         if let Some(sheet_ro) = registry.get_sheet(category, sheet_name) {
             if let Some(meta) = &sheet_ro.metadata {
@@ -77,19 +77,27 @@ pub fn handle_delete_rows_request(
                             .get(1)
                             .map(|c| c.header.eq_ignore_ascii_case("parent_key"))
                             .unwrap_or(false);
-                    let mut struct_ids: Vec<i64> = Vec::new();
+                    
+                    // Extract row IDs from the grid (column 0 for structures, need to query for regular tables)
+                    let mut row_ids: Vec<i64> = Vec::new();
+                    
+                    // For structure tables, ID is in column 0
                     if is_structure {
                         for &idx in indices_to_delete.iter() {
                             if let Some(row) = sheet_ro.grid.get(idx) {
                                 if let Some(id_str) = row.get(0) {
                                     if let Ok(id_val) = id_str.trim().parse::<i64>() {
-                                        struct_ids.push(id_val);
+                                        row_ids.push(id_val);
                                     }
                                 }
                             }
                         }
+                    } else {
+                        // For regular tables, we need to map visual indices back to DB
+                        // Since we ORDER BY row_index DESC, we need to find the actual row IDs
+                        // We'll do this during DB deletion phase below
                     }
-                    db_backed = Some((db_name.clone(), is_structure, struct_ids));
+                    db_backed = Some((db_name.clone(), is_structure, row_ids));
                 }
             }
         }
@@ -248,7 +256,7 @@ pub fn handle_delete_rows_request(
             }
 
             // Persist deletions to database when sheet is DB-backed
-            if let Some((db_name, is_structure, struct_ids)) = db_backed {
+            if let Some((db_name, is_structure, mut row_ids)) = db_backed {
                 let base = crate::sheets::systems::io::get_default_data_base_path();
                 let db_path = base.join(format!("{}.db", db_name));
                 if db_path.exists() {
@@ -257,8 +265,8 @@ pub fn handle_delete_rows_request(
                             // Ensure foreign keys for cascade
                             let _ = conn.execute("PRAGMA foreign_keys = ON;", []);
                             if is_structure {
-                                // Delete by id and compact per parent
-                                for id in struct_ids {
+                                // Delete structure rows by ID
+                                for id in row_ids {
                                     let _ = crate::sheets::database::writer::DbWriter::delete_structure_row_by_id(
                                         &conn,
                                         sheet_name,
@@ -266,15 +274,34 @@ pub fn handle_delete_rows_request(
                                     );
                                 }
                             } else {
-                                // Delete by row_index with compaction; use the same sorted order
-                                let mut sorted_indices: Vec<usize> =
-                                    indices_to_delete.iter().cloned().collect();
-                                sorted_indices.sort_unstable_by(|a, b| b.cmp(a));
-                                for idx in sorted_indices {
-                                    let _ = crate::sheets::database::writer::DbWriter::delete_row_and_compact(
-                                        &conn,
-                                        sheet_name,
-                                        idx,
+                                // For regular tables, collect ALL row IDs BEFORE deleting any
+                                // This prevents race condition where deletion shifts remaining indices
+                                row_ids.clear();
+                                for &visual_idx in indices_to_delete.iter() {
+                                    // Query: SELECT id FROM table ORDER BY row_index DESC LIMIT 1 OFFSET visual_idx
+                                    let id_result: Result<i64, _> = conn.query_row(
+                                        &format!(
+                                            "SELECT id FROM \"{}\" ORDER BY row_index DESC LIMIT 1 OFFSET {}",
+                                            sheet_name, visual_idx
+                                        ),
+                                        [],
+                                        |row| row.get(0),
+                                    );
+                                    if let Ok(row_id) = id_result {
+                                        row_ids.push(row_id);
+                                    } else {
+                                        warn!(
+                                            "Could not find row ID for visual index {} in '{:?}/{}'",
+                                            visual_idx, category, sheet_name
+                                        );
+                                    }
+                                }
+                                
+                                // Now delete all collected IDs in one go
+                                for row_id in row_ids {
+                                    let _ = conn.execute(
+                                        &format!("DELETE FROM \"{}\" WHERE id = ?", sheet_name),
+                                        [row_id],
                                     );
                                 }
                             }
@@ -306,6 +333,8 @@ pub fn handle_delete_rows_request(
         let registry_immut = registry.as_ref(); // Get immutable borrow for saving
         for ((cat, name), metadata) in sheets_to_save {
             info!("Rows deleted in '{:?}/{}', triggering save.", cat, name);
+            // Save JSON-backed sheets (metadata.category is None for JSON files)
+            // DB-backed sheets are already persisted above via direct DB operations
             if metadata.category.is_none() {
                 save_single_sheet(registry_immut, &metadata); // Pass metadata
             }

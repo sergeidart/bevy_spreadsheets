@@ -377,6 +377,7 @@ fn initialize_popup_state(state: &mut EditorWindowState, registry: &SheetRegistr
                 ai_enable_row_generation: f.ai_enable_row_generation,
                 ai_include_in_send: f.ai_include_in_send,
                 deleted: false,
+                hidden: false, // Synthesized from parent, not a technical column
                 width: None,
                 structure_schema: f.structure_schema.clone(),
                 structure_column_order: f.structure_column_order.clone(),

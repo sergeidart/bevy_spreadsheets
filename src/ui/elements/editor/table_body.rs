@@ -202,8 +202,8 @@ pub fn sheet_table_body(
         .map(|c| c.validator.clone())
         .collect();
 
-    // Get visible column indices (hides id/parent_key in structure navigation mode)
-    let visible_columns = state.get_visible_column_indices(category, sheet_name, num_cols);
+    // Get visible column indices (respects hidden flag on columns)
+    let visible_columns = state.get_visible_column_indices(category, sheet_name, metadata_ref);
 
     let filtered_indices =
         get_filtered_row_indices_cached(state, category, sheet_name, grid_data, metadata_ref);

@@ -316,7 +316,14 @@ impl JsonMigration {
         let mut conn = if create_new_db || !db_path.exists() {
             super::super::connection::DbConnection::create_new(db_path)?
         } else {
-            Connection::open(db_path)?
+            let c = Connection::open(db_path)?;
+            // Configure for better concurrency
+            c.execute_batch(
+                "PRAGMA journal_mode=WAL;
+                 PRAGMA synchronous=NORMAL;
+                 PRAGMA foreign_keys=ON;",
+            )?;
+            c
         };
 
         conn.execute_batch("PRAGMA foreign_keys = ON;")?;

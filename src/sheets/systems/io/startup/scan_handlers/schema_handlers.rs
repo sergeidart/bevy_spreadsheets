@@ -55,6 +55,7 @@ pub fn infer_schema_and_load_table(
                 ai_enable_row_generation: None,
                 ai_include_in_send: None,
                 deleted: false,
+                hidden: false, // SQLite schema import: visible by default
                 width: None,
                 structure_schema: None,
                 structure_column_order: None,

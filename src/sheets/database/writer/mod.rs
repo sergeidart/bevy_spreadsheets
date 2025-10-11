@@ -431,15 +431,16 @@ mod tests {
         )
         .unwrap();
 
-        // Prepend new row "New"
+        // Add new row "New" (appends at max_index + 1)
         let cols = vec!["Name".to_string()];
         let data = vec!["New".to_string()];
         DbWriter::prepend_row(&conn, table, &data, &cols).unwrap();
 
-        // Expect three rows with indices 0,1,2 and values New, A0, A1
+        // Expect three rows with indices 0,1,2 and values in storage: A0, A1, New
+        // With DESC sort, display order is: New (2), A1 (1), A0 (0)
         let mut stmt = conn
             .prepare(&format!(
-                "SELECT row_index, \"Name\" FROM \"{}\" ORDER BY row_index",
+                "SELECT row_index, \"Name\" FROM \"{}\" ORDER BY row_index DESC",
                 table
             ))
             .unwrap();
@@ -450,8 +451,8 @@ mod tests {
             .unwrap();
 
         assert_eq!(rows.len(), 3);
-        assert_eq!(rows[0], (0, "New".to_string()));
-        assert_eq!(rows[1], (1, "A0".to_string()));
-        assert_eq!(rows[2], (2, "A1".to_string()));
+        assert_eq!(rows[0], (2, "New".to_string())); // Newest at top
+        assert_eq!(rows[1], (1, "A1".to_string()));
+        assert_eq!(rows[2], (0, "A0".to_string()));
     }
 }

@@ -192,9 +192,9 @@ pub fn insert_row_with_index(
     Ok(conn.last_insert_rowid())
 }
 
-/// Prepend a row (row_index = 0) by shifting existing rows down by 1, within a transaction.
-/// OPTIMIZED: Uses a single UPDATE statement instead of row-by-row updates.
-/// Handles UNIQUE constraints for structure tables with (parent_id, row_index) uniqueness.
+/// Append a row at the end (max row_index + 1). No shifting needed - O(1) operation!
+/// With DESC sort order, newest rows appear at the top visually.
+/// Handles both regular and structure tables efficiently.
 pub fn prepend_row(
     conn: &Connection,
     table_name: &str,
@@ -206,51 +206,33 @@ pub fn prepend_row(
     // Check if this is a structure table by looking for parent_id column
     let is_structure_table = column_names.iter().any(|name| name == "parent_id");
     
-    if is_structure_table {
-        // For structure tables with UNIQUE(parent_id, row_index), we need to:
-        // 1. Get the parent_id from the data being inserted
-        // 2. Only shift rows for that specific parent_id
-        // 3. Update in reverse order to avoid constraint violations
-        
-        // Extract parent_id from row_data (should be first in the data)
+    // Find the maximum row_index and insert at max + 1
+    let max_index = if is_structure_table {
+        // For structure tables, get max row_index for this specific parent_id
         let parent_id = row_data.get(0)
             .and_then(|s| s.parse::<i64>().ok())
             .ok_or_else(|| rusqlite::Error::InvalidParameterName("parent_id not found or invalid".into()))?;
         
-        // Shift rows in DESCENDING order to avoid UNIQUE constraint violations
-        // We update from highest row_index to lowest, so we never have conflicts
-        {
-            let mut stmt = tx.prepare(&format!(
-                "SELECT row_index FROM \"{}\" WHERE parent_id = ? ORDER BY row_index DESC",
-                table_name
-            ))?;
-            let existing: Vec<i32> = stmt
-                .query_map([parent_id], |r| r.get(0))?
-                .collect::<Result<Vec<i32>, _>>()?;
-            
-            for ri in existing {
-                tx.execute(
-                    &format!(
-                        "UPDATE \"{}\" SET row_index = ?, updated_at = CURRENT_TIMESTAMP WHERE parent_id = ? AND row_index = ?",
-                        table_name
-                    ),
-                    params![ri + 1, parent_id, ri],
-                )?;
-            }
-        }
+        let max: Option<i32> = tx.query_row(
+            &format!("SELECT MAX(row_index) FROM \"{}\" WHERE parent_id = ?", table_name),
+            [parent_id],
+            |r| r.get(0),
+        ).unwrap_or(None);
+        
+        max.unwrap_or(-1) + 1
     } else {
-        // For regular tables without compound unique constraints, use fast bulk update
-        tx.execute(
-            &format!(
-                "UPDATE \"{}\" SET row_index = row_index + 1, updated_at = CURRENT_TIMESTAMP",
-                table_name
-            ),
+        // For regular tables, get global max row_index
+        let max: Option<i32> = tx.query_row(
+            &format!("SELECT MAX(row_index) FROM \"{}\"", table_name),
             [],
-        )?;
-    }
+            |r| r.get(0),
+        ).unwrap_or(None);
+        
+        max.unwrap_or(-1) + 1
+    };
     
-    // Insert new row at index 0
-    let inserted = insert_row_with_index(&tx, table_name, 0, row_data, column_names)?;
+    // Insert new row at max_index (no shifting needed!)
+    let inserted = insert_row_with_index(&tx, table_name, max_index, row_data, column_names)?;
     tx.commit()?;
     Ok(inserted)
 }

@@ -238,6 +238,7 @@ pub fn handle_update_column_validator(
                                 format!("{}_{}", sheet_name, meta_mut.columns[col_index].header);
 
                             // Create metadata with id and parent_key columns, plus schema fields
+                            // NOTE: These will be filtered out by the reader/writer since they're technical columns
                             let mut structure_columns = vec![
                                 crate::sheets::definitions::ColumnDefinition {
                                     header: "id".to_string(),
@@ -248,6 +249,7 @@ pub fn handle_update_column_validator(
                                     ai_enable_row_generation: None,
                                     ai_include_in_send: Some(false),
                                     deleted: false,
+                                    hidden: false, // Will be filtered during read/write anyway
                                     width: None,
                                     structure_schema: None,
                                     structure_column_order: None,
@@ -264,6 +266,7 @@ pub fn handle_update_column_validator(
                                     // Keep sending Parent_key by default for AI context/merge
                                     ai_include_in_send: Some(true),
                                     deleted: false,
+                                    hidden: false, // Will be filtered during read/write anyway
                                     width: None,
                                     structure_schema: None,
                                     structure_column_order: None,
@@ -285,6 +288,7 @@ pub fn handle_update_column_validator(
                                             .ai_enable_row_generation,
                                         ai_include_in_send: field_def.ai_include_in_send,
                                         deleted: false,
+                                        hidden: false, // User-defined structure field
                                         width: None,
                                         structure_schema: None,
                                         structure_column_order: None,

@@ -16,8 +16,46 @@ pub fn sql_type_for_column(data_type: ColumnDataType) -> &'static str {
     }
 }
 
+/// Current schema version - increment when adding migrations
+const CURRENT_SCHEMA_VERSION: i32 = 1;
+
+/// Create migration tracking table
+fn ensure_migration_tracking(conn: &Connection) -> DbResult<()> {
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS _SchemaVersions (
+            version INTEGER PRIMARY KEY,
+            applied_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            description TEXT
+        )",
+        [],
+    )?;
+    Ok(())
+}
+
+/// Check if a specific migration version has been applied
+fn is_migration_applied(conn: &Connection, version: i32) -> DbResult<bool> {
+    let count: i32 = conn.query_row(
+        "SELECT COUNT(*) FROM _SchemaVersions WHERE version = ?",
+        params![version],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
+/// Mark a migration as applied
+fn mark_migration_applied(conn: &Connection, version: i32, description: &str) -> DbResult<()> {
+    conn.execute(
+        "INSERT OR IGNORE INTO _SchemaVersions (version, description) VALUES (?, ?)",
+        params![version, description],
+    )?;
+    Ok(())
+}
+
 /// Create the global _Metadata table if it doesn't exist
 pub fn ensure_global_metadata_table(conn: &Connection) -> DbResult<()> {
+    // First ensure migration tracking exists
+    ensure_migration_tracking(conn)?;
+    
     conn.execute(
         "CREATE TABLE IF NOT EXISTS _Metadata (
             table_name TEXT PRIMARY KEY,
@@ -37,38 +75,43 @@ pub fn ensure_global_metadata_table(conn: &Connection) -> DbResult<()> {
         [],
     )?;
 
-    // Migration for existing databases: ensure 'hidden' column exists
-    let mut has_hidden = false;
-    let mut has_grounding = false;
-    let mut stmt = conn.prepare("PRAGMA table_info('_Metadata')")?;
-    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
-    for col in rows {
-        if let Ok(name) = col {
-            if name.eq_ignore_ascii_case("hidden") {
-                has_hidden = true;
-            }
-            if name.eq_ignore_ascii_case("ai_grounding_with_google_search") {
-                has_grounding = true;
+    // Run migrations only if not already applied
+    // Migration 1: Add hidden and grounding columns (only run once per database)
+    if !is_migration_applied(conn, 1)? {
+        let mut has_hidden = false;
+        let mut has_grounding = false;
+        let mut stmt = conn.prepare("PRAGMA table_info('_Metadata')")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+        for col in rows {
+            if let Ok(name) = col {
+                if name.eq_ignore_ascii_case("hidden") {
+                    has_hidden = true;
+                }
+                if name.eq_ignore_ascii_case("ai_grounding_with_google_search") {
+                    has_grounding = true;
+                }
             }
         }
+        if !has_hidden {
+            conn.execute(
+                "ALTER TABLE _Metadata ADD COLUMN hidden INTEGER DEFAULT 0",
+                [],
+            )?;
+            // Reasonable default: hide structure tables by default
+            let _ = conn.execute(
+                "UPDATE _Metadata SET hidden = 1 WHERE table_type = 'structure'",
+                [],
+            );
+        }
+        if !has_grounding {
+            conn.execute(
+                "ALTER TABLE _Metadata ADD COLUMN ai_grounding_with_google_search INTEGER DEFAULT 0",
+                [],
+            )?;
+        }
+        mark_migration_applied(conn, 1, "Added hidden and grounding columns to _Metadata")?;
     }
-    if !has_hidden {
-        conn.execute(
-            "ALTER TABLE _Metadata ADD COLUMN hidden INTEGER DEFAULT 0",
-            [],
-        )?;
-        // Reasonable default: hide structure tables by default
-        let _ = conn.execute(
-            "UPDATE _Metadata SET hidden = 1 WHERE table_type = 'structure'",
-            [],
-        );
-    }
-    if !has_grounding {
-        conn.execute(
-            "ALTER TABLE _Metadata ADD COLUMN ai_grounding_with_google_search INTEGER DEFAULT 0",
-            [],
-        )?;
-    }
+    
     Ok(())
 }
 
@@ -261,10 +304,37 @@ pub fn ensure_table_metadata_schema(
                 "INSERT OR IGNORE INTO \"{}\" (column_index, column_name, data_type) VALUES (?, ?, ?)",
                 meta_table
             ))?;
-            for (idx, col) in metadata.columns.iter().enumerate() {
+            
+            // For structure tables, filter out runtime-only technical columns (row_index, parent_key)
+            // These are prepended at read time but should never be persisted to metadata
+            // Technical columns are at indices 0 (row_index) and 1 (parent_key)
+            let table_type: Option<String> = conn
+                .query_row(
+                    "SELECT table_type FROM _Metadata WHERE table_name = ?",
+                    [table_name],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let is_structure = matches!(table_type.as_deref(), Some("structure"));
+            
+            // Re-enumerate after filtering to ensure indices start at 0 for data columns (not technical columns)
+            let mut data_column_idx = 0i32;
+            for col in metadata.columns.iter() {
+                // Skip runtime-only technical columns for structure tables
+                // Check by name to be resilient to any order changes
+                if is_structure && (col.header == "row_index" || col.header == "parent_key" || col.header == "id") {
+                    bevy::log::debug!(
+                        "ensure_table_metadata_schema: skipping runtime-only/legacy column '{}' for structure table '{}'",
+                        col.header,
+                        table_name
+                    );
+                    continue;
+                }
+                
                 // Use current data_type formatting
                 let dt = format!("{:?}", col.data_type);
-                insert_stmt.execute(rusqlite::params![idx as i32, &col.header, dt])?;
+                insert_stmt.execute(rusqlite::params![data_column_idx, &col.header, dt])?;
+                data_column_idx += 1;
             }
         }
         tx.commit()?;

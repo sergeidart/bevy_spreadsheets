@@ -235,18 +235,20 @@ impl EditorWindowState {
     }
 
     /// Returns the list of visible column indices for the current sheet view
-    /// Hides column 0 (id) when viewing structure sheets via navigation, but shows Parent_key (col 1) as read-only
+    /// Respects the 'hidden' flag on columns to hide technical columns
+    /// For structure tables, technical columns (row_index at 0, parent_key at 1) are hidden by default
     pub fn get_visible_column_indices(
         &self,
         category: &Option<String>,
         sheet_name: &str,
-        total_columns: usize,
+        metadata: &crate::sheets::definitions::SheetMetadata,
     ) -> Vec<usize> {
-        if self.should_hide_structure_technical_columns(category, sheet_name) {
-            // Skip only column 0 (id), keep Parent_key visible
-            (1..total_columns).collect()
-        } else {
-            (0..total_columns).collect()
-        }
+        metadata
+            .columns
+            .iter()
+            .enumerate()
+            .filter(|(_, col)| !col.hidden && !col.deleted)
+            .map(|(idx, _)| idx)
+            .collect()
     }
 }

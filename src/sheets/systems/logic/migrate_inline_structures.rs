@@ -351,6 +351,7 @@ fn create_structure_sheet_metadata(
             ai_enable_row_generation: None,
             ai_include_in_send: None,
             deleted: false,
+            hidden: false, // Legacy, will be filtered by reader/writer
             width: None,
             structure_schema: None,
             structure_column_order: None,
@@ -366,6 +367,7 @@ fn create_structure_sheet_metadata(
             ai_enable_row_generation: None,
             ai_include_in_send: None,
             deleted: false,
+            hidden: false, // Legacy, will be filtered by reader/writer
             width: None,
             structure_schema: None,
             structure_column_order: None,
@@ -386,6 +388,7 @@ fn create_structure_sheet_metadata(
                 ai_enable_row_generation: None,
                 ai_include_in_send: None,
                 deleted: false,
+                hidden: false, // User-defined schema field
                 width: None,
                 structure_schema: None,
                 structure_column_order: None,

@@ -196,6 +196,7 @@ pub fn handle_open_structure_view(
                                             ai_enable_row_generation: def.ai_enable_row_generation,
                                             ai_include_in_send: def.ai_include_in_send,
                                             deleted: false,
+                                            hidden: false, // User-defined schema column
                                             // Preserve deeper-level nested schemas & key metadata so that deeper levels persist and render consistently
                                             structure_schema: def.structure_schema.clone(),
                                             structure_column_order: def
@@ -224,6 +225,7 @@ pub fn handle_open_structure_view(
                                     ai_enable_row_generation: None,
                                     ai_include_in_send: None,
                                     deleted: false,
+                                    hidden: false, // User-defined data column
                                     structure_schema: None,
                                     structure_column_order: None,
                                     structure_key_parent_column_index: None,

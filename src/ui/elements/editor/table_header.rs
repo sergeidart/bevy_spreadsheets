@@ -30,8 +30,8 @@ pub fn sheet_table_header(
     let filters = metadata.get_filters();
     let num_cols = headers.len();
 
-    // Compute visible columns (respecting structure context)
-    let visible_columns = state.get_visible_column_indices(category, sheet_name, num_cols);
+    // Compute visible columns (respecting hidden flag on columns)
+    let visible_columns = state.get_visible_column_indices(category, sheet_name, metadata);
 
     // Column drag enabled
     let is_column_mode = true;

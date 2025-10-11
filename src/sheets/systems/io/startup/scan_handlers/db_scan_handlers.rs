@@ -84,6 +84,15 @@ fn load_database_tables(
         }
     };
 
+    // Configure connection for better concurrency
+    if let Err(e) = conn.execute_batch(
+        "PRAGMA journal_mode=WAL;
+         PRAGMA synchronous=NORMAL;
+         PRAGMA foreign_keys=ON;",
+    ) {
+        warn!("Startup DB Scan: Failed to configure database: {}", e);
+    }
+
     // Check if this is a SkylineDB database (has _Metadata table)
     let has_metadata_table = check_has_metadata_table(&conn);
 

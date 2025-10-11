@@ -476,6 +476,7 @@ mod tests {
             ai_enable_row_generation: None,
             ai_include_in_send: None,
             deleted: false,
+            hidden: false, // Test column, not hidden
             width: None,
             structure_schema: Some(vec![name_field.clone(), nested_field.clone()]),
             structure_column_order: None,
