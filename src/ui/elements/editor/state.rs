@@ -2,6 +2,7 @@
 // Main module file - re-exports all state definitions, functions, and handlers
 
 mod state_definitions;
+mod default;
 mod state_functions;
 mod state_handlers;
 
