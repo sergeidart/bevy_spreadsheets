@@ -115,8 +115,19 @@ pub fn handle_add_row_request(
                 if let Some(meta) = &sheet_data.metadata {
                     if meta.category.is_some() {
                         // DB-backed: prepend row in database too
-                        if let Err(e) = persist_row_to_db(meta, &sheet_name, &category, &sheet_data.grid) {
-                            warn!("Failed to persist row to DB: {}", e);
+                        let persist_start = std::time::Instant::now();
+                        match persist_row_to_db(meta, &sheet_name, &category, &sheet_data.grid) {
+                            Ok(_) => {
+                                let duration = persist_start.elapsed();
+                                if duration.as_millis() > 100 {
+                                    info!("Row persisted to DB in {:?} (slow operation)", duration);
+                                } else {
+                                    trace!("Row persisted to DB in {:?}", duration);
+                                }
+                            }
+                            Err(e) => {
+                                warn!("Failed to persist row to DB: {}", e);
+                            }
                         }
                     } else {
                         // Legacy JSON: defer save until after mutable borrow ends

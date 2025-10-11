@@ -12,6 +12,10 @@ pub use connection::DbConnection;
 pub use error::{DbError, DbResult};
 pub use migration::{MigrationReport, MigrationTools};
 pub use reader::DbReader;
+pub use schema::{
+    create_data_table, create_metadata_table, ensure_global_metadata_table,
+    ensure_table_metadata_schema, insert_table_metadata, sql_type_for_column,
+};
 pub use systems::{
     handle_export_requests, handle_migration_completion, handle_migration_requests,
     handle_upload_json_to_current_db,
