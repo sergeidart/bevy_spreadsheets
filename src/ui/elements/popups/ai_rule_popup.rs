@@ -208,7 +208,10 @@ pub fn show_ai_rule_popup(
                         let db_path = base.join(format!("{}.db", cat));
                         if db_path.exists() {
                             if let Ok(conn) = rusqlite::Connection::open(&db_path) {
-                                let _ = crate::sheets::database::schema::ensure_global_metadata_table(&conn);
+                                let _ =
+                                    crate::sheets::database::schema::ensure_global_metadata_table(
+                                        &conn,
+                                    );
                                 let _ = crate::sheets::database::writer::DbWriter::update_table_ai_settings(
                                     &conn,
                                     &meta_for_saving.sheet_name,

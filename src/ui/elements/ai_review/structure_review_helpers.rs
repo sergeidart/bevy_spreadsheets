@@ -3,8 +3,10 @@
 
 use crate::sheets::definitions::{ColumnValidator, StructureFieldDefinition};
 use crate::sheets::resources::SheetRegistry;
-use crate::ui::elements::editor::state::{EditorWindowState, NewRowReview, ReviewChoice, RowReview, StructureReviewEntry};
-use crate::ui::elements::ai_review::ai_batch_review_ui::ColumnEntry;
+use crate::sheets::systems::ai_review::review_logic::ColumnEntry;
+use crate::ui::elements::editor::state::{
+    EditorWindowState, NewRowReview, ReviewChoice, RowReview, StructureReviewEntry,
+};
 
 /// Convert a StructureReviewEntry into temporary RowReview and NewRowReview entries
 pub fn convert_structure_to_reviews(
@@ -14,9 +16,11 @@ pub fn convert_structure_to_reviews(
     let mut new_row_reviews = Vec::new();
 
     // Determine non-structure columns by analyzing the structure (assume all for now)
-    let num_cols = entry.original_rows.first().map(|r| r.len()).unwrap_or_else(|| {
-        entry.ai_rows.first().map(|r| r.len()).unwrap_or(0)
-    });
+    let num_cols = entry
+        .original_rows
+        .first()
+        .map(|r| r.len())
+        .unwrap_or_else(|| entry.ai_rows.first().map(|r| r.len()).unwrap_or(0));
     let non_structure_columns: Vec<usize> = (0..num_cols).collect();
 
     // Build RowReview entries for ORIGINAL rows only (up to original_rows_count)
@@ -28,14 +32,19 @@ pub fn convert_structure_to_reviews(
 
         let mut choices = Vec::new();
         for col_idx in 0..num_cols {
-            let has_diff = row_diffs.and_then(|d| d.get(col_idx)).copied().unwrap_or(false);
-            // If there's a difference, default to AI (we're reviewing AI suggestions)
-            // If no difference (original == ai), doesn't matter which we choose
-            choices.push(if has_diff {
-                ReviewChoice::AI
+            let has_diff = row_diffs
+                .and_then(|d| d.get(col_idx))
+                .copied()
+                .unwrap_or(false);
+            // Treat parent_key (col_idx == 1) as non-editable and not part of merge decisions.
+            // Default its choice to Original so it won't be considered for merges/edits.
+            if col_idx == 1 {
+                choices.push(ReviewChoice::Original);
             } else {
-                ReviewChoice::Original  // No difference, so Original == AI
-            });
+                // If there's a difference, default to AI (we're reviewing AI suggestions)
+                // If no difference (original == ai), default to Original
+                choices.push(if has_diff { ReviewChoice::AI } else { ReviewChoice::Original });
+            }
         }
 
         row_reviews.push(RowReview {
@@ -51,14 +60,16 @@ pub fn convert_structure_to_reviews(
     // Perform duplicate detection to enable merge suggestions (similar to base-level)
     for row_idx in entry.original_rows_count..entry.ai_rows.len() {
         let ai_row = &entry.ai_rows[row_idx];
-        
-        // Detect potential duplicates by comparing first column values
+
+        // Detect potential duplicates by comparing a key column value that is NOT the technical parent_key
         let duplicate_match_row = if !ai_row.is_empty() && !entry.original_rows.is_empty() {
-            let ai_first_val = ai_row.get(0).map(|s| s.trim().to_lowercase()).unwrap_or_default();
-            if !ai_first_val.is_empty() {
+            // prefer a column other than parent_key (index 1); otherwise fallback to 0
+            let key_idx = (0..ai_row.len()).find(|&i| i != 1).unwrap_or(0);
+            let ai_key_val = ai_row.get(key_idx).map(|s| s.trim().to_lowercase()).unwrap_or_default();
+            if !ai_key_val.is_empty() {
                 entry.original_rows.iter().position(|orig_row| {
-                    let orig_first_val = orig_row.get(0).map(|s| s.trim().to_lowercase()).unwrap_or_default();
-                    !orig_first_val.is_empty() && orig_first_val == ai_first_val
+                    let orig_key_val = orig_row.get(key_idx).map(|s| s.trim().to_lowercase()).unwrap_or_default();
+                    !orig_key_val.is_empty() && orig_key_val == ai_key_val
                 })
             } else {
                 None
@@ -66,12 +77,17 @@ pub fn convert_structure_to_reviews(
         } else {
             None
         };
-        
+
         // If we found a match, prepare merge data
         let (original_for_merge, choices) = if let Some(matched_idx) = duplicate_match_row {
             let original_row = &entry.original_rows[matched_idx];
             let mut merge_choices = Vec::new();
             for col_idx in 0..num_cols {
+                // Treat parent_key (column index 1) as non-editable and not part of merge decisions.
+                if col_idx == 1 {
+                    merge_choices.push(ReviewChoice::Original);
+                    continue;
+                }
                 let orig_val = original_row.get(col_idx).map(|s| s.as_str()).unwrap_or("");
                 let ai_val = ai_row.get(col_idx).map(|s| s.as_str()).unwrap_or("");
                 // If values differ, default to AI suggestion
@@ -85,7 +101,7 @@ pub fn convert_structure_to_reviews(
         } else {
             (None, None)
         };
-        
+
         new_row_reviews.push(NewRowReview {
             non_structure_columns: non_structure_columns.clone(),
             ai: ai_row.clone(),
@@ -114,15 +130,18 @@ pub fn build_structure_columns(
     if in_virtual_structure_review {
         let mut result = Vec::new();
         // Find the virtual sheet to get its metadata
-        if let Some(sheet) = registry.iter_sheets()
+        if let Some(sheet) = registry
+            .iter_sheets()
             .find(|(_, name, _)| *name == virtual_sheet_name)
-            .and_then(|(_, _, sheet)| Some(sheet)) {
+            .and_then(|(_, _, sheet)| Some(sheet))
+        {
             if let Some(meta) = &sheet.metadata {
                 for &col_idx in union_cols {
                     if let Some(col_def) = meta.columns.get(col_idx) {
-                        let is_structure = matches!(col_def.validator, Some(ColumnValidator::Structure));
+                        let is_structure =
+                            matches!(col_def.validator, Some(ColumnValidator::Structure));
                         let is_included = !matches!(col_def.ai_include_in_send, Some(false));
-                        
+
                         // EXCLUDE structure columns in virtual structure review
                         // (they are nested structures and shouldn't be navigable)
                         // Also exclude columns not included by schema groups
@@ -135,7 +154,7 @@ pub fn build_structure_columns(
         }
         return (result, Vec::new());
     }
-    
+
     let detail_ctx = match detail_ctx {
         Some(ctx) => ctx,
         None => return (Vec::new(), Vec::new()),
@@ -149,7 +168,9 @@ pub fn build_structure_columns(
         .and_then(|meta| {
             if let Some(&first_col_idx) = detail_ctx.structure_path.first() {
                 meta.columns.get(first_col_idx).and_then(|col| {
-                    col.structure_schema.as_ref().map(|schema| (col, schema.clone()))
+                    col.structure_schema
+                        .as_ref()
+                        .map(|schema| (col, schema.clone()))
                 })
             } else {
                 None
@@ -176,17 +197,17 @@ pub fn build_structure_columns(
     for (col_idx, field_def) in current_schema.iter().enumerate() {
         let is_structure = matches!(field_def.validator, Some(ColumnValidator::Structure));
         let is_included = !matches!(field_def.ai_include_in_send, Some(false));
-        
+
         // Only show columns that are included (respecting schema groups)
         if !is_included {
             continue;
         }
-        
+
         // Skip column 0 (id) in structure sheets - it's internal and should remain hidden
         if col_idx == 0 {
             continue;
         }
-        
+
         if is_structure {
             result.push(ColumnEntry::Structure(col_idx));
         } else {
@@ -203,7 +224,7 @@ pub fn build_structure_columns(
 
 /// Build ancestor key columns for structure detail view
 /// Gets keys from the structure schema and parent row data (from grid or reviews)
-/// 
+///
 /// Note: This is a simplified implementation that returns an empty vector.
 /// Full implementation would require parsing structure JSON and extracting key values.
 pub fn build_structure_ancestor_keys(

@@ -169,7 +169,8 @@ pub fn handle_sheet_render_cache_update(
                                         .and_then(|sd| sd.grid.get(r_idx))
                                     {
                                         // Parent key is usually first column (index 0)
-                                        let parent_key = parent_row.get(0).cloned().unwrap_or_default();
+                                        let parent_key =
+                                            parent_row.get(0).cloned().unwrap_or_default();
                                         let col_name = col_def.header.trim();
                                         if !parent_key.trim().is_empty() {
                                             label = Some(format!("{} {}", parent_key, col_name));
@@ -179,7 +180,9 @@ pub fn handle_sheet_render_cache_update(
                                     }
 
                                     // Fallback to parsed JSON preview
-                                    label.unwrap_or_else(|| generate_structure_preview(cell_value_str).0)
+                                    label.unwrap_or_else(|| {
+                                        generate_structure_preview(cell_value_str).0
+                                    })
                                 } else {
                                     cell_value_str.to_string()
                                 }

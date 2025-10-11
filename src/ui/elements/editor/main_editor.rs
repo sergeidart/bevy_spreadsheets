@@ -13,14 +13,15 @@ use super::editor_sheet_display;
 use super::state::{AiModeState, EditorWindowState, SheetInteractionState};
 use crate::sheets::{
     events::{
-        AddSheetRowRequest, CloseStructureViewEvent, RequestAddColumn, RequestCopyCell,
-        RequestCreateAiSchemaGroup, RequestCreateCategory, RequestCreateNewSheet,
-        RequestDeleteAiSchemaGroup, RequestDeleteCategory, RequestDeleteColumns,
-    RequestDeleteRows, RequestDeleteSheet, RequestPasteCell,
-        RequestRenameAiSchemaGroup, RequestRenameSheet, RequestReorderColumn,
+        AddSheetRowRequest, CloseStructureViewEvent, RequestAddColumn,
+        RequestBatchUpdateColumnAiInclude, RequestCopyCell, RequestCreateAiSchemaGroup,
+        RequestCreateCategory, RequestCreateNewSheet, RequestDeleteAiSchemaGroup,
+        RequestDeleteCategory, RequestDeleteColumns, RequestDeleteRows, RequestDeleteSheet,
+        RequestPasteCell, RequestRenameAiSchemaGroup, RequestRenameSheet, RequestReorderColumn,
         RequestSelectAiSchemaGroup, RequestSheetRevalidation, RequestToggleAiRowGeneration,
-        RequestUpdateAiSendSchema, RequestUpdateAiStructureSend, RequestUpdateColumnName,
-        RequestUpdateColumnValidator, SheetDataModifiedInRegistryEvent, UpdateCellEvent,
+        RequestUpdateAiSendSchema, RequestUpdateAiStructureSend, RequestUpdateColumnAiInclude,
+        RequestUpdateColumnName, RequestUpdateColumnValidator, SheetDataModifiedInRegistryEvent,
+        UpdateCellEvent,
     },
     resources::{ClipboardBuffer, SheetRegistry, SheetRenderCache},
 };
@@ -54,6 +55,8 @@ pub struct SheetEventWriters<'w> {
     pub revalidate: EventWriter<'w, RequestSheetRevalidation>,
     pub open_structure: EventWriter<'w, crate::sheets::events::OpenStructureViewEvent>,
     pub toggle_ai_row_generation: EventWriter<'w, RequestToggleAiRowGeneration>,
+    pub update_column_ai_include: EventWriter<'w, RequestUpdateColumnAiInclude>,
+    pub batch_update_column_ai_include: EventWriter<'w, RequestBatchUpdateColumnAiInclude>,
     pub update_ai_send_schema: EventWriter<'w, RequestUpdateAiSendSchema>,
     pub update_ai_structure_send: EventWriter<'w, RequestUpdateAiStructureSend>,
     pub create_ai_schema_group: EventWriter<'w, RequestCreateAiSchemaGroup>,
@@ -145,12 +148,11 @@ pub fn generic_sheet_editor_ui(
     // Bottom panels must be declared before CentralPanel to reserve space
     // Draw persistent Category/Sheet bar at window bottom (always the bottom-most)
     egui::TopBottomPanel::bottom("category_sheet_bottom_bar").show(ctx, |ui_b| {
-        crate::ui::elements::top_panel::sheet_management_bar::show_sheet_management_controls(
+        crate::ui::elements::bottom_panel::sheet_management_bar::show_sheet_management_controls(
             ui_b,
             &mut state,
             &mut *misc.registry,
-            &mut crate::ui::elements::top_panel::sheet_management_bar::SheetManagementEventWriters {
-                close_structure_writer: None,
+            &mut crate::ui::elements::bottom_panel::sheet_management_bar::SheetManagementEventWriters {
                 move_sheet_to_category: &mut sheet_writers.move_sheet_to_category,
             },
         );
@@ -206,6 +208,8 @@ pub fn generic_sheet_editor_ui(
                 sheet_writers.cell_update,
                 sheet_writers.open_structure,
                 sheet_writers.toggle_ai_row_generation,
+                sheet_writers.update_column_ai_include,
+                sheet_writers.batch_update_column_ai_include,
                 sheet_writers.update_ai_send_schema,
                 sheet_writers.update_ai_structure_send,
                 sheet_writers.add_row,

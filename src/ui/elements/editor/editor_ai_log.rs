@@ -38,7 +38,7 @@ pub(super) fn show_ai_output_log_bottom(ctx: &egui::Context, state: &mut EditorW
                             ui.separator();
                             ui.add_space(4.0);
                         }
-                        
+
                         // Status line
                         let status_color = if entry.is_error {
                             Color32::from_rgb(255, 100, 100)
@@ -46,11 +46,14 @@ pub(super) fn show_ai_output_log_bottom(ctx: &egui::Context, state: &mut EditorW
                             Color32::from_rgb(100, 200, 255)
                         };
                         ui.label(RichText::new(&entry.status).color(status_color).strong());
-                        
+
                         // Response section
                         if let Some(response) = &entry.response {
                             ui.add_space(2.0);
-                            ui.label(RichText::new("Currently Received:").color(Color32::from_rgb(150, 255, 150)));
+                            ui.label(
+                                RichText::new("Currently Received:")
+                                    .color(Color32::from_rgb(150, 255, 150)),
+                            );
                             ui.horizontal(|ui| {
                                 ui.add_space(8.0);
                                 egui::ScrollArea::vertical()
@@ -62,16 +65,19 @@ pub(super) fn show_ai_output_log_bottom(ctx: &egui::Context, state: &mut EditorW
                                             egui::TextEdit::multiline(&mut response_clone)
                                                 .font(egui::TextStyle::Monospace)
                                                 .interactive(false)
-                                                .desired_width(ui.available_width())
+                                                .desired_width(ui.available_width()),
                                         );
                                     });
                             });
                         }
-                        
+
                         // Request section
                         if let Some(request) = &entry.request {
                             ui.add_space(2.0);
-                            ui.label(RichText::new("What was sent:").color(Color32::from_rgb(255, 200, 100)));
+                            ui.label(
+                                RichText::new("What was sent:")
+                                    .color(Color32::from_rgb(255, 200, 100)),
+                            );
                             ui.horizontal(|ui| {
                                 ui.add_space(8.0);
                                 egui::ScrollArea::vertical()
@@ -83,13 +89,13 @@ pub(super) fn show_ai_output_log_bottom(ctx: &egui::Context, state: &mut EditorW
                                             egui::TextEdit::multiline(&mut request_clone)
                                                 .font(egui::TextStyle::Monospace)
                                                 .interactive(false)
-                                                .desired_width(ui.available_width())
+                                                .desired_width(ui.available_width()),
                                         );
                                     });
                             });
                         }
                     }
-                    
+
                     // Keep backward compatibility - show old raw display if call log is empty
                     if state.ai_call_log.is_empty() && !state.ai_raw_output_display.is_empty() {
                         let mut display_text_clone = state.ai_raw_output_display.clone();

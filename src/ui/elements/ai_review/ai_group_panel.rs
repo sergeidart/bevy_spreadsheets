@@ -21,7 +21,9 @@ pub(crate) fn draw_group_panel(
     select_group_writer: &mut EventWriter<RequestSelectAiSchemaGroup>,
     delete_group_writer: &mut EventWriter<RequestDeleteAiSchemaGroup>,
 ) {
-    let Some(meta) = root_meta else { return; };
+    let Some(meta) = root_meta else {
+        return;
+    };
     let groups = meta.ai_schema_groups.clone();
     let active_group = meta.ai_active_schema_group.clone();
     ui.horizontal(|group_ui| {
@@ -34,7 +36,11 @@ pub(crate) fn draw_group_panel(
         let toggle_label = if expanded { "<" } else { ">" };
         if group_ui
             .button(toggle_label)
-            .on_hover_text(if expanded { "Shrink groups row" } else { "Expand groups row" })
+            .on_hover_text(if expanded {
+                "Shrink groups row"
+            } else {
+                "Expand groups row"
+            })
             .clicked()
         {
             state.ai_groups_expanded = !expanded;
@@ -44,7 +50,11 @@ pub(crate) fn draw_group_panel(
             group_ui.add_space(6.0);
             // Active group rename/delete icons placed before list for quick access
             if let Some(active_name) = active_group_name.as_ref() {
-                if group_ui.button("✏️").on_hover_text("Rename active group").clicked() {
+                if group_ui
+                    .button("✏️")
+                    .on_hover_text("Rename active group")
+                    .clicked()
+                {
                     state.ai_group_rename_popup_open = true;
                     state.ai_group_rename_target = Some(active_name.clone());
                     state.ai_group_rename_input = active_name.clone();
@@ -78,10 +88,13 @@ pub(crate) fn draw_group_panel(
                     state.mark_ai_included_columns_dirty();
                     group_ui.ctx().request_repaint();
                 }
-                if idx < groups.len() - 1 { group_ui.add_space(6.0); }
+                if idx < groups.len() - 1 {
+                    group_ui.add_space(6.0);
+                }
             }
             group_ui.add_space(4.0);
-            let add_button = group_ui.add_enabled(!sheet_for_event.is_empty(), egui::Button::new("+ Group"));
+            let add_button =
+                group_ui.add_enabled(!sheet_for_event.is_empty(), egui::Button::new("+ Group"));
             if add_button
                 .on_hover_text("Create a new schema group from the current settings")
                 .clicked()

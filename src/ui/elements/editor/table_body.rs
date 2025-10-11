@@ -1,8 +1,11 @@
 // src/ui/elements/editor/table_body.rs
 use crate::sheets::{
     definitions::{ColumnValidator, SheetMetadata},
-    events::{OpenStructureViewEvent, RequestToggleAiRowGeneration, RequestCopyCell, RequestPasteCell, UpdateCellEvent},
-    resources::{SheetRegistry, SheetRenderCache, ClipboardBuffer},
+    events::{
+        OpenStructureViewEvent, RequestCopyCell, RequestPasteCell, RequestToggleAiRowGeneration,
+        UpdateCellEvent,
+    },
+    resources::{ClipboardBuffer, SheetRegistry, SheetRenderCache},
 };
 // MODIFIED: Import SheetInteractionState
 use crate::ui::common::edit_cell_widget;
@@ -74,8 +77,9 @@ pub(crate) fn get_filtered_row_indices_cached(
     let cache_key = (category.clone(), sheet_name.to_string());
 
     // Check if we're in a structure navigation context for this sheet
-    let structure_filter = state.structure_navigation_stack.last()
-        .filter(|nav_ctx| &nav_ctx.structure_sheet_name == sheet_name && category == &nav_ctx.parent_category);
+    let structure_filter = state.structure_navigation_stack.last().filter(|nav_ctx| {
+        &nav_ctx.structure_sheet_name == sheet_name && category == &nav_ctx.parent_category
+    });
 
     if !state.force_filter_recalculation {
         if let Some(entry) = state.filtered_row_indices_cache.get(&cache_key) {
@@ -91,7 +95,10 @@ pub(crate) fn get_filtered_row_indices_cached(
     let total_rows = grid.len();
 
     if let Some(entry) = state.filtered_row_indices_cache.get(&cache_key) {
-        if entry.filters_hash == filters_hash && entry.total_rows == total_rows && structure_filter.is_none() {
+        if entry.filters_hash == filters_hash
+            && entry.total_rows == total_rows
+            && structure_filter.is_none()
+        {
             state.force_filter_recalculation = false;
             return Arc::clone(&entry.rows);
         }
@@ -101,19 +108,22 @@ pub(crate) fn get_filtered_row_indices_cached(
         "Recalculating filtered indices for '{:?}/{}' (hash: {}, force_recalc: {}, structure_filter: {})",
         category, sheet_name, filters_hash, state.force_filter_recalculation, structure_filter.is_some()
     );
-    
+
     let mut indices = get_filtered_row_indices_internal(grid, metadata);
-    
+
     // Apply hidden structure filter if present
     if let Some(nav_ctx) = structure_filter {
-        indices = indices.into_iter().filter(|&row_idx| {
-            grid.get(row_idx)
-                .and_then(|row| row.get(1)) // parent_key is in column 1
-                .map(|parent_key_value| parent_key_value == &nav_ctx.parent_row_key)
-                .unwrap_or(false)
-        }).collect();
+        indices = indices
+            .into_iter()
+            .filter(|&row_idx| {
+                grid.get(row_idx)
+                    .and_then(|row| row.get(1)) // parent_key is in column 1
+                    .map(|parent_key_value| parent_key_value == &nav_ctx.parent_row_key)
+                    .unwrap_or(false)
+            })
+            .collect();
     }
-    
+
     // Rule: if a row was just added (row 0), do not filter it out until UI processes the add
     // Include row 0 temporarily while request_scroll_to_new_row is set
     if state.request_scroll_to_new_row && !grid.is_empty() && !indices.contains(&0) {
@@ -191,7 +201,7 @@ pub fn sheet_table_body(
         .iter()
         .map(|c| c.validator.clone())
         .collect();
-    
+
     // Get visible column indices (hides id/parent_key in structure navigation mode)
     let visible_columns = state.get_visible_column_indices(category, sheet_name, num_cols);
 

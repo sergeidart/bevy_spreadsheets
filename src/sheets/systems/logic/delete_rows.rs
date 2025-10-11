@@ -56,6 +56,44 @@ pub fn handle_delete_rows_request(
         let mut error_message: Option<String> = None;
         let mut metadata_cache: Option<SheetMetadata> = None;
 
+        // Pre-capture info for DB deletion (need IDs for structure tables) before mutating the grid
+        let mut db_backed: Option<(
+            String,   /*db_name*/
+            bool,     /*is_structure_table*/
+            Vec<i64>, /*structure_ids*/
+        )> = None;
+        if let Some(sheet_ro) = registry.get_sheet(category, sheet_name) {
+            if let Some(meta) = &sheet_ro.metadata {
+                if let Some(db_name) = &meta.category {
+                    // Detect structure table by presence of technical columns at positions 0 and 1
+                    let is_structure = meta.columns.len() >= 2
+                        && meta
+                            .columns
+                            .get(0)
+                            .map(|c| c.header.eq_ignore_ascii_case("id"))
+                            .unwrap_or(false)
+                        && meta
+                            .columns
+                            .get(1)
+                            .map(|c| c.header.eq_ignore_ascii_case("parent_key"))
+                            .unwrap_or(false);
+                    let mut struct_ids: Vec<i64> = Vec::new();
+                    if is_structure {
+                        for &idx in indices_to_delete.iter() {
+                            if let Some(row) = sheet_ro.grid.get(idx) {
+                                if let Some(id_str) = row.get(0) {
+                                    if let Ok(id_val) = id_str.trim().parse::<i64>() {
+                                        struct_ids.push(id_val);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    db_backed = Some((db_name.clone(), is_structure, struct_ids));
+                }
+            }
+        }
+
         if let Some(sheet_data) = registry.get_sheet_mut(category, sheet_name) {
             // Sort indices descending to avoid index shifting issues during removal
             let mut sorted_indices: Vec<usize> = indices_to_delete.iter().cloned().collect();
@@ -132,9 +170,10 @@ pub fn handle_delete_rows_request(
                             // Clone required virtual sheet info before mutable borrow of registry
                             let v_rows: Vec<Vec<String>> = vsheet.grid.clone();
                             let _ = vsheet; // release immutable borrow
-                            if let Some(parent_sheet_data) = registry
-                                .get_sheet_mut(&parent_ctx.parent_category, &parent_ctx.parent_sheet)
-                            {
+                            if let Some(parent_sheet_data) = registry.get_sheet_mut(
+                                &parent_ctx.parent_category,
+                                &parent_ctx.parent_sheet,
+                            ) {
                                 if parent_ctx.parent_row < parent_sheet_data.grid.len() {
                                     if let Some(parent_row) =
                                         parent_sheet_data.grid.get_mut(parent_ctx.parent_row)
@@ -146,7 +185,8 @@ pub fn handle_delete_rows_request(
                                                 "[]".to_string()
                                             } else if v_rows.len() == 1 {
                                                 // Single row => store as array of strings
-                                                let row_vals = v_rows.get(0).cloned().unwrap_or_default();
+                                                let row_vals =
+                                                    v_rows.get(0).cloned().unwrap_or_default();
                                                 serde_json::Value::Array(
                                                     row_vals
                                                         .into_iter()
@@ -177,12 +217,14 @@ pub fn handle_delete_rows_request(
                                                     info!("Propagated structure row deletion to parent cell '{:?}/{}'[{},{}]", 
                                                           parent_ctx.parent_category, parent_ctx.parent_sheet, 
                                                           parent_ctx.parent_row, parent_ctx.parent_col);
-                                                    if let Some(pmeta) = &parent_sheet_data.metadata {
+                                                    if let Some(pmeta) = &parent_sheet_data.metadata
+                                                    {
                                                         let key = (
                                                             parent_ctx.parent_category.clone(),
                                                             parent_ctx.parent_sheet.clone(),
                                                         );
-                                                        sheets_to_save.insert(key.clone(), pmeta.clone());
+                                                        sheets_to_save
+                                                            .insert(key.clone(), pmeta.clone());
                                                         data_modified_writer.write(
                                                             SheetDataModifiedInRegistryEvent {
                                                                 category: parent_ctx
@@ -200,6 +242,48 @@ pub fn handle_delete_rows_request(
                                     }
                                 }
                             }
+                        }
+                    }
+                }
+            }
+
+            // Persist deletions to database when sheet is DB-backed
+            if let Some((db_name, is_structure, struct_ids)) = db_backed {
+                let base = crate::sheets::systems::io::get_default_data_base_path();
+                let db_path = base.join(format!("{}.db", db_name));
+                if db_path.exists() {
+                    match rusqlite::Connection::open(&db_path) {
+                        Ok(conn) => {
+                            // Ensure foreign keys for cascade
+                            let _ = conn.execute("PRAGMA foreign_keys = ON;", []);
+                            if is_structure {
+                                // Delete by id and compact per parent
+                                for id in struct_ids {
+                                    let _ = crate::sheets::database::writer::DbWriter::delete_structure_row_by_id(
+                                        &conn,
+                                        sheet_name,
+                                        id,
+                                    );
+                                }
+                            } else {
+                                // Delete by row_index with compaction; use the same sorted order
+                                let mut sorted_indices: Vec<usize> =
+                                    indices_to_delete.iter().cloned().collect();
+                                sorted_indices.sort_unstable_by(|a, b| b.cmp(a));
+                                for idx in sorted_indices {
+                                    let _ = crate::sheets::database::writer::DbWriter::delete_row_and_compact(
+                                        &conn,
+                                        sheet_name,
+                                        idx,
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            warn!(
+                                "DB delete skipped for '{:?}/{}': failed to open DB: {}",
+                                category, sheet_name, e
+                            );
                         }
                     }
                 }

@@ -1,9 +1,12 @@
 // src/sheets/database/writer.rs
 
-use rusqlite::{Connection, params, Transaction};
 use super::error::DbResult;
 use super::schema::sql_type_for_column;
-use crate::sheets::definitions::{SheetMetadata, ColumnValidator, ColumnDataType};
+use crate::sheets::database::reader::DbReader;
+use crate::sheets::database::schema::create_metadata_table;
+use crate::sheets::definitions::{ColumnDataType, ColumnValidator, SheetMetadata};
+
+use rusqlite::{params, Connection, Transaction};
 
 pub struct DbWriter;
 
@@ -25,43 +28,49 @@ impl DbWriter {
         grid: &[Vec<String>],
         metadata: &SheetMetadata,
     ) -> DbResult<()> {
-        let column_names: Vec<String> = metadata.columns.iter()
+        let column_names: Vec<String> = metadata
+            .columns
+            .iter()
             .filter(|c| !matches!(c.validator, Some(ColumnValidator::Structure)))
             .map(|c| c.header.clone())
             .collect();
-        
+
         if column_names.is_empty() || grid.is_empty() {
             return Ok(());
         }
-        
-        let placeholders = (0..column_names.len()).map(|_| "?").collect::<Vec<_>>().join(", ");
-        let cols_str = column_names.iter()
+
+        let placeholders = (0..column_names.len())
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(", ");
+        let cols_str = column_names
+            .iter()
             .map(|name| format!("\"{}\"", name))
             .collect::<Vec<_>>()
             .join(", ");
-        
+
         let insert_sql = format!(
             "INSERT INTO \"{}\" (row_index, {}) VALUES (?, {})",
             table_name, cols_str, placeholders
         );
-        
+
         let mut stmt = tx.prepare(&insert_sql)?;
-        
+
         for (row_idx, row_data) in grid.iter().enumerate() {
             let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(row_idx as i32)];
-            
+
             for cell in row_data.iter().take(column_names.len()) {
                 params_vec.push(Box::new(cell.clone()));
             }
-            
+
             // Fill missing columns with empty strings
             while params_vec.len() <= column_names.len() {
                 params_vec.push(Box::new(String::new()));
             }
-            
+
             stmt.execute(rusqlite::params_from_iter(params_vec.iter()))?;
         }
-        
+
         Ok(())
     }
 
@@ -73,7 +82,9 @@ impl DbWriter {
         metadata: &SheetMetadata,
         mut on_chunk: F,
     ) -> DbResult<()> {
-        let column_names: Vec<String> = metadata.columns.iter()
+        let column_names: Vec<String> = metadata
+            .columns
+            .iter()
             .filter(|c| !matches!(c.validator, Some(ColumnValidator::Structure)))
             .map(|c| c.header.clone())
             .collect();
@@ -82,8 +93,12 @@ impl DbWriter {
             return Ok(());
         }
 
-        let placeholders = (0..column_names.len()).map(|_| "?").collect::<Vec<_>>().join(", ");
-        let cols_str = column_names.iter()
+        let placeholders = (0..column_names.len())
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(", ");
+        let cols_str = column_names
+            .iter()
             .map(|name| format!("\"{}\"", name))
             .collect::<Vec<_>>()
             .join(", ");
@@ -112,7 +127,7 @@ impl DbWriter {
 
         Ok(())
     }
-    
+
     /// Update a single cell
     pub fn update_cell(
         conn: &Connection,
@@ -130,7 +145,7 @@ impl DbWriter {
         )?;
         Ok(())
     }
-    
+
     /// Insert a new row
     pub fn insert_row(
         conn: &Connection,
@@ -140,24 +155,31 @@ impl DbWriter {
     ) -> DbResult<i64> {
         // Get max row_index
         let max_row: i32 = conn.query_row(
-            &format!("SELECT COALESCE(MAX(row_index), -1) FROM \"{}\"", table_name),
+            &format!(
+                "SELECT COALESCE(MAX(row_index), -1) FROM \"{}\"",
+                table_name
+            ),
             [],
             |row| row.get(0),
         )?;
-        
+
         let new_row_index = max_row + 1;
-        
-        let placeholders = (0..column_names.len()).map(|_| "?").collect::<Vec<_>>().join(", ");
-        let cols_str = column_names.iter()
+
+        let placeholders = (0..column_names.len())
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(", ");
+        let cols_str = column_names
+            .iter()
             .map(|name| format!("\"{}\"", name))
             .collect::<Vec<_>>()
             .join(", ");
-        
+
         let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(new_row_index)];
         for cell in row_data {
             params_vec.push(Box::new(cell.clone()));
         }
-        
+
         conn.execute(
             &format!(
                 "INSERT INTO \"{}\" (row_index, {}) VALUES (?, {})",
@@ -165,7 +187,7 @@ impl DbWriter {
             ),
             rusqlite::params_from_iter(params_vec.iter()),
         )?;
-        
+
         Ok(conn.last_insert_rowid())
     }
 
@@ -178,7 +200,10 @@ impl DbWriter {
         row_data: &[String],
         column_names: &[String],
     ) -> DbResult<i64> {
-        let placeholders = (0..column_names.len()).map(|_| "?").collect::<Vec<_>>().join(", ");
+        let placeholders = (0..column_names.len())
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(", ");
         let cols_str = column_names
             .iter()
             .map(|name| format!("\"{}\"", name))
@@ -211,13 +236,19 @@ impl DbWriter {
         let tx = conn.unchecked_transaction()?;
         {
             // Scope for statement so it drops before commit
-            let mut idx_stmt = tx.prepare(&format!("SELECT row_index FROM \"{}\" ORDER BY row_index DESC", table_name))?;
+            let mut idx_stmt = tx.prepare(&format!(
+                "SELECT row_index FROM \"{}\" ORDER BY row_index DESC",
+                table_name
+            ))?;
             let existing: Vec<i32> = idx_stmt
                 .query_map([], |r| r.get(0))?
                 .collect::<Result<Vec<i32>, _>>()?;
             for ri in existing {
                 tx.execute(
-                    &format!("UPDATE \"{}\" SET row_index = ? WHERE row_index = ?", table_name),
+                    &format!(
+                        "UPDATE \"{}\" SET row_index = ? WHERE row_index = ?",
+                        table_name
+                    ),
                     params![ri + 1, ri],
                 )?;
             }
@@ -227,17 +258,78 @@ impl DbWriter {
         tx.commit()?;
         Ok(inserted)
     }
-    
+
     /// Delete a row
-    pub fn delete_row(
-        conn: &Connection,
-        table_name: &str,
-        row_index: usize,
-    ) -> DbResult<()> {
+    pub fn delete_row(conn: &Connection, table_name: &str, row_index: usize) -> DbResult<()> {
         conn.execute(
             &format!("DELETE FROM \"{}\" WHERE row_index = ?", table_name),
             params![row_index as i32],
         )?;
+        Ok(())
+    }
+
+    /// Delete a row and compact subsequent row_index values so that UI row indices remain aligned.
+    /// This mirrors the behavior of in-memory grid removal which shifts indices down.
+    pub fn delete_row_and_compact(
+        conn: &Connection,
+        table_name: &str,
+        row_index: usize,
+    ) -> DbResult<()> {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute(
+            &format!("DELETE FROM \"{}\" WHERE row_index = ?", table_name),
+            params![row_index as i32],
+        )?;
+        // Shift all rows with a greater row_index down by 1 to preserve contiguous indexing
+        tx.execute(
+            &format!(
+                "UPDATE \"{}\" SET row_index = row_index - 1, updated_at = CURRENT_TIMESTAMP WHERE row_index > ?",
+                table_name
+            ),
+            params![row_index as i32],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Delete a structure row by primary key id. Also compacts row_index for that parent to keep order stable.
+    pub fn delete_structure_row_by_id(
+        conn: &Connection,
+        table_name: &str,
+        id: i64,
+    ) -> DbResult<()> {
+        // Fetch parent_id and row_index before deletion
+        let mut parent_id: i64 = 0;
+        let mut row_index: i32 = 0;
+        let found: Result<(i64, i32), _> = conn.query_row(
+            &format!(
+                "SELECT parent_id, row_index FROM \"{}\" WHERE id = ?",
+                table_name
+            ),
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        );
+        if let Ok((pid, ridx)) = found {
+            parent_id = pid;
+            row_index = ridx;
+        } else {
+            return Ok(());
+        }
+
+        let tx = conn.unchecked_transaction()?;
+        tx.execute(
+            &format!("DELETE FROM \"{}\" WHERE id = ?", table_name),
+            params![id],
+        )?;
+        // Compact indices for this parent scope only
+        tx.execute(
+            &format!(
+                "UPDATE \"{}\" SET row_index = row_index - 1, updated_at = CURRENT_TIMESTAMP WHERE parent_id = ? AND row_index > ?",
+                table_name
+            ),
+            params![parent_id, row_index],
+        )?;
+        tx.commit()?;
         Ok(())
     }
 
@@ -252,20 +344,38 @@ impl DbWriter {
     ) -> DbResult<()> {
         // Build dynamic SQL to only update provided fields
         let mut sets: Vec<&str> = Vec::new();
-        if allow_add_rows.is_some() { sets.push("ai_allow_add_rows = ?"); }
-        if table_context.is_some() { sets.push("ai_table_context = ?"); }
-        if active_group.is_some() { sets.push("ai_active_group = ?"); }
-        if grounding_with_google_search.is_some() { sets.push("ai_grounding_with_google_search = ?"); }
-        if sets.is_empty() { return Ok(()); }
+        if allow_add_rows.is_some() {
+            sets.push("ai_allow_add_rows = ?");
+        }
+        if table_context.is_some() {
+            sets.push("ai_table_context = ?");
+        }
+        if active_group.is_some() {
+            sets.push("ai_active_group = ?");
+        }
+        if grounding_with_google_search.is_some() {
+            sets.push("ai_grounding_with_google_search = ?");
+        }
+        if sets.is_empty() {
+            return Ok(());
+        }
         let sql = format!(
             "UPDATE _Metadata SET {} , updated_at = CURRENT_TIMESTAMP WHERE table_name = ?",
             sets.join(", ")
         );
         let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-        if let Some(v) = allow_add_rows { params_vec.push(Box::new(v as i32)); }
-        if let Some(v) = table_context { params_vec.push(Box::new(v.to_string())); }
-        if let Some(v) = active_group { params_vec.push(Box::new(v.to_string())); }
-        if let Some(v) = grounding_with_google_search { params_vec.push(Box::new(v as i32)); }
+        if let Some(v) = allow_add_rows {
+            params_vec.push(Box::new(v as i32));
+        }
+        if let Some(v) = table_context {
+            params_vec.push(Box::new(v.to_string()));
+        }
+        if let Some(v) = active_group {
+            params_vec.push(Box::new(v.to_string()));
+        }
+        if let Some(v) = grounding_with_google_search {
+            params_vec.push(Box::new(v as i32));
+        }
         params_vec.push(Box::new(table_name.to_string()));
         conn.execute(&sql, rusqlite::params_from_iter(params_vec.iter()))?;
         Ok(())
@@ -280,23 +390,89 @@ impl DbWriter {
         ai_context: Option<&str>,
         ai_include_in_send: Option<bool>,
     ) -> DbResult<()> {
+        // Defensive: ensure per-table metadata table structure and rows exist
+        // We don't know the full metadata here; construct a minimal synthetic one from DB if needed.
+        // Call global _Metadata ensure first (no-op if exists)
+        let _ = crate::sheets::database::schema::ensure_global_metadata_table(conn);
+        // Try to read current metadata; if that fails, synthesize minimal using existing table columns
+        let inferred_meta =
+            match crate::sheets::database::reader::DbReader::read_metadata(conn, table_name) {
+                Ok(m) => m,
+                Err(_) => {
+                    // If we cannot read, build a placeholder with a single String column for safety
+                    crate::sheets::definitions::SheetMetadata::create_generic(
+                        table_name.to_string(),
+                        format!("{}.json", table_name),
+                        (column_index + 1).max(1),
+                        None,
+                    )
+                }
+            };
+        let _ = crate::sheets::database::schema::ensure_table_metadata_schema(
+            conn,
+            table_name,
+            &inferred_meta,
+        );
         let meta_table = format!("{}_Metadata", table_name);
         let mut sets: Vec<&str> = Vec::new();
-        if filter_expr.is_some() { sets.push("filter_expr = ?"); }
-        if ai_context.is_some() { sets.push("ai_context = ?"); }
-        if ai_include_in_send.is_some() { sets.push("ai_include_in_send = ?"); }
-        if sets.is_empty() { return Ok(()); }
+        if filter_expr.is_some() {
+            sets.push("filter_expr = ?");
+        }
+        if ai_context.is_some() {
+            sets.push("ai_context = ?");
+        }
+        if ai_include_in_send.is_some() {
+            sets.push("ai_include_in_send = ?");
+        }
+        if sets.is_empty() {
+            return Ok(());
+        }
         let sql = format!(
             "UPDATE \"{}\" SET {} WHERE column_index = ?",
             meta_table,
             sets.join(", ")
         );
-        let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-        if let Some(v) = filter_expr { params_vec.push(Box::new(v.to_string())); }
-        if let Some(v) = ai_context { params_vec.push(Box::new(v.to_string())); }
-        if let Some(v) = ai_include_in_send { params_vec.push(Box::new(v as i32)); }
+    let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+        // For textual fields, treat an explicitly provided empty string as a request to clear (set to NULL)
+        if let Some(v) = filter_expr {
+            if v.trim().is_empty() {
+                params_vec.push(Box::new(rusqlite::types::Null));
+            } else {
+                params_vec.push(Box::new(v.to_string()));
+            }
+        }
+        if let Some(v) = ai_context {
+            if v.trim().is_empty() {
+                params_vec.push(Box::new(rusqlite::types::Null));
+            } else {
+                params_vec.push(Box::new(v.to_string()));
+            }
+        }
+        if let Some(v) = ai_include_in_send {
+            params_vec.push(Box::new(v as i32));
+        }
         params_vec.push(Box::new(column_index as i32));
+        // Log SQL and high-level params for debugging visibility
+        bevy::log::info!("SQL update_column_metadata: {} ; params_count={}", sql, params_vec.len());
         conn.execute(&sql, rusqlite::params_from_iter(params_vec.iter()))?;
+        Ok(())
+    }
+
+    /// Explicitly set the AI include flag for a column in the metadata table (true = 1, false = 0)
+    pub fn update_column_ai_include(
+        conn: &Connection,
+        table_name: &str,
+        column_index: usize,
+        include: bool,
+    ) -> DbResult<()> {
+        let meta_table = format!("{}_Metadata", table_name);
+        conn.execute(
+            &format!(
+                "UPDATE \"{}\" SET ai_include_in_send = ? WHERE column_index = ?",
+                meta_table
+            ),
+            params![include as i32, column_index as i32],
+        )?;
         Ok(())
     }
 
@@ -310,21 +486,43 @@ impl DbWriter {
         ai_include_in_send: Option<bool>,
         ai_enable_row_generation: Option<bool>,
     ) -> DbResult<()> {
+        // Defensive: ensure per-table metadata table structure and rows exist
+        let _ = crate::sheets::database::schema::ensure_global_metadata_table(conn);
+        let inferred_meta =
+            match crate::sheets::database::reader::DbReader::read_metadata(conn, table_name) {
+                Ok(m) => m,
+                Err(_) => crate::sheets::definitions::SheetMetadata::create_generic(
+                    table_name.to_string(),
+                    format!("{}.json", table_name),
+                    (column_index + 1).max(1),
+                    None,
+                ),
+            };
+        let _ = crate::sheets::database::schema::ensure_table_metadata_schema(
+            conn,
+            table_name,
+            &inferred_meta,
+        );
         let meta_table = format!("{}_Metadata", table_name);
         let (validator_type, validator_config): (Option<String>, Option<String>) = match validator {
             Some(ColumnValidator::Basic(_)) => (Some("Basic".to_string()), None),
-            Some(ColumnValidator::Linked { target_sheet_name, target_column_index }) => {
+            Some(ColumnValidator::Linked {
+                target_sheet_name,
+                target_column_index,
+            }) => {
                 let cfg = serde_json::json!({
                     "target_table": target_sheet_name,
                     "target_column_index": target_column_index
-                }).to_string();
+                })
+                .to_string();
                 (Some("Linked".to_string()), Some(cfg))
             }
             Some(ColumnValidator::Structure) => {
                 // Persist structure reference for completeness
                 let cfg = serde_json::json!({
                     "structure_table": format!("{}_{}", table_name, "")
-                }).to_string();
+                })
+                .to_string();
                 (Some("Structure".to_string()), Some(cfg))
             }
             None => (None, None),
@@ -338,8 +536,12 @@ impl DbWriter {
             "validator_type = ?",
             "validator_config = ?",
         ];
-        if ai_include_in_send.is_some() { sets.push("ai_include_in_send = ?"); }
-        if ai_enable_row_generation.is_some() { sets.push("ai_enable_row_generation = ?"); }
+        if ai_include_in_send.is_some() {
+            sets.push("ai_include_in_send = ?");
+        }
+        if ai_enable_row_generation.is_some() {
+            sets.push("ai_enable_row_generation = ?");
+        }
         let sql = format!(
             "UPDATE \"{}\" SET {} WHERE column_index = ?",
             meta_table,
@@ -348,11 +550,34 @@ impl DbWriter {
 
         let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
         params_vec.push(Box::new(format!("{:?}", data_type)));
-        params_vec.push(Box::new(validator_type));
-        params_vec.push(Box::new(validator_config));
-        if let Some(v) = ai_include_in_send { params_vec.push(Box::new(v as i32)); }
-        if let Some(v) = ai_enable_row_generation { params_vec.push(Box::new(v as i32)); }
+    params_vec.push(Box::new(validator_type.clone()));
+    params_vec.push(Box::new(validator_config.clone()));
+        if let Some(v) = ai_include_in_send {
+            params_vec.push(Box::new(v as i32));
+        }
+        if let Some(v) = ai_enable_row_generation {
+            params_vec.push(Box::new(v as i32));
+        }
         params_vec.push(Box::new(column_index as i32));
+
+        // Log SQL and parameter summary before executing (show param values derived from known locals)
+        let mut param_preview: Vec<String> = Vec::new();
+        param_preview.push(format!("data_type={:?}", data_type));
+    param_preview.push(format!("validator_type={:?}", validator_type.clone()));
+    param_preview.push(format!("validator_config={:?}", validator_config.clone()));
+        if let Some(v) = ai_include_in_send {
+            param_preview.push(format!("ai_include_in_send={}", v));
+        }
+        if let Some(v) = ai_enable_row_generation {
+            param_preview.push(format!("ai_enable_row_generation={}", v));
+        }
+        param_preview.push(format!("column_index={}", column_index));
+        bevy::log::info!(
+            "SQL update_column_validator: {} ; params_count={} ; params={:?}",
+            sql,
+            params_vec.len(),
+            param_preview
+        );
 
         conn.execute(&sql, rusqlite::params_from_iter(params_vec.iter()))?;
         Ok(())
@@ -447,7 +672,10 @@ impl DbWriter {
         let new_struct = format!("{}_{}", parent_table, new_column_name);
         // Rename data table
         conn.execute(
-            &format!("ALTER TABLE \"{}\" RENAME TO \"{}\"", old_struct, new_struct),
+            &format!(
+                "ALTER TABLE \"{}\" RENAME TO \"{}\"",
+                old_struct, new_struct
+            ),
             [],
         )?;
         // Rename metadata table
@@ -478,15 +706,30 @@ impl DbWriter {
         ai_enable_row_generation: Option<bool>,
         ai_include_in_send: Option<bool>,
     ) -> DbResult<()> {
-        // ALTER TABLE ADD COLUMN
-        let sql_type = sql_type_for_column(data_type);
-        conn.execute(
-            &format!("ALTER TABLE \"{}\" ADD COLUMN \"{}\" {}", table_name, column_name, sql_type),
-            [],
-        )?;
+        // Check if column exists physically; if not, add it
+        let mut exists_stmt = conn.prepare(&format!("PRAGMA table_info(\"{}\")", table_name))?;
+        let mut col_exists = false;
+        for row in exists_stmt.query_map([], |r| r.get::<_, String>(1))? {
+            if row? == column_name {
+                col_exists = true;
+                break;
+            }
+        }
+        if !col_exists {
+            let sql_type = sql_type_for_column(data_type);
+            conn.execute(
+                &format!(
+                    "ALTER TABLE \"{}\" ADD COLUMN \"{}\" {}",
+                    table_name, column_name, sql_type
+                ),
+                [],
+            )?;
+            bevy::log::info!("SQL add_column: ALTER TABLE '{}' ADD COLUMN '{}' {}", table_name, column_name, sql_type);
+        } else {
+            bevy::log::info!("SQL add_column: column '{}' already exists on '{}', skipping ALTER TABLE", column_name, table_name);
+        }
 
-        // Insert metadata row
-        let meta_table = format!("{}_Metadata", table_name);
+        // Compute validator metadata for both reuse and insert
         let (validator_type, validator_config): (Option<String>, Option<String>) = match &validator {
             Some(ColumnValidator::Basic(_)) => (Some("Basic".to_string()), None),
             Some(ColumnValidator::Linked { target_sheet_name, target_column_index }) => {
@@ -499,6 +742,31 @@ impl DbWriter {
             Some(ColumnValidator::Structure) => (Some("Structure".to_string()), Some(serde_json::json!({"structure_table": format!("{}_{}", table_name, column_name)}).to_string())),
             None => (None, None),
         };
+        // Try to reuse a deleted metadata slot before inserting
+        let meta_table = format!("{}_Metadata", table_name);
+        let reuse_sql = format!(
+            "UPDATE \"{}\" SET column_name = ?, data_type = ?, validator_type = ?, validator_config = ?, ai_context = ?, filter_expr = ?, ai_enable_row_generation = ?, ai_include_in_send = ?, deleted = 0 WHERE column_index = ? AND deleted = 1",
+            meta_table
+        );
+        let reused = conn.execute(&reuse_sql, params![
+            column_name,
+            format!("{:?}", data_type),
+            validator_type.clone(),
+            validator_config.clone(),
+            ai_context,
+            filter_expr,
+            ai_enable_row_generation.unwrap_or(false) as i32,
+            ai_include_in_send.unwrap_or(true) as i32,
+            column_index as i32,
+        ])?;
+        if reused > 0 {
+            bevy::log::info!(
+                "Reused deleted metadata slot for column_index={} in '{}'.",
+                column_index,
+                meta_table
+            );
+            return Ok(());
+        }
         conn.execute(
             &format!(
                 "INSERT OR REPLACE INTO \"{}\" (column_index, column_name, data_type, validator_type, validator_config, ai_context, filter_expr, ai_enable_row_generation, ai_include_in_send) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -516,6 +784,7 @@ impl DbWriter {
                 ai_include_in_send.unwrap_or(true) as i32
             ],
         )?;
+        bevy::log::info!("SQL add_column metadata: INSERT OR REPLACE INTO '{}' (column_index={}, column_name='{}')", meta_table, column_index, column_name);
         Ok(())
     }
 
@@ -556,7 +825,10 @@ mod tests {
         conn.execute(&sql, []).unwrap();
         // Helpful index similar to production
         conn.execute(
-            &format!("CREATE INDEX IF NOT EXISTS idx_{}_row_index ON \"{}\"(row_index)", table, table),
+            &format!(
+                "CREATE INDEX IF NOT EXISTS idx_{}_row_index ON \"{}\"(row_index)",
+                table, table
+            ),
             [],
         )
         .unwrap();
@@ -588,7 +860,10 @@ mod tests {
         let mut idx = 0i32;
         for c in cols {
             conn.execute(
-                &format!("INSERT INTO \"{}\" (column_index, column_name) VALUES (?, ?)", meta),
+                &format!(
+                    "INSERT INTO \"{}\" (column_index, column_name) VALUES (?, ?)",
+                    meta
+                ),
                 params![idx, *c],
             )
             .unwrap();
@@ -614,7 +889,10 @@ mod tests {
         // Verify ordering by selecting ordered by column_index
         let meta = format!("{}_Metadata", table);
         let mut stmt = conn
-            .prepare(&format!("SELECT column_name FROM \"{}\" ORDER BY column_index", meta))
+            .prepare(&format!(
+                "SELECT column_name FROM \"{}\" ORDER BY column_index",
+                meta
+            ))
             .unwrap();
         let cols: Vec<String> = stmt
             .query_map([], |r| r.get(0))
@@ -622,6 +900,80 @@ mod tests {
             .collect::<Result<_, _>>()
             .unwrap();
         assert_eq!(cols, vec!["D", "B", "A", "C"]);
+    }
+
+    #[test]
+    fn test_update_column_validator_basic_persists_and_reads_back() {
+        let conn = Connection::open_in_memory().unwrap();
+        let table = "Main";
+
+        // Seed a minimal metadata table with 2 columns
+        let meta =
+            SheetMetadata::create_generic(table.to_string(), format!("{}.json", table), 2, None);
+        create_metadata_table(&conn, table, &meta).unwrap();
+
+        // Change column 0 to Bool with Basic validator
+        DbWriter::update_column_validator(
+            &conn,
+            table,
+            0,
+            ColumnDataType::Bool,
+            &Some(ColumnValidator::Basic(ColumnDataType::Bool)),
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Read back via DbReader (simulates restart load)
+        let loaded = DbReader::read_metadata(&conn, table).unwrap();
+        assert_eq!(loaded.columns.len(), 2);
+        assert_eq!(loaded.columns[0].data_type, ColumnDataType::Bool);
+        match &loaded.columns[0].validator {
+            Some(ColumnValidator::Basic(dt)) => assert_eq!(*dt, ColumnDataType::Bool),
+            other => panic!("Unexpected validator: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_update_column_validator_linked_persists_and_reads_back() {
+        let conn = Connection::open_in_memory().unwrap();
+        let table = "Main";
+
+        // Seed metadata with 3 columns
+        let meta =
+            SheetMetadata::create_generic(table.to_string(), format!("{}.json", table), 3, None);
+        create_metadata_table(&conn, table, &meta).unwrap();
+
+        // Change column 1 to Linked validator
+        DbWriter::update_column_validator(
+            &conn,
+            table,
+            1,
+            ColumnDataType::String,
+            &Some(ColumnValidator::Linked {
+                target_sheet_name: "Other".to_string(),
+                target_column_index: 1,
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+
+        // Read back via DbReader
+        let loaded = DbReader::read_metadata(&conn, table).unwrap();
+        assert_eq!(loaded.columns.len(), 3);
+        // Data type should remain String, and validator should be Linked with expected config
+        assert_eq!(loaded.columns[1].data_type, ColumnDataType::String);
+        match &loaded.columns[1].validator {
+            Some(ColumnValidator::Linked {
+                target_sheet_name,
+                target_column_index,
+            }) => {
+                assert_eq!(target_sheet_name, "Other");
+                assert_eq!(*target_column_index, 1usize);
+            }
+            other => panic!("Unexpected validator after linked update: {:?}", other),
+        }
     }
     #[test]
     fn test_update_cell_updates_value() {
@@ -631,7 +983,10 @@ mod tests {
 
         // Insert one row directly
         conn.execute(
-            &format!("INSERT INTO \"{}\" (row_index, \"Name\") VALUES (?, ?)", table),
+            &format!(
+                "INSERT INTO \"{}\" (row_index, \"Name\") VALUES (?, ?)",
+                table
+            ),
             params![0i32, "Alice"],
         )
         .unwrap();
@@ -658,12 +1013,18 @@ mod tests {
 
         // Seed two rows: indices 0 => "A0", 1 => "A1"
         conn.execute(
-            &format!("INSERT INTO \"{}\" (row_index, \"Name\") VALUES (?, ?)", table),
+            &format!(
+                "INSERT INTO \"{}\" (row_index, \"Name\") VALUES (?, ?)",
+                table
+            ),
             params![0i32, "A0"],
         )
         .unwrap();
         conn.execute(
-            &format!("INSERT INTO \"{}\" (row_index, \"Name\") VALUES (?, ?)", table),
+            &format!(
+                "INSERT INTO \"{}\" (row_index, \"Name\") VALUES (?, ?)",
+                table
+            ),
             params![1i32, "A1"],
         )
         .unwrap();
@@ -675,7 +1036,10 @@ mod tests {
 
         // Expect three rows with indices 0,1,2 and values New, A0, A1
         let mut stmt = conn
-            .prepare(&format!("SELECT row_index, \"Name\" FROM \"{}\" ORDER BY row_index", table))
+            .prepare(&format!(
+                "SELECT row_index, \"Name\" FROM \"{}\" ORDER BY row_index",
+                table
+            ))
             .unwrap();
         let rows: Vec<(i32, String)> = stmt
             .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))

@@ -69,18 +69,19 @@ pub fn handle_add_column_request(
                         if let Ok(conn) = rusqlite::Connection::open(&db_path) {
                             let last_index = metadata.columns.len().saturating_sub(1);
                             let new_def = metadata.columns.last().cloned().unwrap();
-                            let _ = crate::sheets::database::writer::DbWriter::add_column_with_metadata(
-                                &conn,
-                                &sheet_name,
-                                &new_def.header,
-                                new_def.data_type,
-                                new_def.validator.clone(),
-                                last_index,
-                                new_def.ai_context.as_deref(),
-                                new_def.filter.as_deref(),
-                                new_def.ai_enable_row_generation,
-                                new_def.ai_include_in_send,
-                            );
+                            let _ =
+                                crate::sheets::database::writer::DbWriter::add_column_with_metadata(
+                                    &conn,
+                                    &sheet_name,
+                                    &new_def.header,
+                                    new_def.data_type,
+                                    new_def.validator.clone(),
+                                    last_index,
+                                    new_def.ai_context.as_deref(),
+                                    new_def.filter.as_deref(),
+                                    new_def.ai_enable_row_generation,
+                                    new_def.ai_include_in_send,
+                                );
                         }
                     }
                 }

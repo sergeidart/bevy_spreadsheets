@@ -27,7 +27,8 @@ pub fn save_single_sheet(registry: &SheetRegistry, metadata_to_save: &SheetMetad
     if category.is_some() {
         trace!(
             "Skipping JSON save for DB-backed sheet '{:?}/{}'",
-            category, sheet_name
+            category,
+            sheet_name
         );
         return;
     }

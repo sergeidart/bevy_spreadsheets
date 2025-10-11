@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 // --- Submodule Declarations ---
 pub mod load; // Runtime uploads
+pub mod metadata_persistence;
 pub mod parsers;
 pub mod save;
 pub mod startup;
@@ -22,11 +23,13 @@ pub fn get_default_data_base_path() -> PathBuf {
     let data_path = directories_next::UserDirs::new()
         .and_then(|dirs| dirs.document_dir().map(|p| p.to_path_buf()))
         .unwrap_or_else(|| {
-            error!("Failed to get Documents directory, using current working directory '.' instead.");
+            error!(
+                "Failed to get Documents directory, using current working directory '.' instead."
+            );
             PathBuf::from(".")
         })
         .join(DEFAULT_DATA_DIR);
-    
+
     trace!("Data base path determined as: {:?}", data_path);
     data_path
 }

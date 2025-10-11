@@ -24,9 +24,11 @@ pub fn register_default_sheets_if_needed(mut registry: ResMut<SheetRegistry>) {
     // and skip registering JSON-based default templates to avoid spawning JSON files.
     if data_dir_path.exists() {
         if let Ok(read_dir) = fs::read_dir(&data_dir_path) {
-            let has_db = read_dir
-                .filter_map(Result::ok)
-                .any(|e| e.path().extension().map_or(false, |ext| ext.eq_ignore_ascii_case("db")));
+            let has_db = read_dir.filter_map(Result::ok).any(|e| {
+                e.path()
+                    .extension()
+                    .map_or(false, |ext| ext.eq_ignore_ascii_case("db"))
+            });
             if has_db {
                 info!(
                     "Data directory '{:?}' contains a database file. Skipping registration of JSON template sheets.",

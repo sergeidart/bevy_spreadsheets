@@ -1,12 +1,16 @@
 // src/sheets/systems/logic/delete_columns.rs
 use crate::sheets::{
-    definitions::{SheetMetadata, ColumnValidator},
-    events::{RequestDeleteColumns, RequestDeleteSheetFile, SheetDataModifiedInRegistryEvent, SheetOperationFeedback},
+    definitions::{ColumnValidator, SheetMetadata},
+    events::{
+        RequestDeleteColumns, RequestDeleteSheetFile, SheetDataModifiedInRegistryEvent,
+        SheetOperationFeedback,
+    },
     resources::SheetRegistry,
     systems::io::save::save_single_sheet,
 };
 use crate::ui::elements::editor::state::EditorWindowState;
 use bevy::prelude::*;
+use crate::sheets::database::open_or_create_db_for_category;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -20,8 +24,11 @@ pub fn handle_delete_columns_request(
 ) {
     let mut sheets_to_save: HashMap<(Option<String>, String), SheetMetadata> = HashMap::new();
     let mut structure_sheets_to_delete: Vec<(Option<String>, String)> = Vec::new();
+    // Collect DB-backed column deletion requests: (category, table_name, column_name)
+    let mut db_column_deletions: Vec<(String, String, String)> = Vec::new();
 
     for event in events.read() {
+        // Process delete event; scheduled DB column deletions will be recorded in outer vector
         let (category, sheet_name) = if let Some(state) = editor_state.as_ref() {
             if let Some(vctx) = state.virtual_structure_stack.last() {
                 (&event.category, &vctx.virtual_sheet_name)
@@ -57,26 +64,18 @@ pub fn handle_delete_columns_request(
 
                 for &col_idx_to_remove in &sorted_indices {
                     if col_idx_to_remove < metadata.columns.len() {
-                        // Check if this column has Structure validator - collect for cascade delete
-                        if let Some(col_def) = metadata.columns.get(col_idx_to_remove) {
+                        // Mark column as deleted for reuse and disable AI inclusion
+                        if let Some(col_def) = metadata.columns.get_mut(col_idx_to_remove) {
+                            col_def.deleted = true;
+                            col_def.ai_include_in_send = Some(false);
+                            // Schedule metadata update for DB-backed
+                            if let Some(cat_str) = category.clone() {
+                                db_column_deletions.push((cat_str, sheet_name.clone(), col_def.header.clone()));
+                            }
+                            // Check for structure validator cascade
                             if matches!(col_def.validator, Some(ColumnValidator::Structure)) {
                                 let structure_sheet_name = format!("{}_{}", sheet_name, col_def.header);
                                 structure_sheets_to_delete.push((category.clone(), structure_sheet_name));
-                            }
-                        }
-                        // Remove from metadata
-                        metadata.columns.remove(col_idx_to_remove);
-                        // metadata.column_headers.remove(col_idx_to_remove);
-                        // metadata.column_types.remove(col_idx_to_remove);
-                        // metadata.column_validators.remove(col_idx_to_remove);
-                        // metadata.column_filters.remove(col_idx_to_remove);
-                        // metadata.column_ai_contexts.remove(col_idx_to_remove);
-                        // metadata.column_widths.remove(col_idx_to_remove);
-
-                        // Remove from grid data
-                        for row in sheet_data.grid.iter_mut() {
-                            if col_idx_to_remove < row.len() {
-                                row.remove(col_idx_to_remove);
                             }
                         }
                         deleted_count += 1;
@@ -180,9 +179,11 @@ pub fn handle_delete_columns_request(
                 } else {
                     String::new()
                 };
-                
-                let json_path = PathBuf::from(format!("{}{}.json", category_path, struct_sheet_name));
-                let meta_path = PathBuf::from(format!("{}{}.meta.json", category_path, struct_sheet_name));
+
+                let json_path =
+                    PathBuf::from(format!("{}{}.json", category_path, struct_sheet_name));
+                let meta_path =
+                    PathBuf::from(format!("{}{}.meta.json", category_path, struct_sheet_name));
 
                 file_delete_writer.write(RequestDeleteSheetFile {
                     relative_path: json_path,
@@ -190,6 +191,37 @@ pub fn handle_delete_columns_request(
                 file_delete_writer.write(RequestDeleteSheetFile {
                     relative_path: meta_path,
                 });
+
+                // If DB-backed, also remove the structure table and its metadata rows
+                if let Some(cat) = &struct_category {
+                    let base = crate::sheets::systems::io::get_default_data_base_path();
+                    let db_path = base.join(format!("{}.db", cat));
+                    if db_path.exists() {
+                        if let Ok(conn) = rusqlite::Connection::open(&db_path) {
+                            // Drop the structure data table if exists
+                            let drop_sql = format!("DROP TABLE IF EXISTS \"{}\"", struct_sheet_name);
+                            if let Err(e) = conn.execute(&drop_sql, []) {
+                                warn!("Failed to drop structure table '{}' in DB '{}': {}", struct_sheet_name, db_path.display(), e);
+                            } else {
+                                info!("Dropped structure table '{}' from DB '{}'.", struct_sheet_name, db_path.display());
+                            }
+                            // Remove metadata entry for the structure table from _Metadata
+                            if let Err(e) = conn.execute("DELETE FROM _Metadata WHERE table_name = ?", rusqlite::params![struct_sheet_name]) {
+                                warn!("Failed to remove _Metadata entry for '{}' in DB '{}': {}", struct_sheet_name, db_path.display(), e);
+                            } else {
+                                info!("Removed _Metadata entry for '{}' from DB '{}'.", struct_sheet_name, db_path.display());
+                            }
+                            // Drop per-table metadata table if exists
+                            let meta_table = format!("{}_Metadata", struct_sheet_name);
+                            let drop_meta_sql = format!("DROP TABLE IF EXISTS \"{}\"", meta_table);
+                            if let Err(e) = conn.execute(&drop_meta_sql, []) {
+                                warn!("Failed to drop metadata table '{}' in DB '{}': {}", meta_table, db_path.display(), e);
+                            } else {
+                                info!("Dropped metadata table '{}' from DB '{}'.", meta_table, db_path.display());
+                            }
+                        }
+                    }
+                }
 
                 feedback_writer.write(SheetOperationFeedback {
                     message: format!(
@@ -203,6 +235,56 @@ pub fn handle_delete_columns_request(
                     "Attempted to cascade delete structure sheet '{:?}/{}' but it was not found in registry.",
                     struct_category, struct_sheet_name
                 );
+            }
+        }
+    }
+
+    // Cascade drop columns for DB-backed sheets
+    // Process DB-backed column deletions: remove metadata entries only
+    if !db_column_deletions.is_empty() {
+        info!("Marking {} DB-backed column(s) deleted: {:?}", db_column_deletions.len(), db_column_deletions);
+        for (cat, table_name, column_name) in db_column_deletions {
+            match open_or_create_db_for_category(&cat) {
+                Ok(conn) => {
+                    let meta_table = format!("{}_Metadata", table_name);
+                    // Mark deleted flag and disable AI include in metadata
+                    let update_sql = format!(
+                        "UPDATE \"{}\" SET deleted = 1, ai_include_in_send = 0 WHERE column_name = ?",
+                        meta_table
+                    );
+                    match conn.execute(&update_sql, rusqlite::params![column_name]) {
+                        Ok(count) => {
+                            info!("Marked {} row(s) deleted in '{}', AI include disabled", count, meta_table);
+                            // Also wipe column contents to free space immediately, but first verify column exists
+                            let mut col_exists = false;
+                            if let Ok(mut stmt) = conn.prepare(&format!("PRAGMA table_info(\"{}\")", table_name)) {
+                                if let Ok(mut rows) = stmt.query([]) {
+                                    while let Ok(Some(row)) = rows.next() {
+                                        let name: String = row.get(1).unwrap_or_default();
+                                        if name == column_name {
+                                            col_exists = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            if col_exists {
+                                let wipe_sql = format!("UPDATE \"{}\" SET \"{}\" = NULL", table_name, column_name);
+                                match conn.execute(&wipe_sql, []) {
+                                    Ok(wiped) => info!("Wiped {} cell(s) in '{}' column '{}'", wiped, table_name, column_name),
+                                    Err(e) => warn!("Failed to wipe data for column '{}' on '{}': {}", column_name, table_name, e),
+                                }
+                            } else {
+                                warn!("Cannot wipe data for column '{}' on '{}': column not found in table schema", column_name, table_name);
+                            }
+                        }
+                        Err(e) => warn!(
+                            "Failed to mark column '{}' deleted in '{}': {}",
+                            column_name, meta_table, e
+                        ),
+                    }
+                }
+                Err(e) => warn!("Could not open DB for category '{}' when marking column '{}' deleted: {}", cat, column_name, e),
             }
         }
     }

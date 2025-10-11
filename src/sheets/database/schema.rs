@@ -1,8 +1,10 @@
 // src/sheets/database/schema.rs
 
-use rusqlite::{Connection, params};
-use crate::sheets::definitions::{ColumnDataType, ColumnDefinition, ColumnValidator, SheetMetadata};
-use super::error::{DbResult, DbError};
+use super::error::{DbError, DbResult};
+use crate::sheets::definitions::{
+    ColumnDataType, ColumnDefinition, ColumnValidator, SheetMetadata,
+};
+use rusqlite::{params, Connection};
 
 /// SQL type mapping for column data types
 pub fn sql_type_for_column(data_type: ColumnDataType) -> &'static str {
@@ -42,12 +44,19 @@ pub fn ensure_global_metadata_table(conn: &Connection) -> DbResult<()> {
     let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
     for col in rows {
         if let Ok(name) = col {
-            if name.eq_ignore_ascii_case("hidden") { has_hidden = true; }
-            if name.eq_ignore_ascii_case("ai_grounding_with_google_search") { has_grounding = true; }
+            if name.eq_ignore_ascii_case("hidden") {
+                has_hidden = true;
+            }
+            if name.eq_ignore_ascii_case("ai_grounding_with_google_search") {
+                has_grounding = true;
+            }
         }
     }
     if !has_hidden {
-        conn.execute("ALTER TABLE _Metadata ADD COLUMN hidden INTEGER DEFAULT 0", [])?;
+        conn.execute(
+            "ALTER TABLE _Metadata ADD COLUMN hidden INTEGER DEFAULT 0",
+            [],
+        )?;
         // Reasonable default: hide structure tables by default
         let _ = conn.execute(
             "UPDATE _Metadata SET hidden = 1 WHERE table_type = 'structure'",
@@ -73,35 +82,37 @@ pub fn create_data_table(
         "id INTEGER PRIMARY KEY AUTOINCREMENT".to_string(),
         "row_index INTEGER NOT NULL UNIQUE".to_string(),
     ];
-    
+
     for col in columns {
         // Skip structure columns - they get their own tables
         if matches!(col.validator, Some(ColumnValidator::Structure)) {
             continue;
         }
-        
+
         let sql_type = sql_type_for_column(col.data_type);
         col_defs.push(format!("\"{}\" {}", col.header, sql_type));
     }
-    
+
     col_defs.push("created_at TEXT DEFAULT CURRENT_TIMESTAMP".to_string());
     col_defs.push("updated_at TEXT DEFAULT CURRENT_TIMESTAMP".to_string());
-    
+
     let create_sql = format!(
         "CREATE TABLE IF NOT EXISTS \"{}\" ({})",
         table_name,
         col_defs.join(", ")
     );
-    
+
     conn.execute(&create_sql, [])?;
-    
+
     // Create index
     conn.execute(
-        &format!("CREATE INDEX IF NOT EXISTS idx_{}_row_index ON \"{}\"(row_index)", 
-                 table_name, table_name),
+        &format!(
+            "CREATE INDEX IF NOT EXISTS idx_{}_row_index ON \"{}\"(row_index)",
+            table_name, table_name
+        ),
         [],
     )?;
-    
+
     Ok(())
 }
 
@@ -112,26 +123,27 @@ pub fn create_metadata_table(
     metadata: &SheetMetadata,
 ) -> DbResult<()> {
     let meta_table = format!("{}_Metadata", table_name);
-    
+
     conn.execute(
         &format!(
             "CREATE TABLE IF NOT EXISTS \"{}\" (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                column_index INTEGER UNIQUE NOT NULL,
-                column_name TEXT NOT NULL UNIQUE,
-                data_type TEXT NOT NULL,
-                validator_type TEXT,
-                validator_config TEXT,
-                ai_context TEXT,
-                filter_expr TEXT,  -- JSON array of filter expressions (up to 12 OR filters)
-                ai_enable_row_generation INTEGER DEFAULT 0,
-                ai_include_in_send INTEGER DEFAULT 1
-            )",
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    column_index INTEGER UNIQUE NOT NULL,
+                    column_name TEXT NOT NULL UNIQUE,
+                    data_type TEXT NOT NULL,
+                    validator_type TEXT,
+                    validator_config TEXT,
+                    ai_context TEXT,
+                    filter_expr TEXT,  -- JSON array of filter expressions (up to 12 OR filters)
+                    ai_enable_row_generation INTEGER DEFAULT 0,
+                    ai_include_in_send INTEGER DEFAULT 1,
+                    deleted INTEGER DEFAULT 0  -- Mark column deleted for reuse
+                )",
             meta_table
         ),
         [],
     )?;
-    
+
     // Insert column metadata
     for (idx, col) in metadata.columns.iter().enumerate() {
         let validator_type = match &col.validator {
@@ -140,28 +152,35 @@ pub fn create_metadata_table(
             Some(ColumnValidator::Structure) => Some("Structure"),
             None => None,
         };
-        
+
         let validator_config = match &col.validator {
-            Some(ColumnValidator::Linked { target_sheet_name, target_column_index }) => {
-                Some(serde_json::json!({
+            Some(ColumnValidator::Linked {
+                target_sheet_name,
+                target_column_index,
+            }) => Some(
+                serde_json::json!({
                     "target_table": target_sheet_name,
                     "target_column_index": target_column_index
-                }).to_string())
-            }
+                })
+                .to_string(),
+            ),
             Some(ColumnValidator::Structure) => {
                 let structure_table = format!("{}_{}", table_name, col.header);
-                Some(serde_json::json!({
-                    "structure_table": structure_table
-                }).to_string())
+                Some(
+                    serde_json::json!({
+                        "structure_table": structure_table
+                    })
+                    .to_string(),
+                )
             }
             _ => None,
         };
-        
+
         conn.execute(
             &format!(
                 "INSERT OR REPLACE INTO \"{}\" 
-                 (column_index, column_name, data_type, validator_type, validator_config, ai_context, filter_expr, ai_enable_row_generation, ai_include_in_send)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 (column_index, column_name, data_type, validator_type, validator_config, ai_context, filter_expr, ai_enable_row_generation, ai_include_in_send, deleted)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 meta_table
             ),
             params![
@@ -173,11 +192,83 @@ pub fn create_metadata_table(
                 col.ai_context,
                 col.filter,
                 col.ai_enable_row_generation.unwrap_or(false) as i32,
-                col.ai_include_in_send.unwrap_or(true) as i32
+                col.ai_include_in_send.unwrap_or(true) as i32,
+                col.deleted as i32
             ],
         )?;
     }
-    
+
+    Ok(())
+}
+
+/// Ensure the per-table metadata table exists and contains the expected columns/rows.
+/// This is a best-effort migration helper for older or foreign databases.
+pub fn ensure_table_metadata_schema(
+    conn: &Connection,
+    table_name: &str,
+    metadata: &SheetMetadata,
+) -> DbResult<()> {
+    use rusqlite::OptionalExtension;
+    let meta_table = format!("{}_Metadata", table_name);
+
+    // 1) Create table if missing by attempting a lightweight SELECT
+    let exists: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?",
+            [&meta_table],
+            |row| row.get::<_, i32>(0).map(|v| v > 0),
+        )
+        .unwrap_or(false);
+    if !exists {
+        // Create from current in-memory metadata
+        create_metadata_table(conn, table_name, metadata)?;
+        return Ok(());
+    }
+
+    // 2) Ensure required columns exist (id, column_index, column_name, data_type, validator_type, validator_config, ai_context, filter_expr, ai_enable_row_generation, ai_include_in_send)
+    let mut existing_cols: std::collections::HashSet<String> = std::collections::HashSet::new();
+    {
+        let mut stmt = conn.prepare(&format!("PRAGMA table_info(\"{}\")", meta_table))?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+        for r in rows {
+            if let Ok(name) = r {
+                existing_cols.insert(name);
+            }
+        }
+    }
+    let add_if_missing = |conn: &Connection, name: &str, ty: &str| -> DbResult<()> {
+        if !existing_cols.contains(name) {
+            conn.execute(
+                &format!("ALTER TABLE \"{}\" ADD COLUMN {} {}", meta_table, name, ty),
+                [],
+            )?;
+        }
+        Ok(())
+    };
+    add_if_missing(conn, "validator_type", "TEXT")?;
+    add_if_missing(conn, "validator_config", "TEXT")?;
+    add_if_missing(conn, "ai_context", "TEXT")?;
+    add_if_missing(conn, "filter_expr", "TEXT")?;
+    add_if_missing(conn, "ai_enable_row_generation", "INTEGER DEFAULT 0")?;
+    add_if_missing(conn, "ai_include_in_send", "INTEGER DEFAULT 1")?;
+
+    // 3) Ensure one row for each column index exists (INSERT OR IGNORE by column_index)
+    {
+        let tx = conn.unchecked_transaction()?;
+        {
+            let mut insert_stmt = tx.prepare(&format!(
+                "INSERT OR IGNORE INTO \"{}\" (column_index, column_name, data_type) VALUES (?, ?, ?)",
+                meta_table
+            ))?;
+            for (idx, col) in metadata.columns.iter().enumerate() {
+                // Use current data_type formatting
+                let dt = format!("{:?}", col.data_type);
+                insert_stmt.execute(rusqlite::params![idx as i32, &col.header, dt])?;
+            }
+        }
+        tx.commit()?;
+    }
+
     Ok(())
 }
 
@@ -189,7 +280,7 @@ pub fn create_ai_groups_table(
 ) -> DbResult<()> {
     let groups_table = format!("{}_Metadata_Groups", table_name);
     let meta_table = format!("{}_Metadata", table_name);
-    
+
     conn.execute(
         &format!(
             "CREATE TABLE IF NOT EXISTS \"{}\" (
@@ -204,7 +295,23 @@ pub fn create_ai_groups_table(
         ),
         [],
     )?;
-    
+
+    // Migration: add deleted column if missing
+    let mut has_deleted = false;
+    // Remove unused prepare of info_stmt
+    let mut cols = conn.prepare(&format!("PRAGMA table_info('{}')", meta_table))?;
+    for row in cols.query_map([], |r| r.get::<_, String>(1))? {
+        if row.as_ref().map(|c| c == "deleted").unwrap_or(false) {
+            has_deleted = true;
+            break;
+        }
+    }
+    if !has_deleted {
+        conn.execute(
+            &format!("ALTER TABLE \"{}\" ADD COLUMN deleted INTEGER DEFAULT 0", meta_table),
+            [],
+        )?;
+    }
     // Populate from metadata
     for group in &metadata.ai_schema_groups {
         for &col_idx in &group.included_columns {
@@ -218,7 +325,7 @@ pub fn create_ai_groups_table(
             )?;
         }
     }
-    
+
     Ok(())
 }
 
@@ -229,49 +336,56 @@ pub fn create_structure_table(
     col_def: &ColumnDefinition,
 ) -> DbResult<()> {
     let structure_table = format!("{}_{}", parent_table, col_def.header);
-    
-    let schema = col_def.structure_schema.as_ref()
+
+    let schema = col_def
+        .structure_schema
+        .as_ref()
         .ok_or_else(|| DbError::InvalidMetadata("Structure column missing schema".into()))?;
-    
+
     let mut col_defs = vec![
         "id INTEGER PRIMARY KEY AUTOINCREMENT".to_string(),
-        format!("parent_id INTEGER NOT NULL REFERENCES \"{}\"(id) ON DELETE CASCADE", parent_table),
+        format!(
+            "parent_id INTEGER NOT NULL REFERENCES \"{}\"(id) ON DELETE CASCADE",
+            parent_table
+        ),
         "row_index INTEGER NOT NULL".to_string(),
         // Use parent_key column name to match UI/JSON structure sheets
         "parent_key TEXT NOT NULL".to_string(),
     ];
-    
+
     for field in schema {
         let sql_type = sql_type_for_column(field.data_type);
         col_defs.push(format!("\"{}\" {}", field.header, sql_type));
     }
-    
+
     col_defs.push("created_at TEXT DEFAULT CURRENT_TIMESTAMP".to_string());
     col_defs.push("updated_at TEXT DEFAULT CURRENT_TIMESTAMP".to_string());
     col_defs.push("UNIQUE(parent_id, row_index)".to_string());
-    
+
     let create_sql = format!(
         "CREATE TABLE IF NOT EXISTS \"{}\" ({})",
         structure_table,
         col_defs.join(", ")
     );
-    
+
     conn.execute(&create_sql, [])?;
-    
+
     // Indexes
     conn.execute(
-        &format!("CREATE INDEX IF NOT EXISTS idx_{}_parent ON \"{}\"(parent_id)", 
-                 structure_table, structure_table),
+        &format!(
+            "CREATE INDEX IF NOT EXISTS idx_{}_parent ON \"{}\"(parent_id)",
+            structure_table, structure_table
+        ),
         [],
     )?;
-    
+
     // Register structure table in _Metadata
     conn.execute(
         "INSERT OR REPLACE INTO _Metadata (table_name, table_type, parent_table, parent_column, hidden)
          VALUES (?, 'structure', ?, ?, 1)",
         params![&structure_table, parent_table, &col_def.header],
     )?;
-    
+
     Ok(())
 }
 

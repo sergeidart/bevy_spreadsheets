@@ -73,7 +73,10 @@ pub fn show_random_picker_popup(
                     meta.random_picker = Some(settings.clone());
                     let meta_clone = meta.clone();
                     if meta_clone.category.is_none() {
-                        crate::sheets::systems::io::save::save_single_sheet(&*registry, &meta_clone);
+                        crate::sheets::systems::io::save::save_single_sheet(
+                            &*registry,
+                            &meta_clone,
+                        );
                     }
                 }
             }

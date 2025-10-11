@@ -214,6 +214,21 @@ pub struct RequestUpdateAiSendSchema {
 }
 
 #[derive(Event, Debug, Clone)]
+pub struct RequestUpdateColumnAiInclude {
+    pub category: Option<String>,
+    pub sheet_name: String,
+    pub column_index: usize,
+    pub include: bool,
+}
+
+#[derive(Event, Debug, Clone)]
+pub struct RequestBatchUpdateColumnAiInclude {
+    pub category: Option<String>,
+    pub sheet_name: String,
+    pub updates: Vec<(usize, bool)>,
+}
+
+#[derive(Event, Debug, Clone)]
 pub struct RequestUpdateAiStructureSend {
     pub category: Option<String>,
     pub sheet_name: String,
@@ -327,7 +342,7 @@ pub struct RequestMigrateJsonToDb {
 /// Request to upload a single JSON file and migrate it into the current database as a table
 #[derive(Event, Debug, Clone)]
 pub struct RequestUploadJsonToCurrentDb {
-    pub target_db_name: String,  // The database (category) to add the table to
+    pub target_db_name: String, // The database (category) to add the table to
 }
 
 #[derive(Event, Debug, Clone)]

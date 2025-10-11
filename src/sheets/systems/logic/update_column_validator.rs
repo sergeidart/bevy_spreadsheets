@@ -25,7 +25,11 @@ pub fn handle_update_column_validator(
     // Track sheets whose metadata changed so we can save after loop with immutable borrow
     let mut sheets_to_save: HashMap<(Option<String>, String), SheetMetadata> = HashMap::new();
     // Track structure sheets that need to be created
-    let mut structure_sheets_to_create: Vec<(Option<String>, String, Vec<crate::sheets::definitions::ColumnDefinition>)> = Vec::new();
+    let mut structure_sheets_to_create: Vec<(
+        Option<String>,
+        String,
+        Vec<crate::sheets::definitions::ColumnDefinition>,
+    )> = Vec::new();
 
     for event in events.read() {
         let category = &event.category;
@@ -230,8 +234,9 @@ pub fn handle_update_column_validator(
                                 }
                             }
                             // Mark structure sheet for creation
-                            let structure_sheet_name = format!("{}_{}", sheet_name, meta_mut.columns[col_index].header);
-                            
+                            let structure_sheet_name =
+                                format!("{}_{}", sheet_name, meta_mut.columns[col_index].header);
+
                             // Create metadata with id and parent_key columns, plus schema fields
                             let mut structure_columns = vec![
                                 crate::sheets::definitions::ColumnDefinition {
@@ -242,6 +247,7 @@ pub fn handle_update_column_validator(
                                     ai_context: None,
                                     ai_enable_row_generation: None,
                                     ai_include_in_send: Some(false),
+                                    deleted: false,
                                     width: None,
                                     structure_schema: None,
                                     structure_column_order: None,
@@ -257,6 +263,7 @@ pub fn handle_update_column_validator(
                                     ai_enable_row_generation: None,
                                     // Keep sending Parent_key by default for AI context/merge
                                     ai_include_in_send: Some(true),
+                                    deleted: false,
                                     width: None,
                                     structure_schema: None,
                                     structure_column_order: None,
@@ -264,27 +271,35 @@ pub fn handle_update_column_validator(
                                     structure_ancestor_key_parent_column_indices: None,
                                 },
                             ];
-                            
+
                             // Add columns from the structure schema
                             for field_def in &collected_defs {
-                                structure_columns.push(crate::sheets::definitions::ColumnDefinition {
-                                    header: field_def.header.clone(),
-                                    data_type: field_def.data_type,
-                                    validator: field_def.validator.clone(),
-                                    filter: None,
-                                    ai_context: field_def.ai_context.clone(),
-                                    ai_enable_row_generation: field_def.ai_enable_row_generation,
-                                    ai_include_in_send: field_def.ai_include_in_send,
-                                    width: None,
-                                    structure_schema: None,
-                                    structure_column_order: None,
-                                    structure_key_parent_column_index: None,
-                                    structure_ancestor_key_parent_column_indices: None,
-                                });
+                                structure_columns.push(
+                                    crate::sheets::definitions::ColumnDefinition {
+                                        header: field_def.header.clone(),
+                                        data_type: field_def.data_type,
+                                        validator: field_def.validator.clone(),
+                                        filter: None,
+                                        ai_context: field_def.ai_context.clone(),
+                                        ai_enable_row_generation: field_def
+                                            .ai_enable_row_generation,
+                                        ai_include_in_send: field_def.ai_include_in_send,
+                                        deleted: false,
+                                        width: None,
+                                        structure_schema: None,
+                                        structure_column_order: None,
+                                        structure_key_parent_column_index: None,
+                                        structure_ancestor_key_parent_column_indices: None,
+                                    },
+                                );
                             }
-                            
-                            structure_sheets_to_create.push((category.clone(), structure_sheet_name, structure_columns));
-                            
+
+                            structure_sheets_to_create.push((
+                                category.clone(),
+                                structure_sheet_name,
+                                structure_columns,
+                            ));
+
                             for (row_idx, row) in sheet_data_mut.grid.iter_mut().enumerate() {
                                 if row.len() <= col_index {
                                     row.resize(col_index + 1, String::new());
@@ -436,26 +451,19 @@ pub fn handle_update_column_validator(
                 sheets_to_save.insert((category.clone(), sheet_name.clone()), meta_mut.clone());
 
                 // Persist to DB if this sheet belongs to a database category
-                if meta_mut.category.is_some() {
-                    if let Some(cat) = &meta_mut.category {
-                        let base = crate::sheets::systems::io::get_default_data_base_path();
-                        let db_path = base.join(format!("{}.db", cat));
-                        if db_path.exists() {
-                            if let Ok(conn) = rusqlite::Connection::open(&db_path) {
-                                let _ = crate::sheets::database::schema::ensure_global_metadata_table(&conn);
-                                // Persist column validator and data type
-                                let _ = crate::sheets::database::writer::DbWriter::update_column_validator(
-                                    &conn,
-                                    sheet_name,
-                                    col_index,
-                                    meta_mut.columns[col_index].data_type,
-                                    &meta_mut.columns[col_index].validator,
-                                    meta_mut.columns[col_index].ai_include_in_send,
-                                    meta_mut.columns[col_index].ai_enable_row_generation,
-                                );
-                            }
-                        }
-                    }
+                if let Some(cat_str) = &meta_mut.category {
+                    // Persist by column name to avoid index mismatch when metadata contains technical columns
+                    let column_name = meta_mut.columns[col_index].header.clone();
+                    let _ = crate::sheets::database::persist_column_validator_by_name(
+                        cat_str,
+                        sheet_name,
+                        &column_name,
+                        meta_mut.columns[col_index].data_type,
+                        &meta_mut.columns[col_index].validator,
+                        meta_mut.columns[col_index].ai_include_in_send,
+                        meta_mut.columns[col_index].ai_enable_row_generation,
+                    )
+                    .map_err(|e| error!("Persist column validator failed: {}", e));
                 }
             } else {
                 error!(
@@ -484,7 +492,7 @@ pub fn handle_update_column_validator(
         // Check if sheet already exists
         if registry.get_sheet(&cat, &struct_sheet_name).is_none() {
             info!("Creating structure sheet: {:?}/{}", cat, struct_sheet_name);
-            
+
             let data_filename = format!("{}.json", struct_sheet_name);
             let structure_metadata = SheetMetadata::create_generic(
                 struct_sheet_name.clone(),
@@ -497,24 +505,24 @@ pub fn handle_update_column_validator(
                 hidden: true,
                 ..structure_metadata
             };
-            
+
             let structure_sheet_data = crate::sheets::definitions::SheetGridData {
                 metadata: Some(structure_metadata.clone()),
                 grid: Vec::new(), // Empty initially
             };
-            
+
             registry.add_or_replace_sheet(
                 cat.clone(),
                 struct_sheet_name.clone(),
                 structure_sheet_data,
             );
-            
+
             // Save the structure sheet
             let registry_immut_temp = registry.as_ref();
             if structure_metadata.category.is_none() {
                 save_single_sheet(registry_immut_temp, &structure_metadata);
             }
-            
+
             data_modified_writer.write(SheetDataModifiedInRegistryEvent {
                 category: cat.clone(),
                 sheet_name: struct_sheet_name.clone(),

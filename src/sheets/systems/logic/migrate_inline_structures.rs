@@ -2,12 +2,14 @@
 // Migrates inline JSON data from Structure columns to separate structure sheets
 
 use crate::sheets::{
-    definitions::{ColumnDataType, ColumnDefinition, ColumnValidator, SheetGridData, SheetMetadata},
-    events::{SheetDataModifiedInRegistryEvent, RequestSheetRevalidation, SheetOperationFeedback},
+    definitions::{
+        ColumnDataType, ColumnDefinition, ColumnValidator, SheetGridData, SheetMetadata,
+    },
+    events::{RequestSheetRevalidation, SheetDataModifiedInRegistryEvent, SheetOperationFeedback},
     resources::SheetRegistry,
 };
-use bevy::prelude::*;
 use crate::ui::elements::editor::state::EditorWindowState;
+use bevy::prelude::*;
 
 /// Scans all sheets for Structure columns with inline JSON data and migrates them to separate structure sheets
 pub fn migrate_inline_structure_data(
@@ -17,7 +19,12 @@ pub fn migrate_inline_structure_data(
     revalidate_writer: &mut EventWriter<RequestSheetRevalidation>,
 ) -> (usize, Option<(Option<String>, String)>) {
     let mut migrated_count = 0;
-    let mut structure_sheets_to_create: Vec<(Option<String>, String, SheetMetadata, Vec<Vec<String>>)> = Vec::new();
+    let mut structure_sheets_to_create: Vec<(
+        Option<String>,
+        String,
+        SheetMetadata,
+        Vec<Vec<String>>,
+    )> = Vec::new();
     let mut cells_to_clear: Vec<(Option<String>, String, usize, usize)> = Vec::new(); // (category, sheet, row_idx, col_idx)
 
     // First pass: Scan for Structure columns with inline JSON
@@ -124,19 +131,24 @@ pub fn migrate_inline_structure_data(
             }
         }
     }
-    
+
     // Second pass: Create structure sheets and clear inline JSON
     let mut first_created: Option<(Option<String>, String)> = None;
     for (category, sheet_name, metadata, grid) in structure_sheets_to_create {
-        info!("Creating structure sheet '{:?}/{}' from migrated inline data", category, sheet_name);
-        
+        info!(
+            "Creating structure sheet '{:?}/{}' from migrated inline data",
+            category, sheet_name
+        );
+
         let sheet_data = SheetGridData {
             metadata: Some(metadata.clone()),
             grid,
         };
 
         registry.add_or_replace_sheet(category.clone(), sheet_name.clone(), sheet_data);
-        if first_created.is_none() { first_created = Some((category.clone(), sheet_name.clone())); }
+        if first_created.is_none() {
+            first_created = Some((category.clone(), sheet_name.clone()));
+        }
         // Notify UI and render cache
         data_modified_writer.write(SheetDataModifiedInRegistryEvent {
             category: category.clone(),
@@ -146,10 +158,10 @@ pub fn migrate_inline_structure_data(
             category: category.clone(),
             sheet_name: sheet_name.clone(),
         });
-        
+
         // Do not save to JSON; DB-backed runtime will persist via DB systems.
     }
-    
+
     // Clear inline JSON from parent sheets
     let mut parent_sheets_to_save: Vec<(Option<String>, String)> = Vec::new();
     for (category, sheet_name, row_idx, col_idx) in cells_to_clear {
@@ -159,7 +171,7 @@ pub fn migrate_inline_structure_data(
                     row[col_idx] = String::new(); // Clear the cell
                 }
             }
-            
+
             // Queue for save after releasing mutable borrow
             parent_sheets_to_save.push((category.clone(), sheet_name.clone()));
             // Notify data change for parent sheet as well
@@ -176,10 +188,13 @@ pub fn migrate_inline_structure_data(
 
     // Do not save modified parent sheets to JSON in DB mode.
     for _ in parent_sheets_to_save { /* no-op */ }
-    
+
     if migrated_count > 0 {
         feedback_writer.write(SheetOperationFeedback {
-            message: format!("Migrated {} structure column(s) from inline JSON to separate sheets.", migrated_count),
+            message: format!(
+                "Migrated {} structure column(s) from inline JSON to separate sheets.",
+                migrated_count
+            ),
             is_error: false,
         });
     }
@@ -195,8 +210,7 @@ pub fn run_inline_structure_migration_once(
     mut revalidate_writer: EventWriter<RequestSheetRevalidation>,
     mut editor_state: Option<ResMut<EditorWindowState>>,
     mut ran: Local<bool>,
-)
-{
+) {
     if *ran {
         return;
     }
@@ -207,7 +221,10 @@ pub fn run_inline_structure_migration_once(
         &mut revalidate_writer,
     );
     if migrated > 0 {
-        info!("Inline structure migration created/filled {} structure sheet(s)", migrated);
+        info!(
+            "Inline structure migration created/filled {} structure sheet(s)",
+            migrated
+        );
         // Auto-open the first created structure sheet (always, to let user inspect results)
         if let (Some(state), Some((cat, name))) = (editor_state.as_deref_mut(), first_created) {
             state.selected_category = cat.clone();
@@ -215,7 +232,10 @@ pub fn run_inline_structure_migration_once(
             state.reset_interaction_modes_and_selections();
             // Force filter recalc so the table shows immediately
             state.force_filter_recalculation = true;
-            info!("Auto-selected migrated structure sheet '{:?}/{}'", cat, name);
+            info!(
+                "Auto-selected migrated structure sheet '{:?}/{}'",
+                cat, name
+            );
         }
     } else {
         info!("Inline structure migration: no inline JSON found to migrate");
@@ -228,72 +248,87 @@ fn parse_inline_json_to_rows(
     json_str: &str,
     schema: &Option<Vec<crate::sheets::definitions::StructureFieldDefinition>>,
 ) -> Result<Vec<Vec<String>>, String> {
-    let val: serde_json::Value = serde_json::from_str(json_str)
-        .map_err(|e| format!("JSON parse error: {}", e))?;
-    
+    let val: serde_json::Value =
+        serde_json::from_str(json_str).map_err(|e| format!("JSON parse error: {}", e))?;
+
     if let serde_json::Value::Array(arr) = val {
         let mut rows = Vec::new();
         // Case: array of primitives -> treat as a single row
-        if arr.iter().all(|v| matches!(v, serde_json::Value::String(_) | serde_json::Value::Number(_) | serde_json::Value::Bool(_) | serde_json::Value::Null)) {
-            let row: Vec<String> = arr.iter().map(|v| match v {
-                serde_json::Value::String(s) => s.clone(),
-                serde_json::Value::Number(n) => n.to_string(),
-                serde_json::Value::Bool(b) => b.to_string(),
-                serde_json::Value::Null => String::new(),
-                other => serde_json::to_string(other).unwrap_or_default(),
-            }).collect();
+        if arr.iter().all(|v| {
+            matches!(
+                v,
+                serde_json::Value::String(_)
+                    | serde_json::Value::Number(_)
+                    | serde_json::Value::Bool(_)
+                    | serde_json::Value::Null
+            )
+        }) {
+            let row: Vec<String> = arr
+                .iter()
+                .map(|v| match v {
+                    serde_json::Value::String(s) => s.clone(),
+                    serde_json::Value::Number(n) => n.to_string(),
+                    serde_json::Value::Bool(b) => b.to_string(),
+                    serde_json::Value::Null => String::new(),
+                    other => serde_json::to_string(other).unwrap_or_default(),
+                })
+                .collect();
             rows.push(row);
             return Ok(rows);
         }
-        
+
         for item in arr {
             match item {
                 // Array of arrays: [["val1", "val2"], ["val3", "val4"]]
                 serde_json::Value::Array(row_arr) => {
-                    let row: Vec<String> = row_arr.iter().map(|v| {
-                        match v {
+                    let row: Vec<String> = row_arr
+                        .iter()
+                        .map(|v| match v {
                             serde_json::Value::String(s) => s.clone(),
                             serde_json::Value::Number(n) => n.to_string(),
                             serde_json::Value::Bool(b) => b.to_string(),
                             serde_json::Value::Null => String::new(),
                             _ => serde_json::to_string(v).unwrap_or_default(),
-                        }
-                    }).collect();
+                        })
+                        .collect();
                     rows.push(row);
                 }
                 // Array of objects: [{"field1": "val1", "field2": "val2"}]
                 serde_json::Value::Object(obj) => {
                     let row = if let Some(schema_fields) = schema {
                         // Use schema to determine field order
-                        schema_fields.iter().map(|field| {
-                            obj.get(&field.header)
-                                .map(|v| match v {
-                                    serde_json::Value::String(s) => s.clone(),
-                                    serde_json::Value::Number(n) => n.to_string(),
-                                    serde_json::Value::Bool(b) => b.to_string(),
-                                    serde_json::Value::Null => String::new(),
-                                    _ => serde_json::to_string(v).unwrap_or_default(),
-                                })
-                                .unwrap_or_default()
-                        }).collect()
+                        schema_fields
+                            .iter()
+                            .map(|field| {
+                                obj.get(&field.header)
+                                    .map(|v| match v {
+                                        serde_json::Value::String(s) => s.clone(),
+                                        serde_json::Value::Number(n) => n.to_string(),
+                                        serde_json::Value::Bool(b) => b.to_string(),
+                                        serde_json::Value::Null => String::new(),
+                                        _ => serde_json::to_string(v).unwrap_or_default(),
+                                    })
+                                    .unwrap_or_default()
+                            })
+                            .collect()
                     } else {
                         // No schema, just collect values in arbitrary order
-                        obj.values().map(|v| {
-                            match v {
+                        obj.values()
+                            .map(|v| match v {
                                 serde_json::Value::String(s) => s.clone(),
                                 serde_json::Value::Number(n) => n.to_string(),
                                 serde_json::Value::Bool(b) => b.to_string(),
                                 serde_json::Value::Null => String::new(),
                                 _ => serde_json::to_string(v).unwrap_or_default(),
-                            }
-                        }).collect()
+                            })
+                            .collect()
                     };
                     rows.push(row);
                 }
                 _ => {} // Skip other types
             }
         }
-        
+
         Ok(rows)
     } else {
         Err("Expected JSON array".to_string())
@@ -315,6 +350,7 @@ fn create_structure_sheet_metadata(
             ai_context: None,
             ai_enable_row_generation: None,
             ai_include_in_send: None,
+            deleted: false,
             width: None,
             structure_schema: None,
             structure_column_order: None,
@@ -329,6 +365,7 @@ fn create_structure_sheet_metadata(
             ai_context: None,
             ai_enable_row_generation: None,
             ai_include_in_send: None,
+            deleted: false,
             width: None,
             structure_schema: None,
             structure_column_order: None,
@@ -336,7 +373,7 @@ fn create_structure_sheet_metadata(
             structure_ancestor_key_parent_column_indices: None,
         },
     ];
-    
+
     // Add schema columns
     if let Some(schema_fields) = schema {
         for field in schema_fields {
@@ -348,6 +385,7 @@ fn create_structure_sheet_metadata(
                 ai_context: None,
                 ai_enable_row_generation: None,
                 ai_include_in_send: None,
+                deleted: false,
                 width: None,
                 structure_schema: None,
                 structure_column_order: None,
@@ -356,7 +394,7 @@ fn create_structure_sheet_metadata(
             });
         }
     }
-    
+
     let data_filename = format!("{}.json", sheet_name);
     let mut meta = SheetMetadata::create_generic(
         sheet_name.to_string(),
@@ -365,7 +403,7 @@ fn create_structure_sheet_metadata(
         category.clone(),
     );
     meta.columns = columns;
-        // Structure tables default to hidden
-        meta.hidden = true;
+    // Structure tables default to hidden
+    meta.hidden = true;
     meta
 }

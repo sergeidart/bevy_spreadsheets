@@ -5,7 +5,9 @@ use bevy::prelude::*;
 
 use crate::sheets::definitions::{SheetGridData, StructureFieldDefinition};
 use crate::sheets::events::SheetOperationFeedback;
-use crate::ui::elements::editor::state::{EditorWindowState, StructureNewRowContext, StructureReviewEntry};
+use crate::ui::elements::editor::state::{
+    EditorWindowState, StructureNewRowContext, StructureReviewEntry,
+};
 
 use super::row_helpers::skip_key_prefix;
 use super::utils::parse_structure_rows_from_cell;
@@ -36,7 +38,9 @@ pub fn process_structure_partition(
 
     // For merge rows, look up the matched existing row for structure data
     let duplicate_match_row = if let Some(ref ctx) = new_row_context {
-        state.ai_new_row_reviews.get(ctx.new_row_index)
+        state
+            .ai_new_row_reviews
+            .get(ctx.new_row_index)
             .and_then(|nr| nr.duplicate_match_row)
     } else {
         None
@@ -52,7 +56,9 @@ pub fn process_structure_partition(
     // Fix: For merge rows, use the matched existing row's structure data
     // For new rows, use the parent_row which now includes structure data from full_ai_row
     let cell_value = if let Some(matched_idx) = duplicate_match_row {
-        sheet.grid.get(matched_idx)
+        sheet
+            .grid
+            .get(matched_idx)
             .and_then(|row| row.get(column_index))
             .cloned()
             .unwrap_or_default()
@@ -80,12 +86,20 @@ pub fn process_structure_partition(
         }
         rows
     } else {
-        extract_original_nested_structure_rows(&cell_value, structure_path, sheet, schema_fields, schema_len)
+        extract_original_nested_structure_rows(
+            &cell_value,
+            structure_path,
+            sheet,
+            schema_fields,
+            schema_len,
+        )
     };
 
     // Normalize row lengths
     for row in &mut original_rows {
-        if row.len() < schema_len { row.resize(schema_len, String::new()); }
+        if row.len() < schema_len {
+            row.resize(schema_len, String::new());
+        }
     }
 
     let mut original_rows_aligned = original_rows.clone();
@@ -102,7 +116,10 @@ pub fn process_structure_partition(
     for local_idx in 0..original_count {
         if let Some((ai_row, merged_row, diff_row, changed)) = process_structure_suggestion_row(
             partition_rows.get(local_idx),
-            &original_rows_aligned.get(local_idx).cloned().unwrap_or_else(|| vec![String::new(); schema_len]),
+            &original_rows_aligned
+                .get(local_idx)
+                .cloned()
+                .unwrap_or_else(|| vec![String::new(); schema_len]),
             included,
             schema_len,
             key_prefix_count,
@@ -190,12 +207,9 @@ pub fn process_structure_partition(
     // Keep ALL columns in the row data, not just the included ones
     // This ensures excluded columns (not sent to AI) are preserved when serializing back to JSON
     // The differences vector will indicate which columns were actually changed by AI
-    
+
     // Extract schema headers for ALL columns
-    let schema_headers: Vec<String> = schema_fields
-        .iter()
-        .map(|f| f.header.clone())
-        .collect();
+    let schema_headers: Vec<String> = schema_fields.iter().map(|f| f.header.clone()).collect();
 
     state.ai_structure_reviews.push(StructureReviewEntry {
         root_category: root_category.clone(),
@@ -226,14 +240,21 @@ pub fn process_structure_partition(
     } else {
         (Some(parent_row_index), None)
     };
-    
+
     // Store the full parent row in cache if not already present
-    if !state.ai_original_row_snapshot_cache.contains_key(&cache_key) {
-        state.ai_original_row_snapshot_cache.insert(cache_key, parent_row.clone());
+    if !state
+        .ai_original_row_snapshot_cache
+        .contains_key(&cache_key)
+    {
+        state
+            .ai_original_row_snapshot_cache
+            .insert(cache_key, parent_row.clone());
     }
 
     if new_row_context.is_some() {
-        state.ai_structure_new_row_contexts.remove(&parent_row_index);
+        state
+            .ai_structure_new_row_contexts
+            .remove(&parent_row_index);
     }
 
     feedback_writer.write(SheetOperationFeedback {
@@ -264,7 +285,9 @@ pub(crate) fn extract_original_nested_structure_rows(
 ) -> Vec<Vec<String>> {
     // If cell empty, return one blank row
     let trimmed = cell_value.trim();
-    if trimmed.is_empty() { return vec![vec![String::new(); schema_len]]; }
+    if trimmed.is_empty() {
+        return vec![vec![String::new(); schema_len]];
+    }
 
     let Some(meta) = sheet.metadata.as_ref() else {
         return vec![vec![String::new(); schema_len]];
@@ -282,13 +305,20 @@ pub(crate) fn extract_original_nested_structure_rows(
 
     // Collect arrays representing the current level's rows (start with the root array)
     let mut current_level_arrays: Vec<&[JsonValue]> = Vec::new();
-    if let JsonValue::Array(arr) = &root_json { current_level_arrays.push(arr.as_slice()); }
-    else { return vec![vec![String::new(); schema_len]]; }
+    if let JsonValue::Array(arr) = &root_json {
+        current_level_arrays.push(arr.as_slice());
+    } else {
+        return vec![vec![String::new(); schema_len]];
+    }
 
     // Traverse each nested index except the final one: we need to arrive at the parent whose field holds the target array
     for (depth, &nested_idx) in structure_path.iter().enumerate().skip(1) {
-        let Some(schema) = current_schema_opt else { return vec![vec![String::new(); schema_len]]; };
-        let Some(field_def) = schema.get(nested_idx) else { return vec![vec![String::new(); schema_len]]; };
+        let Some(schema) = current_schema_opt else {
+            return vec![vec![String::new(); schema_len]];
+        };
+        let Some(field_def) = schema.get(nested_idx) else {
+            return vec![vec![String::new(); schema_len]];
+        };
         let field_header = &field_def.header;
 
         // If this is the last index in the path, we extract the array(s) at this field as final rows
@@ -303,13 +333,19 @@ pub(crate) fn extract_original_nested_structure_rows(
                         if is_last {
                             if let JsonValue::Array(nested_rows) = field_val {
                                 for row_item in nested_rows {
-                                    if let JsonValue::Object(row_obj) = row_item { final_row_objects.push(row_obj); }
+                                    if let JsonValue::Object(row_obj) = row_item {
+                                        final_row_objects.push(row_obj);
+                                    }
                                 }
                             }
                         } else {
                             if let JsonValue::Array(nested_arr) = field_val {
                                 // Collect all objects at this intermediate level to traverse further
-                                for row_item in nested_arr { if let JsonValue::Object(row_obj) = row_item { next_level_row_objects.push(row_obj); } }
+                                for row_item in nested_arr {
+                                    if let JsonValue::Object(row_obj) = row_item {
+                                        next_level_row_objects.push(row_obj);
+                                    }
+                                }
                                 // We'll rebuild current_level_arrays from the nested arrays for deeper traversal
                             }
                         }
@@ -319,13 +355,24 @@ pub(crate) fn extract_original_nested_structure_rows(
         }
 
         if is_last {
-            if final_row_objects.is_empty() { return vec![vec![String::new(); schema_len]]; }
+            if final_row_objects.is_empty() {
+                return vec![vec![String::new(); schema_len]];
+            }
             // Map final objects into rows using target schema fields
             let mut out_rows = Vec::with_capacity(final_row_objects.len());
             for obj in final_row_objects {
                 let mut row = Vec::with_capacity(schema_len);
-                for field in target_schema_fields { row.push(obj.get(&field.header).and_then(|v| v.as_str()).unwrap_or("").to_string()); }
-                if row.len() < schema_len { row.resize(schema_len, String::new()); }
+                for field in target_schema_fields {
+                    row.push(
+                        obj.get(&field.header)
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                    );
+                }
+                if row.len() < schema_len {
+                    row.resize(schema_len, String::new());
+                }
                 out_rows.push(row);
             }
             return out_rows;
@@ -335,7 +382,9 @@ pub(crate) fn extract_original_nested_structure_rows(
             // For simplicity, rebuild current_level_arrays from any nested structure arrays contained in the gathered objects for the next nested_idx.
             // To do that we peek at the next schema after current field.
             let next_schema_opt = field_def.structure_schema.as_ref();
-            if next_schema_opt.is_none() { return vec![vec![String::new(); schema_len]]; }
+            if next_schema_opt.is_none() {
+                return vec![vec![String::new(); schema_len]];
+            }
             current_schema_opt = next_schema_opt;
 
             // Rebuild current_level_arrays by pulling arrays from the collected objects (for the next nested iteration)
@@ -347,7 +396,8 @@ pub(crate) fn extract_original_nested_structure_rows(
                 // NOTE: For now we only support a single nested level reliably. If deeper nesting is required, a more elaborate traversal should be implemented.
                 let _ = obj; // silence unused warning if feature not extended
             }
-            if structure_path.len() > 2 { // deeper than one nested level not yet fully supported
+            if structure_path.len() > 2 {
+                // deeper than one nested level not yet fully supported
                 debug!("Nested structure original extraction: deeper than 2 levels not fully supported (path {:?})", structure_path);
                 return vec![vec![String::new(); schema_len]];
             }
@@ -361,7 +411,9 @@ pub(crate) fn extract_original_nested_structure_rows(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sheets::definitions::{ColumnDefinition, ColumnValidator, StructureFieldDefinition, ColumnDataType, SheetMetadata};
+    use crate::sheets::definitions::{
+        ColumnDataType, ColumnDefinition, ColumnValidator, SheetMetadata, StructureFieldDefinition,
+    };
 
     #[test]
     fn test_extract_original_nested_structure_rows_one_level() {
@@ -423,6 +475,7 @@ mod tests {
             ai_context: None,
             ai_enable_row_generation: None,
             ai_include_in_send: None,
+            deleted: false,
             width: None,
             structure_schema: Some(vec![name_field.clone(), nested_field.clone()]),
             structure_column_order: None,
@@ -439,7 +492,8 @@ mod tests {
             ai_temperature: None,
             ai_top_k: None,
             ai_top_p: None,
-            requested_grounding_with_google_search: crate::sheets::definitions::default_grounding_with_google_search(),
+            requested_grounding_with_google_search:
+                crate::sheets::definitions::default_grounding_with_google_search(),
             ai_enable_row_generation: true,
             ai_schema_groups: Vec::new(),
             ai_active_schema_group: None,
@@ -447,11 +501,20 @@ mod tests {
             structure_parent: None,
             hidden: false,
         };
-        let sheet = crate::sheets::definitions::SheetGridData { grid: vec![vec![json.to_string()]], metadata: Some(meta) };
+        let sheet = crate::sheets::definitions::SheetGridData {
+            grid: vec![vec![json.to_string()]],
+            metadata: Some(meta),
+        };
 
         // Target schema is the nested field schema (val)
         let target_schema = nested_field.structure_schema.as_ref().unwrap();
-        let rows = extract_original_nested_structure_rows(&sheet.grid[0][0], &[0,1], &sheet, target_schema, target_schema.len());
+        let rows = extract_original_nested_structure_rows(
+            &sheet.grid[0][0],
+            &[0, 1],
+            &sheet,
+            target_schema,
+            target_schema.len(),
+        );
         // NOTE: Current implementation returns a flattened sequence of nested rows per parent object.
         assert_eq!(rows.len(), 3, "Expected 3 flattened nested rows");
         assert_eq!(rows[0][0], "1");
@@ -479,7 +542,7 @@ fn build_parent_row(
         } else {
             vec![String::new(); num_columns]
         };
-        
+
         // Override with non_structure_values (these are the user-facing values)
         for (col_idx, value) in &ctx.non_structure_values {
             if let Some(slot) = synthetic_row.get_mut(*col_idx) {
@@ -488,7 +551,11 @@ fn build_parent_row(
         }
         synthetic_row
     } else {
-        let mut row = sheet.grid.get(parent_row_index).cloned().unwrap_or_default();
+        let mut row = sheet
+            .grid
+            .get(parent_row_index)
+            .cloned()
+            .unwrap_or_default();
         if row.len() < num_columns {
             row.resize(num_columns, String::new());
         }
@@ -573,7 +640,11 @@ pub fn handle_structure_error(
             &new_row_context,
             sheet,
             *parent_row_index,
-            sheet.metadata.as_ref().map(|m| m.columns.len()).unwrap_or(0),
+            sheet
+                .metadata
+                .as_ref()
+                .map(|m| m.columns.len())
+                .unwrap_or(0),
         );
 
         let cell_value = if new_row_context.is_some() {

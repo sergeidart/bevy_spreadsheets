@@ -188,10 +188,7 @@ pub fn handle_paste_cell(
 }
 
 /// Serialize structure rows back to JSON format for storage
-fn serialize_structure_rows(
-    rows: &[Vec<String>],
-    schema: &[StructureFieldDefinition],
-) -> String {
+fn serialize_structure_rows(rows: &[Vec<String>], schema: &[StructureFieldDefinition]) -> String {
     if rows.is_empty() {
         return String::new();
     }

@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap};
 // ADDED: Import ValidationState from ui::validation
 use crate::ui::validation::ValidationState;
 
-use super::definitions::{SheetGridData, SheetMetadata, ColumnValidator};
+use super::definitions::{ColumnValidator, SheetGridData, SheetMetadata};
 
 // --- NEW: RenderableCellData ---
 /// Holds pre-processed data for rendering a single cell.
@@ -266,7 +266,9 @@ impl SheetRegistry {
         if let Some(category_map) = self.categorized_sheets.get(category) {
             for (name, data) in category_map.iter() {
                 // If there's no metadata, skip (technical sheets etc.)
-                let Some(meta) = &data.metadata else { continue; };
+                let Some(meta) = &data.metadata else {
+                    continue;
+                };
                 // If not showing hidden sheets and this sheet is hidden, skip it
                 if !show_hidden_sheets && meta.hidden {
                     continue;

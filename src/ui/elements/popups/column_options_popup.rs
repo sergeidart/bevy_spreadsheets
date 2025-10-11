@@ -118,17 +118,19 @@ pub fn show_column_options_popup(
                 .collect::<Vec<_>>()
                 .join("|");
             state.options_column_filter_input = joined_terms.clone();
+            // Store None in memory when empty, but pass an explicit empty string to DB update to clear persisted value
             let filter_to_store: Option<String> = if joined_terms.is_empty() {
                 None
             } else {
-                Some(joined_terms)
+                Some(joined_terms.clone())
             };
-            let context_to_store: Option<String> =
-                if state.options_column_ai_context_input.trim().is_empty() {
-                    None
-                } else {
-                    Some(state.options_column_ai_context_input.trim().to_string())
-                };
+            let context_trimmed = state.options_column_ai_context_input.trim().to_string();
+            // Store None in memory when empty, but pass an explicit empty string to DB update to clear persisted value
+            let context_to_store: Option<String> = if context_trimmed.is_empty() {
+                None
+            } else {
+                Some(context_trimmed.clone())
+            };
 
             let filter_changed = current_filter != filter_to_store;
             let context_changed = current_context != context_to_store;
@@ -156,21 +158,23 @@ pub fn show_column_options_popup(
                                 // Persist filter to DB if this is DB-backed
                                 if meta.category.is_some() {
                                     if let Some(cat) = category {
-                                        let base = crate::sheets::systems::io::get_default_data_base_path();
+                                        let base =
+                                            crate::sheets::systems::io::get_default_data_base_path(
+                                            );
                                         let db_path = base.join(format!("{}.db", cat));
-                                        if db_path.exists() {
-                                            if let Ok(conn) = rusqlite::Connection::open(&db_path) {
-                                                let _ = crate::sheets::database::schema::ensure_global_metadata_table(&conn);
-                                                let _ = crate::sheets::database::writer::DbWriter::update_column_metadata(
-                                                    &conn,
-                                                    sheet_name,
-                                                    col_index,
-                                                    col_def.filter.as_deref(),
-                                                    None,
-                                                    None,
-                                                );
-                                            }
-                                        }
+                                                    // Try to open (and create if missing) the DB file and persist metadata.
+                                                    // Use centralized helper which opens/creates DB and persists metadata
+                                                    if let Some(cat) = category {
+                                                        let _ = crate::sheets::database::persist_column_metadata(
+                                                            cat,
+                                                            sheet_name,
+                                                            col_index,
+                                                            // Pass empty string when clearing to force DB NULL
+                                                            if let Some(s) = col_def.filter.as_deref() { Some(s) } else { Some("") },
+                                                            None,
+                                                            None,
+                                                        ).map_err(|e| error!("Persist column metadata failed: {}", e));
+                                                    }
                                     }
                                 }
                             }
@@ -185,21 +189,22 @@ pub fn show_column_options_popup(
                                 // Persist AI context to DB if this is DB-backed
                                 if meta.category.is_some() {
                                     if let Some(cat) = category {
-                                        let base = crate::sheets::systems::io::get_default_data_base_path();
+                                        let base =
+                                            crate::sheets::systems::io::get_default_data_base_path(
+                                            );
                                         let db_path = base.join(format!("{}.db", cat));
-                                        if db_path.exists() {
-                                            if let Ok(conn) = rusqlite::Connection::open(&db_path) {
-                                                let _ = crate::sheets::database::schema::ensure_global_metadata_table(&conn);
-                                                let _ = crate::sheets::database::writer::DbWriter::update_column_metadata(
-                                                    &conn,
-                                                    sheet_name,
-                                                    col_index,
-                                                    None,
-                                                    col_def.ai_context.as_deref(),
-                                                    None,
-                                                );
-                                            }
-                                        }
+                                                    // Try to open (and create if missing) the DB file and persist AI context.
+                                                    if let Some(cat) = category {
+                                                        let _ = crate::sheets::database::persist_column_metadata(
+                                                            cat,
+                                                            sheet_name,
+                                                            col_index,
+                                                            None,
+                                                            // Pass empty string when clearing to force DB NULL
+                                                            if let Some(s) = col_def.ai_context.as_deref() { Some(s) } else { Some("") },
+                                                            None,
+                                                        ).map_err(|e| error!("Persist column metadata failed: {}", e));
+                                                    }
                                     }
                                 }
                             }
@@ -363,7 +368,7 @@ fn initialize_popup_state(state: &mut EditorWindowState, registry: &SheetRegistr
     let synthesized_from_parent: Option<crate::sheets::definitions::ColumnDefinition> =
         parent_field_opt
             .as_ref()
-            .map(|f| crate::sheets::definitions::ColumnDefinition {
+        .map(|f| crate::sheets::definitions::ColumnDefinition {
                 header: f.header.clone(),
                 validator: f.validator.clone(),
                 data_type: f.data_type,
@@ -371,6 +376,7 @@ fn initialize_popup_state(state: &mut EditorWindowState, registry: &SheetRegistr
                 ai_context: f.ai_context.clone(),
                 ai_enable_row_generation: f.ai_enable_row_generation,
                 ai_include_in_send: f.ai_include_in_send,
+                deleted: false,
                 width: None,
                 structure_schema: f.structure_schema.clone(),
                 structure_column_order: f.structure_column_order.clone(),

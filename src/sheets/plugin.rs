@@ -6,7 +6,9 @@ use super::events::{
     AiBatchTaskResult,
     AiTaskResult,
     JsonSheetUploaded,
+    MigrationCompleted,
     RequestAddColumn,
+    RequestBatchUpdateColumnAiInclude,
     RequestCopyCell,
     RequestCreateAiSchemaGroup,
     // Category events
@@ -19,7 +21,10 @@ use super::events::{
     RequestDeleteRows,
     RequestDeleteSheet,
     RequestDeleteSheetFile,
+    RequestExportSheetToJson,
     RequestInitiateFileUpload,
+    // Database migration events
+    RequestMigrateJsonToDb,
     RequestMoveSheetToCategory,
     RequestPasteCell,
     RequestProcessUpload,
@@ -33,24 +38,21 @@ use super::events::{
     RequestToggleAiRowGeneration,
     RequestUpdateAiSendSchema,
     RequestUpdateAiStructureSend,
+    RequestUpdateColumnAiInclude,
     RequestUpdateColumnName,
     RequestUpdateColumnValidator,
+    RequestUploadJsonToCurrentDb,
     SheetDataModifiedInRegistryEvent,
     SheetOperationFeedback,
     UpdateCellEvent,
-    // Database migration events
-    RequestMigrateJsonToDb,
-    RequestUploadJsonToCurrentDb,
-    MigrationCompleted,
-    RequestExportSheetToJson,
 };
 use super::resources::{ClipboardBuffer, SheetRegistry, SheetRenderCache};
 use super::systems;
-use crate::sheets::database::systems::poll_migration_background;
 use super::systems::logic::handle_sheet_render_cache_update;
 use super::systems::logic::sync_structure::{
     handle_emit_structure_cascade_events, PendingStructureCascade,
 };
+use crate::sheets::database::systems::poll_migration_background;
 use crate::sheets::systems::ai::results::{handle_ai_batch_results, handle_ai_task_results};
 use crate::sheets::systems::ai::structure_processor::process_structure_ai_jobs;
 use crate::sheets::systems::ai::throttled::apply_throttled_ai_changes;
@@ -81,11 +83,11 @@ impl Plugin for SheetsPlugin {
             ),
         );
 
-    app.init_resource::<SheetRegistry>();
+        app.init_resource::<SheetRegistry>();
         app.init_resource::<SheetRenderCache>();
         app.init_resource::<PendingStructureCascade>();
         app.init_resource::<ClipboardBuffer>();
-    app.init_resource::<super::database::systems::MigrationBackgroundState>();
+        app.init_resource::<super::database::systems::MigrationBackgroundState>();
 
         app.add_event::<AddSheetRowRequest>()
             .add_event::<RequestAddColumn>()
@@ -112,6 +114,8 @@ impl Plugin for SheetsPlugin {
             .add_event::<RequestToggleAiRowGeneration>()
             .add_event::<RequestUpdateAiSendSchema>()
             .add_event::<RequestUpdateAiStructureSend>()
+            .add_event::<RequestUpdateColumnAiInclude>()
+            .add_event::<RequestBatchUpdateColumnAiInclude>()
             .add_event::<RequestMoveSheetToCategory>()
             .add_event::<RequestCreateAiSchemaGroup>()
             .add_event::<RequestRenameAiSchemaGroup>()
@@ -124,7 +128,7 @@ impl Plugin for SheetsPlugin {
         // Clipboard events
         app.add_event::<RequestCopyCell>()
             .add_event::<RequestPasteCell>();
-        
+
         // Database migration events
         app.add_event::<RequestMigrateJsonToDb>()
             .add_event::<RequestUploadJsonToCurrentDb>()
@@ -162,6 +166,7 @@ impl Plugin for SheetsPlugin {
             systems::logic::handle_delete_request,
             systems::logic::handle_add_row_request,
             systems::logic::handle_toggle_ai_row_generation,
+            systems::logic::handle_update_column_ai_include,
             systems::logic::handle_update_ai_send_schema,
             systems::logic::handle_update_ai_structure_send,
             systems::logic::handle_create_ai_schema_group,

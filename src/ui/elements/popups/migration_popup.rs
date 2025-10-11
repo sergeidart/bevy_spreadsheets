@@ -4,8 +4,8 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 use std::path::PathBuf;
 
-use crate::sheets::events::{RequestMigrateJsonToDb, SheetOperationFeedback};
 use crate::sheets::database::DbConfig;
+use crate::sheets::events::{RequestMigrateJsonToDb, SheetOperationFeedback};
 
 #[derive(Resource, Default)]
 pub struct MigrationPopupState {
@@ -29,7 +29,7 @@ pub fn show_migration_popup(
     if !state.show {
         return;
     }
-    
+
     let mut open = state.show;
     egui::Window::new("Migrate JSON to Database")
         .open(&mut open)
@@ -38,7 +38,7 @@ pub fn show_migration_popup(
         .show(ui.ctx(), |ui| {
             ui.heading("Import JSON Sheets to SQLite Database");
             ui.add_space(10.0);
-            
+
             // Source folder selection
             ui.horizontal(|ui| {
                 ui.label("Source Folder:");
@@ -51,27 +51,27 @@ pub fn show_migration_popup(
                     }
                 }
             });
-            
+
             if let Some(folder) = &state.source_folder {
                 ui.label(format!("Selected: {}", folder.display()));
             } else {
                 ui.colored_label(egui::Color32::GRAY, "No folder selected");
             }
-            
+
             ui.add_space(10.0);
             ui.separator();
             ui.add_space(10.0);
-            
+
             // Database selection
             ui.label("Target Database:");
-            
+
             ui.horizontal(|ui| {
                 ui.radio_value(&mut state.create_new_db, false, "Add to existing DB");
                 ui.radio_value(&mut state.create_new_db, true, "Create new DB");
             });
-            
+
             ui.add_space(5.0);
-            
+
             if state.create_new_db {
                 // New database creation
                 ui.horizontal(|ui| {
@@ -81,19 +81,16 @@ pub fn show_migration_popup(
                         ui.label(".db");
                     }
                 });
-                
+
                 let skyline_path = DbConfig::default_path();
-                let proposed_path = skyline_path.join(
-                    if state.db_name_input.ends_with(".db") {
-                        state.db_name_input.clone()
-                    } else {
-                        format!("{}.db", state.db_name_input)
-                    }
-                );
-                
+                let proposed_path = skyline_path.join(if state.db_name_input.ends_with(".db") {
+                    state.db_name_input.clone()
+                } else {
+                    format!("{}.db", state.db_name_input)
+                });
+
                 ui.label(format!("Will create: {}", proposed_path.display()));
                 state.target_db = Some(proposed_path);
-                
             } else {
                 // Select existing database
                 ui.horizontal(|ui| {
@@ -109,18 +106,18 @@ pub fn show_migration_popup(
                         }
                     }
                 });
-                
+
                 if let Some(db) = &state.target_db {
                     ui.label(format!("Selected: {}", db.display()));
                 } else {
                     ui.colored_label(egui::Color32::GRAY, "No database selected");
                 }
             }
-            
+
             ui.add_space(15.0);
             ui.separator();
             ui.add_space(10.0);
-            
+
             // Info section
             if let Some(folder) = &state.source_folder {
                 ui.label("📋 Migration will:");
@@ -131,12 +128,15 @@ pub fn show_migration_popup(
                 ui.label("  • Create tables with proper foreign keys");
                 ui.label("  • Preserve all metadata and AI settings");
                 ui.add_space(5.0);
-                
+
                 // Preview scan
                 match crate::sheets::database::MigrationTools::scan_json_folder(folder) {
                     Ok(sheets) => {
-                        ui.label(format!("✅ Found {} sheet(s) ready to migrate", sheets.len()));
-                        
+                        ui.label(format!(
+                            "✅ Found {} sheet(s) ready to migrate",
+                            sheets.len()
+                        ));
+
                         if !sheets.is_empty() {
                             if ui.small_button("Show details...").clicked() {
                                 // TODO: Show detailed list
@@ -144,50 +144,63 @@ pub fn show_migration_popup(
                         }
                     }
                     Err(e) => {
-                        ui.colored_label(egui::Color32::RED, format!("⚠ Error scanning folder: {}", e));
+                        ui.colored_label(
+                            egui::Color32::RED,
+                            format!("⚠ Error scanning folder: {}", e),
+                        );
                     }
                 }
             }
-            
+
             ui.add_space(15.0);
-            
+
             // Action buttons
             ui.horizontal(|ui| {
-                let can_migrate = state.source_folder.is_some() 
+                let can_migrate = state.source_folder.is_some()
                     && state.target_db.is_some()
                     && !state.migration_in_progress;
-                
+
                 if state.migration_in_progress {
                     ui.spinner();
                     let total = state.progress_total;
                     let completed = state.progress_completed.min(total);
-                    let ratio = if total > 0 { completed as f32 / total as f32 } else { 0.0 };
+                    let ratio = if total > 0 {
+                        completed as f32 / total as f32
+                    } else {
+                        0.0
+                    };
                     if total > 0 {
-                        ui.add(egui::ProgressBar::new(ratio).show_percentage().text(state.progress_message.clone()));
+                        ui.add(
+                            egui::ProgressBar::new(ratio)
+                                .show_percentage()
+                                .text(state.progress_message.clone()),
+                        );
                     } else {
                         ui.label(state.progress_message.clone());
                     }
                 }
-                
+
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.button("Cancel").clicked() {
                         state.show = false;
                     }
-                    
+
                     ui.add_enabled_ui(can_migrate, |ui| {
                         if ui.button("🚀 Start Migration").clicked() {
-                            if let (Some(folder), Some(db)) = (&state.source_folder, &state.target_db) {
+                            if let (Some(folder), Some(db)) =
+                                (&state.source_folder, &state.target_db)
+                            {
                                 migration_events.write(RequestMigrateJsonToDb {
                                     json_folder_path: folder.clone(),
                                     target_db_path: db.clone(),
                                     create_new_db: state.create_new_db,
                                 });
-                                
+
                                 state.migration_in_progress = true;
                                 state.progress_total = 0;
                                 state.progress_completed = 0;
                                 state.progress_message = "Starting migration...".into();
-                                
+
                                 feedback_writer.write(SheetOperationFeedback {
                                     message: "Migration started...".to_string(),
                                     is_error: false,
@@ -198,7 +211,7 @@ pub fn show_migration_popup(
                 });
             });
         });
-    
+
     state.show = open;
 }
 

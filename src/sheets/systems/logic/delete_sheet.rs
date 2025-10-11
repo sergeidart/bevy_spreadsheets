@@ -1,6 +1,6 @@
 // src/sheets/systems/logic/delete_sheet.rs
 use crate::sheets::{
-    definitions::{SheetMetadata, ColumnValidator}, // Needed for path generation
+    definitions::{ColumnValidator, SheetMetadata}, // Needed for path generation
     events::{RequestDeleteSheet, RequestDeleteSheetFile, SheetOperationFeedback},
     resources::SheetRegistry,
     systems::io::get_default_data_base_path,
@@ -111,7 +111,9 @@ pub fn handle_delete_request(
                     for (cat_ref, name_ref, data_ref) in registry.iter_sheets() {
                         if let Some(meta) = &data_ref.metadata {
                             if let Some(parent_link) = &meta.structure_parent {
-                                if parent_link.parent_sheet == *sheet_name && parent_link.parent_category == *category {
+                                if parent_link.parent_sheet == *sheet_name
+                                    && parent_link.parent_category == *category
+                                {
                                     cascade_stack.push((cat_ref.clone(), name_ref.clone()));
                                 }
                             }
@@ -147,12 +149,22 @@ pub fn handle_delete_request(
                             if db_path.exists() {
                                 match rusqlite::Connection::open(&db_path) {
                                     Ok(conn) => {
-                                        let drop_table_sql = format!("DROP TABLE IF EXISTS \"{}\"", child_name);
+                                        let drop_table_sql =
+                                            format!("DROP TABLE IF EXISTS \"{}\"", child_name);
                                         let _ = conn.execute(&drop_table_sql, []);
                                         let meta_table = format!("{}_Metadata", child_name);
-                                        let _ = conn.execute(&format!("DROP TABLE IF EXISTS \"{}\"", meta_table), []);
+                                        let _ = conn.execute(
+                                            &format!("DROP TABLE IF EXISTS \"{}\"", meta_table),
+                                            [],
+                                        );
                                         let ai_groups_table = format!("{}_AIGroups", child_name);
-                                        let _ = conn.execute(&format!("DROP TABLE IF EXISTS \"{}\"", ai_groups_table), []);
+                                        let _ = conn.execute(
+                                            &format!(
+                                                "DROP TABLE IF EXISTS \"{}\"",
+                                                ai_groups_table
+                                            ),
+                                            [],
+                                        );
                                         let _ = conn.execute(
                                             "DELETE FROM _Metadata WHERE table_name = ?",
                                             [child_name.as_str()],
@@ -194,15 +206,23 @@ pub fn handle_delete_request(
                             // Root-level: request JSON/meta deletion
                             if let Some(child_meta) = child_removed.metadata {
                                 let mut json_rel = PathBuf::new();
-                                if let Some(cat) = &child_meta.category { json_rel.push(cat); }
+                                if let Some(cat) = &child_meta.category {
+                                    json_rel.push(cat);
+                                }
                                 json_rel.push(format!("{}.json", child_meta.sheet_name));
 
                                 let mut meta_rel = PathBuf::new();
-                                if let Some(cat) = &child_meta.category { meta_rel.push(cat); }
+                                if let Some(cat) = &child_meta.category {
+                                    meta_rel.push(cat);
+                                }
                                 meta_rel.push(format!("{}.meta.json", child_meta.sheet_name));
 
-                                file_delete_writer.write(RequestDeleteSheetFile { relative_path: json_rel });
-                                file_delete_writer.write(RequestDeleteSheetFile { relative_path: meta_rel });
+                                file_delete_writer.write(RequestDeleteSheetFile {
+                                    relative_path: json_rel,
+                                });
+                                file_delete_writer.write(RequestDeleteSheetFile {
+                                    relative_path: meta_rel,
+                                });
                             }
                         }
 
@@ -218,7 +238,8 @@ pub fn handle_delete_request(
                         if let Some(child_meta) = child_meta_opt {
                             for col_def in child_meta.columns.iter() {
                                 if matches!(col_def.validator, Some(ColumnValidator::Structure)) {
-                                    let grandchild_name = format!("{}_{}", child_name, col_def.header);
+                                    let grandchild_name =
+                                        format!("{}_{}", child_name, col_def.header);
                                     cascade_stack.push((child_cat.clone(), grandchild_name));
                                 }
                             }
@@ -237,29 +258,42 @@ pub fn handle_delete_request(
                     // This sheet is in a database - drop the table
                     let base_path = get_default_data_base_path();
                     let db_path = base_path.join(format!("{}.db", db_name));
-                    
+
                     if db_path.exists() {
                         match rusqlite::Connection::open(&db_path) {
                             Ok(conn) => {
                                 // Drop the main data table
-                                let drop_table_sql = format!("DROP TABLE IF EXISTS \"{}\"", sheet_name);
+                                let drop_table_sql =
+                                    format!("DROP TABLE IF EXISTS \"{}\"", sheet_name);
                                 match conn.execute(&drop_table_sql, []) {
                                     Ok(_) => {
-                                        info!("Successfully dropped table '{}' from database '{}'", sheet_name, db_name);
-                                        
+                                        info!(
+                                            "Successfully dropped table '{}' from database '{}'",
+                                            sheet_name, db_name
+                                        );
+
                                         // Also drop associated metadata tables
                                         let meta_table = format!("{}_Metadata", sheet_name);
-                                        let _ = conn.execute(&format!("DROP TABLE IF EXISTS \"{}\"", meta_table), []);
-                                        
+                                        let _ = conn.execute(
+                                            &format!("DROP TABLE IF EXISTS \"{}\"", meta_table),
+                                            [],
+                                        );
+
                                         let ai_groups_table = format!("{}_AIGroups", sheet_name);
-                                        let _ = conn.execute(&format!("DROP TABLE IF EXISTS \"{}\"", ai_groups_table), []);
-                                        
+                                        let _ = conn.execute(
+                                            &format!(
+                                                "DROP TABLE IF EXISTS \"{}\"",
+                                                ai_groups_table
+                                            ),
+                                            [],
+                                        );
+
                                         // Remove from global _Metadata table
                                         let _ = conn.execute(
                                             "DELETE FROM _Metadata WHERE table_name = ?",
-                                            [sheet_name]
+                                            [sheet_name],
                                         );
-                                        
+
                                         info!("Cleaned up all metadata for table '{}'", sheet_name);
 
                                         // Reclaim disk space after table and metadata drops
@@ -276,7 +310,10 @@ pub fn handle_delete_request(
                                         }
                                     }
                                     Err(e) => {
-                                        error!("Failed to drop table '{}' from database '{}': {}", sheet_name, db_name, e);
+                                        error!(
+                                            "Failed to drop table '{}' from database '{}': {}",
+                                            sheet_name, db_name, e
+                                        );
                                         feedback_writer.write(SheetOperationFeedback {
                                             message: format!("Sheet removed from memory but failed to delete from database: {}", e),
                                             is_error: true,
@@ -287,7 +324,10 @@ pub fn handle_delete_request(
                             Err(e) => {
                                 error!("Failed to open database '{}' for deletion: {}", db_name, e);
                                 feedback_writer.write(SheetOperationFeedback {
-                                    message: format!("Sheet removed from memory but failed to open database: {}", e),
+                                    message: format!(
+                                        "Sheet removed from memory but failed to open database: {}",
+                                        e
+                                    ),
                                     is_error: true,
                                 });
                             }

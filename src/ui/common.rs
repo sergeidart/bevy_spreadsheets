@@ -7,8 +7,10 @@ use std::sync::Arc;
 
 use crate::sheets::{
     definitions::{ColumnDataType, ColumnValidator, SheetMetadata},
-    events::{OpenStructureViewEvent, RequestToggleAiRowGeneration, RequestCopyCell, RequestPasteCell},
-    resources::{SheetRegistry, SheetRenderCache, ClipboardBuffer},
+    events::{
+        OpenStructureViewEvent, RequestCopyCell, RequestPasteCell, RequestToggleAiRowGeneration,
+    },
+    resources::{ClipboardBuffer, SheetRegistry, SheetRenderCache},
 };
 use crate::ui::elements::editor::state::{EditorWindowState, SheetInteractionState};
 use crate::ui::validation::{normalize_for_link_cmp, ValidationState}; // Keep for enum access
@@ -124,16 +126,16 @@ pub fn generate_structure_preview_from_rows(rows: &[Vec<String>]) -> String {
     if rows.is_empty() {
         return String::new();
     }
-    
+
     let first_row = &rows[0];
     let values: Vec<String> = first_row
         .iter()
         .filter(|s| !s.trim().is_empty())
         .map(|s| s.trim().to_string())
         .collect();
-    
+
     let mut out = values.join(", ");
-    
+
     if out.chars().count() > 64 {
         let truncated: String = out.chars().take(64).collect();
         out = truncated + "…";
@@ -227,7 +229,11 @@ pub fn edit_cell_widget(
 
     // --- 2. Parent_key read-only in structure tables ---
     if state.should_hide_structure_technical_columns(category, sheet_name) && col_index == 1 {
-        let display = if current_display_text.is_empty() { "(empty)" } else { current_display_text };
+        let display = if current_display_text.is_empty() {
+            "(empty)"
+        } else {
+            current_display_text
+        };
         // Center horizontally and vertically within the cell for Parent_key
         let desired_size = egui::vec2(ui.available_width(), ui.style().spacing.interact_size.y);
         let (_id, rect) = ui.allocate_space(desired_size);
@@ -238,8 +244,7 @@ pub fn edit_cell_widget(
                 |row_ui| {
                     row_ui.vertical_centered(|vc| {
                         vc.label(
-                            egui::RichText::new(display)
-                                .color(egui::Color32::from_rgb(0, 180, 0)),
+                            egui::RichText::new(display).color(egui::Color32::from_rgb(0, 180, 0)),
                         );
                     });
                 },
@@ -293,7 +298,12 @@ pub fn edit_cell_widget(
     // Determine whether this is a linked column
     let is_linked_column = validator_opt
         .as_ref()
-        .map(|v| matches!(v, crate::sheets::definitions::ColumnValidator::Linked { .. }))
+        .map(|v| {
+            matches!(
+                v,
+                crate::sheets::definitions::ColumnValidator::Linked { .. }
+            )
+        })
         .unwrap_or(false);
 
     // Determine whether selected structure columns are included in AI sends
@@ -344,7 +354,10 @@ pub fn edit_cell_widget(
             match effective_validation_state {
                 ValidationState::Empty => {
                     // For numeric and string cells, show the dark background even when empty to keep visual consistency
-                    if matches!(basic_type, ColumnDataType::I64 | ColumnDataType::F64 | ColumnDataType::String) {
+                    if matches!(
+                        basic_type,
+                        ColumnDataType::I64 | ColumnDataType::F64 | ColumnDataType::String
+                    ) {
                         dark_cell_fill
                     } else {
                         Color32::TRANSPARENT
@@ -354,7 +367,13 @@ pub fn edit_cell_widget(
                     if is_linked_column {
                         // Correct (matching) linked values use the same dark background
                         dark_cell_fill
-                    } else if matches!(basic_type, ColumnDataType::Bool | ColumnDataType::I64 | ColumnDataType::F64 | ColumnDataType::String) {
+                    } else if matches!(
+                        basic_type,
+                        ColumnDataType::Bool
+                            | ColumnDataType::I64
+                            | ColumnDataType::F64
+                            | ColumnDataType::String
+                    ) {
                         // Bool and numeric cells use the same dark background
                         dark_cell_fill
                     } else {
@@ -954,4 +973,3 @@ fn resolve_structure_override_for_menu(meta: &SheetMetadata, path: &[usize]) -> 
     }
     field.ai_enable_row_generation
 }
-

@@ -94,8 +94,14 @@ pub fn handle_create_new_sheet_request(
             match Connection::open(&db_path) {
                 Ok(conn) => {
                     // Ensure global metadata exists
-                    if let Err(e) = crate::sheets::database::schema::ensure_global_metadata_table(&conn) {
-                        error!("Failed to ensure _Metadata in DB '{}': {}", db_path.display(), e);
+                    if let Err(e) =
+                        crate::sheets::database::schema::ensure_global_metadata_table(&conn)
+                    {
+                        error!(
+                            "Failed to ensure _Metadata in DB '{}': {}",
+                            db_path.display(),
+                            e
+                        );
                     }
 
                     // Compute display order (append at end)
@@ -114,19 +120,41 @@ pub fn handle_create_new_sheet_request(
                         &new_metadata,
                         next_order,
                     ) {
-                        error!("Failed to insert _Metadata for new sheet '{:?}/{}': {}", category, desired_name, e);
+                        error!(
+                            "Failed to insert _Metadata for new sheet '{:?}/{}': {}",
+                            category, desired_name, e
+                        );
                     }
 
                     // Create the per-table metadata and data tables
-                    if let Err(e) = crate::sheets::database::schema::create_metadata_table(&conn, desired_name, &new_metadata) {
-                        error!("Failed to create metadata table for '{:?}/{}': {}", category, desired_name, e);
+                    if let Err(e) = crate::sheets::database::schema::create_metadata_table(
+                        &conn,
+                        desired_name,
+                        &new_metadata,
+                    ) {
+                        error!(
+                            "Failed to create metadata table for '{:?}/{}': {}",
+                            category, desired_name, e
+                        );
                     }
-                    if let Err(e) = crate::sheets::database::schema::create_data_table(&conn, desired_name, &new_metadata.columns) {
-                        error!("Failed to create data table for '{:?}/{}': {}", category, desired_name, e);
+                    if let Err(e) = crate::sheets::database::schema::create_data_table(
+                        &conn,
+                        desired_name,
+                        &new_metadata.columns,
+                    ) {
+                        error!(
+                            "Failed to create data table for '{:?}/{}': {}",
+                            category, desired_name, e
+                        );
                     }
 
                     // No AI groups initially; nothing to seed
-                    info!("Saved new sheet '{:?}/{}' to DB at '{}'.", category, desired_name, db_path.display());
+                    info!(
+                        "Saved new sheet '{:?}/{}' to DB at '{}'.",
+                        category,
+                        desired_name,
+                        db_path.display()
+                    );
                 }
                 Err(e) => {
                     error!(

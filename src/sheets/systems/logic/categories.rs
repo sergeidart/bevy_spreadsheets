@@ -3,9 +3,8 @@ use crate::sheets::{
     database::connection::DbConnection,
     definitions::SheetMetadata,
     events::{
-        RequestCreateCategory, RequestDeleteCategory,
-        RequestDeleteSheetFile, RequestRenameCategory,
-        SheetOperationFeedback,
+        RequestCreateCategory, RequestDeleteCategory, RequestDeleteSheetFile,
+        RequestRenameCategory, SheetOperationFeedback,
     },
     resources::SheetRegistry,
     systems::io::get_default_data_base_path,
@@ -36,12 +35,12 @@ pub fn handle_create_category_request(
             });
             continue;
         }
-        
+
         // Create database file on disk
         let base_path = get_default_data_base_path();
         let db_filename = format!("{}.db", name);
         let db_path = base_path.join(&db_filename);
-        
+
         if db_path.exists() {
             feedback.write(SheetOperationFeedback {
                 message: format!("Database '{}' already exists", name),
@@ -49,7 +48,7 @@ pub fn handle_create_category_request(
             });
             continue;
         }
-        
+
         // Ensure base directory exists
         if let Err(e) = std::fs::create_dir_all(&base_path) {
             error!("Failed to create base directory: {}", e);
@@ -59,12 +58,12 @@ pub fn handle_create_category_request(
             });
             continue;
         }
-        
+
         // Create empty database with initialized schema
         match DbConnection::create_new(&db_path) {
             Ok(_conn) => {
                 info!("Created new database file: {}", db_path.display());
-                
+
                 // Register in memory
                 match registry.create_category(name.to_string()) {
                     Ok(_) => {
@@ -84,7 +83,11 @@ pub fn handle_create_category_request(
                 }
             }
             Err(e) => {
-                error!("Failed to create database file '{}': {}", db_path.display(), e);
+                error!(
+                    "Failed to create database file '{}': {}",
+                    db_path.display(),
+                    e
+                );
                 feedback.write(SheetOperationFeedback {
                     message: format!("Failed to create database: {}", e),
                     is_error: true,
@@ -105,7 +108,7 @@ pub fn handle_delete_category_request(
         if name.is_empty() {
             continue;
         }
-        
+
         // Delete from registry first
         let result = registry.delete_category(name);
         match result {
@@ -114,7 +117,7 @@ pub fn handle_delete_category_request(
                 let base_path = get_default_data_base_path();
                 let db_filename = format!("{}.db", name);
                 let db_path = base_path.join(&db_filename);
-                
+
                 if db_path.exists() {
                     match std::fs::remove_file(&db_path) {
                         Ok(_) => {
@@ -125,9 +128,16 @@ pub fn handle_delete_category_request(
                             });
                         }
                         Err(e) => {
-                            error!("Failed to delete database file '{}': {}", db_path.display(), e);
+                            error!(
+                                "Failed to delete database file '{}': {}",
+                                db_path.display(),
+                                e
+                            );
                             feedback.write(SheetOperationFeedback {
-                                message: format!("Database deleted from memory but file removal failed: {}", e),
+                                message: format!(
+                                    "Database deleted from memory but file removal failed: {}",
+                                    e
+                                ),
                                 is_error: true,
                             });
                         }
@@ -135,7 +145,10 @@ pub fn handle_delete_category_request(
                 } else {
                     warn!("Database file not found: {}", db_path.display());
                     feedback.write(SheetOperationFeedback {
-                        message: format!("Database '{}' removed from memory (file not found on disk)", name),
+                        message: format!(
+                            "Database '{}' removed from memory (file not found on disk)",
+                            name
+                        ),
                         is_error: false,
                     });
                 }
@@ -169,11 +182,11 @@ pub fn handle_rename_category_request(
             });
             continue;
         }
-        
+
         // Check if new database file already exists
         let base_path = get_default_data_base_path();
         let new_db_path = base_path.join(format!("{}.db", new_name));
-        
+
         if new_db_path.exists() {
             feedback.write(SheetOperationFeedback {
                 message: format!("Database '{}' already exists", new_name),
@@ -181,18 +194,25 @@ pub fn handle_rename_category_request(
             });
             continue;
         }
-        
+
         match registry.rename_category(old_name, new_name) {
             Ok(_) => {
                 // Rename database file on disk
                 let old_db_path = base_path.join(format!("{}.db", old_name));
-                
+
                 if old_db_path.exists() {
                     match std::fs::rename(&old_db_path, &new_db_path) {
                         Ok(_) => {
-                            info!("Renamed database file from '{}' to '{}'", old_db_path.display(), new_db_path.display());
+                            info!(
+                                "Renamed database file from '{}' to '{}'",
+                                old_db_path.display(),
+                                new_db_path.display()
+                            );
                             feedback.write(SheetOperationFeedback {
-                                message: format!("Database '{}' renamed to '{}'", old_name, new_name),
+                                message: format!(
+                                    "Database '{}' renamed to '{}'",
+                                    old_name, new_name
+                                ),
                                 is_error: false,
                             });
                         }

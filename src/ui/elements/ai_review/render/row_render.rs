@@ -1,26 +1,26 @@
-use super::cell_render::{render_ai_choice_toggle, render_original_choice_toggle, render_review_ai_cell, render_review_ai_cell_linked, render_review_original_cell};
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
+use bevy_egui::egui::{self, Color32, RichText};
+use egui_extras::{TableBody, TableRow};
+
+use super::ai_row::render_ai_suggested_row;
+use super::original_row::render_original_preview_row;
+use super::status_row::render_status_row;
+
 use crate::sheets::definitions::SheetMetadata;
 use crate::sheets::resources::SheetRegistry;
-use crate::ui::common::{generate_structure_preview, generate_structure_preview_from_rows};
-use crate::ui::elements::ai_review::ai_batch_review_ui::ColumnEntry;
-use crate::ui::elements::editor::state::{EditorWindowState, ReviewChoice, StructureReviewEntry};
-use bevy_egui::egui::{self, Color32, RichText};
-use egui_extras::TableBody;
-use std::collections::HashSet;
+pub use crate::sheets::systems::ai_review::build_blocks;
+use crate::sheets::systems::ai_review::{
+    prepare_ai_suggested_plan, prepare_original_preview_plan, prepare_status_row_plan, RowBlock,
+    RowKind,
+};
+use crate::sheets::systems::ai_review::review_logic::ColumnEntry;
+use crate::ui::elements::editor::state::{EditorWindowState, StructureReviewEntry};
 
-/// Unified 3-row block per logical review item (existing row, new row, or duplicate new row)
-/// Order: OriginalPreview -> AiSuggested -> Status (optional depending on type)
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RowBlock {
-    OriginalPreview(usize, RowKind),
-    AiSuggested(usize, RowKind),
-    Status(usize, RowKind),
-}
+const ROW_HEIGHT: f32 = 26.0;
+pub(super) const PARENT_KEY_COLOR: Color32 = Color32::from_rgb(0, 150, 0);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RowKind { Existing, NewPlain, NewDuplicate }
-
-#[allow(unused)]
 pub struct RowContext<'a> {
     pub state: &'a mut EditorWindowState,
     pub ancestor_key_columns: &'a [(String, String)],
@@ -35,836 +35,133 @@ pub struct RowContext<'a> {
     pub ai_structure_reviews: &'a [StructureReviewEntry],
     pub sheet_metadata: Option<&'a SheetMetadata>,
     pub registry: &'a SheetRegistry,
-    pub linked_column_options: &'a std::collections::HashMap<usize, std::sync::Arc<HashSet<String>>>,
+    pub linked_column_options: &'a HashMap<usize, Arc<HashSet<String>>>,
     pub structure_nav_clicked: &'a mut Option<(Option<usize>, Option<usize>, Vec<usize>)>,
-    /// Track structures that should be directly accepted via right-click context menu
-    /// Stores (parent_row_index, parent_new_row_index, structure_path) tuples
     pub structure_quick_accept: &'a mut Vec<(Option<usize>, Option<usize>, Vec<usize>)>,
 }
 
-/// Helper function to get the appropriate rows for structure preview.
-/// Returns merged_rows if the structure is decided (contains user choices),
-/// otherwise returns ai_rows.
-fn get_structure_preview_rows(sr: &StructureReviewEntry) -> &[Vec<String>] {
-    if sr.decided && !sr.merged_rows.is_empty() {
-        &sr.merged_rows
-    } else {
-        &sr.ai_rows
+impl<'a> RowContext<'a> {
+    pub fn render_ancestor_keys(&self, row: &mut TableRow) {
+        for (_header, value) in self.ancestor_key_columns.iter() {
+            row.col(|ui| {
+                ui.label(RichText::new(value.clone()).color(PARENT_KEY_COLOR));
+            });
+        }
     }
 }
 
-/// Get original structure preview from snapshot cache.
-/// 
-/// **Single source of truth** for all original structure previews (base level + nested).
-/// 
-/// **Process**:
-/// 1. Lookup cached full row by (parent_row_index, parent_new_row_index).
-/// 2. Extract structure cell JSON at `col_idx`.
-/// 3. If in nested detail context, use pre-parsed `StructureReviewEntry.original_rows`.
-/// 4. Otherwise parse JSON once and return preview.
-/// 
-/// **For duplicate rows**: Resolves `duplicate_match_row` to find the actual existing row's
-/// structure review entry (structure reviews key by existing row, not new row).
-/// 
-/// Returns `(preview_text, parse_failed_flag, is_ai_added_flag)`.
-fn get_original_structure_preview_from_cache(
-    ctx: &RowContext,
-    parent_row_index: Option<usize>,
-    parent_new_row_index: Option<usize>,
-    col_idx: usize,
-) -> (String, bool, bool) {
-    // Determine the actual parent_row_index to use for structure lookup
-    // For new duplicate rows, the structure review entries reference the matched existing row
-    let actual_parent_row_idx = if let Some(new_idx) = parent_new_row_index {
-        if let Some(nr) = ctx.state.ai_new_row_reviews.get(new_idx) {
-            nr.duplicate_match_row.or(parent_row_index)
-        } else {
-            parent_row_index
-        }
-    } else {
-        parent_row_index
-    };
-    
-    // Look up the cached snapshot
-    let cache_key = (parent_row_index, parent_new_row_index);
-    if let Some(cached_row) = ctx.state.ai_original_row_snapshot_cache.get(&cache_key) {
-        if let Some(structure_content) = cached_row.get(col_idx) {
-            // For nested structures, we need to extract from the JSON
-            // Check if we're in a nested detail context
-            if let Some(detail_ctx) = ctx.state.ai_structure_detail_context.as_ref() {
-                // In nested context, look for a structure review entry that has parsed original_rows
-                // For original rows: match by parent_row_index with parent_new_row_index = None
-                // For merge/new rows: match by parent_new_row_index
-                let sr_opt = ctx.ai_structure_reviews.iter().find(|sr| {
-                    let parent_matches = if let Some(new_idx) = parent_new_row_index {
-                        // Match merge/new row by parent_new_row_index
-                        sr.parent_new_row_index == Some(new_idx)
-                    } else {
-                        // Match original row by parent_row_index
-                        sr.parent_row_index == actual_parent_row_idx.unwrap_or(usize::MAX) 
-                            && sr.parent_new_row_index.is_none()
-                    };
-                    
-                    parent_matches && if detail_ctx.structure_path.is_empty() {
-                        sr.structure_path.first() == Some(&col_idx)
-                    } else {
-                        sr.structure_path.starts_with(&detail_ctx.structure_path) 
-                            && sr.structure_path.get(detail_ctx.structure_path.len()) == Some(&col_idx)
-                    }
-                });
-                
-                if let Some(sr) = sr_opt {
-                    // Use the pre-parsed original_rows from the structure review entry
-                    let preview = generate_structure_preview_from_rows(&sr.original_rows);
-                    
-                    // Check if this is an AI-added row (beyond original_rows_count)
-                    // If so, and it has no duplicate match, it should be marked as AI-added
-                    if preview.is_empty() {
-                        if let Some(new_idx) = parent_new_row_index {
-                            // Check if this is a NewRowReview beyond original count
-                            if let Some(nr) = ctx.state.ai_new_row_reviews.get(new_idx) {
-                                // No match = AI added, not originally empty
-                                if nr.duplicate_match_row.is_none() {
-                                    return (String::new(), false, true);
-                                }
-                            }
-                        }
-                        return ("(empty)".to_string(), false, false);
-                    }
-                    return (preview, false, false);
+pub fn render_rows(body: &mut TableBody<'_>, mut ctx: RowContext<'_>) {
+    if ctx.blocks.is_empty() {
+        return;
+    }
+
+    let _ = (&ctx.active_sheet_grid, ctx.sheet_metadata, ctx.registry);
+
+    for (block_index, block) in ctx.blocks.iter().copied().enumerate() {
+        let _is_group_start = ctx.group_start_indices.contains(&block_index);
+        body.row(ROW_HEIGHT, |mut row| match block {
+            RowBlock::OriginalPreview(data_idx, kind) => {
+                let plan = {
+                    let detail_ctx = ctx.state.ai_structure_detail_context.as_ref();
+                    prepare_original_preview_plan(
+                        &*ctx.state,
+                        ctx.ai_structure_reviews,
+                        detail_ctx,
+                        ctx.merged_columns,
+                        kind,
+                        data_idx,
+                    )
+                };
+
+                if let Some(plan) = plan {
+                    render_original_preview_row(&mut row, data_idx, kind, &plan, &mut ctx);
+                } else {
+                    render_empty_row(
+                        &mut row,
+                        ctx.ancestor_key_columns.len(),
+                        ctx.merged_columns.len(),
+                    );
                 }
             }
-            
-            // Top-level or fallback: parse the JSON from cache
-            let (preview, parse_failed) = generate_structure_preview(structure_content);
-            return (preview, parse_failed, false);
-        }
-    }
-    
-    // Fallback: no cache entry
-    ("(no cache)".to_string(), false, false)
-}
+            RowBlock::AiSuggested(data_idx, kind) => {
+                let plan = {
+                    let detail_ctx = ctx.state.ai_structure_detail_context.as_ref();
+                    prepare_ai_suggested_plan(
+                        &*ctx.state,
+                        ctx.ai_structure_reviews,
+                        detail_ctx,
+                        ctx.merged_columns,
+                        ctx.linked_column_options,
+                        kind,
+                        data_idx,
+                    )
+                };
 
-/// Helper function to check if a row has undecided structures in the current context.
-/// When in structure detail view, only checks structures that are children of the current path.
-fn has_undecided_structures_in_context(
-    ctx: &RowContext,
-    parent_row_index: Option<usize>,
-    parent_new_row_index: Option<usize>,
-) -> bool {
-    ctx.ai_structure_reviews.iter().any(|sr| {
-        // Match structures for this row
-        let row_matches = match (parent_row_index, parent_new_row_index) {
-            (Some(row_idx), None) => sr.parent_row_index == row_idx && sr.parent_new_row_index.is_none(),
-            (None, Some(new_idx)) => sr.parent_new_row_index == Some(new_idx),
-            _ => false,
-        };
-        
-        if !row_matches || !sr.is_undecided() {
-            return false;
-        }
-        
-        // If we're in a structure detail view, only count structures that are children of current path
-        if let Some(detail_ctx) = ctx.state.ai_structure_detail_context.as_ref() {
-            // Structure must start with the current detail path to be considered
-            sr.structure_path.len() > detail_ctx.structure_path.len()
-                && sr.structure_path[..detail_ctx.structure_path.len()] == detail_ctx.structure_path[..]
-        } else {
-            // Top level: count all structures
-            true
-        }
-    })
-}
+                if let Some(plan) = plan {
+                    render_ai_suggested_row(&mut row, data_idx, kind, &plan, &mut ctx);
+                } else {
+                    render_empty_row(
+                        &mut row,
+                        ctx.ancestor_key_columns.len(),
+                        ctx.merged_columns.len(),
+                    );
+                }
+            }
+            RowBlock::Status(data_idx, kind) => {
+                let plan = prepare_status_row_plan(
+                    &*ctx.state,
+                    ctx.ai_structure_reviews,
+                    ctx.merged_columns,
+                    kind,
+                    data_idx,
+                );
 
-pub fn build_blocks(state: &EditorWindowState) -> (Vec<RowBlock>, HashSet<usize>) {
-    let mut blocks = Vec::new();
-    let mut starts = HashSet::new();
-    let mut push_group = |items: Vec<RowBlock>| { if items.is_empty() { return; } let start = blocks.len(); starts.insert(start); blocks.extend(items); };
-
-    for i in 0..state.ai_row_reviews.len() { push_group(vec![ RowBlock::OriginalPreview(i, RowKind::Existing), RowBlock::AiSuggested(i, RowKind::Existing), RowBlock::Status(i, RowKind::Existing) ]); }
-
-    for i in 0..state.ai_new_row_reviews.len() {
-        let nr = &state.ai_new_row_reviews[i];
-        if nr.duplicate_match_row.is_some() {
-            let mut group = vec![
-                RowBlock::OriginalPreview(i, RowKind::NewDuplicate),
-                RowBlock::AiSuggested(i, RowKind::NewDuplicate),
-            ];
-            group.push(RowBlock::Status(i, RowKind::NewDuplicate));
-            push_group(group);
-        } else {
-            push_group(vec![
-                RowBlock::OriginalPreview(i, RowKind::NewPlain),
-                RowBlock::AiSuggested(i, RowKind::NewPlain),
-            ]);
-        }
-    }
-
-    (blocks, starts)
-}
-
-pub fn render_rows(body: &mut TableBody, mut ctx: RowContext) {
-    for (bi, blk) in ctx.blocks.iter().enumerate() {
-        let group_start = ctx.group_start_indices.contains(&bi);
-        let row_height = if group_start { 25.0 } else { 22.0 };
-        body.row(row_height, |mut row| {
-            match *blk {
-                RowBlock::OriginalPreview(i, k) => render_original_preview_row(&mut row, i, k, &mut ctx),
-                RowBlock::AiSuggested(i, k) => render_ai_suggested_row(&mut row, i, k, &mut ctx),
-                RowBlock::Status(i, k) => render_status_row(&mut row, i, k, &mut ctx),
+                if let Some(plan) = plan {
+                    render_status_row(&mut row, data_idx, kind, &plan, &mut ctx);
+                } else {
+                    render_empty_row(
+                        &mut row,
+                        ctx.ancestor_key_columns.len(),
+                        ctx.merged_columns.len(),
+                    );
+                }
+            }
+            RowBlock::Separator => {
+                // Render a full-row thin divider that spans all table columns.
+                // We iterate each column to collect the left/right extents, then draw
+                // a single line across the whole span using the painter from the
+                // last column's ui (closures execute left-to-right).
+                let total_cols = 1 + ctx.ancestor_key_columns.len() + ctx.merged_columns.len();
+                // Draw a short segment across each column's rect; because each segment
+                // is drawn inside its column UI they won't be clipped to only the
+                // first column and will visually form a continuous line across the table.
+                for _col_idx in 0..total_cols {
+                    row.col(|ui| {
+                        let rect = ui.available_rect_before_wrap();
+                        let y = rect.center().y;
+                        ui.painter().line_segment(
+                            [egui::pos2(rect.left(), y), egui::pos2(rect.right(), y)],
+                            egui::Stroke::new(1.0, egui::Color32::from_gray(120)),
+                        );
+                    });
+                }
             }
         });
     }
 }
 
-fn render_original_preview_row(row: &mut egui_extras::TableRow, idx: usize, kind: RowKind, ctx: &mut RowContext) {
-    match kind {
-        RowKind::Existing => { if let Some(rr) = ctx.state.ai_row_reviews.get(idx) { 
-            // Extract data before checking undecided structures
-            let row_index = rr.row_index;
-            let non_structure_columns = rr.non_structure_columns.clone();
-            let original = rr.original.clone();
-            let ai = rr.ai.clone();
-            
-            // Check if this row has any undecided structures in the current context
-            let has_undecided_structures = has_undecided_structures_in_context(
-                ctx, Some(row_index), None
-            );
-            
-            row.col(|ui| { 
-                let btn = ui.add_enabled(!has_undecided_structures, egui::Button::new("Accept"));
-                if btn.clicked() && !has_undecided_structures { ctx.existing_accept.push(idx); } 
-                if has_undecided_structures {
-                    btn.on_hover_text("Review structures first (click structure buttons)");
-                }
-            }); 
-            for _ in ctx.ancestor_key_columns { row.col(|ui| { ui.add_space(0.0); }); } 
-            // Use unified cache-based preview for all structure columns
-            for col_entry in ctx.merged_columns { row.col(|ui| match col_entry { 
-                ColumnEntry::Structure(col_idx) => {
-                    let (preview, parse_failed, is_ai_added) = get_original_structure_preview_from_cache(
-                        ctx, Some(row_index), None, *col_idx
-                    );
-                    if is_ai_added {
-                        ui.colored_label(Color32::LIGHT_BLUE, "(AI added)");
-                    } else {
-                        let txt = if parse_failed {"(parse err)".to_string()} else if preview.is_empty() {"(empty)".to_string()} else { preview };
-                        ui.label(txt);
-                    }
-                } 
-                ColumnEntry::Regular(actual_col) => { 
-                    // Check if in structure detail mode and this is parent_key column (index 1)
-                    let in_structure_detail = ctx.state.ai_structure_detail_context.is_some();
-                    let is_parent_key_col = in_structure_detail && *actual_col == 1;
-                    
-                    if is_parent_key_col {
-                        // Render parent_key as green non-editable label
-                        let pos = non_structure_columns.iter().position(|c| c==actual_col);
-                        let orig_val = pos.and_then(|p| original.get(p)).map(|s| s.as_str()).unwrap_or("");
-                        ui.colored_label(Color32::from_rgb(0, 150, 0), orig_val);
-                    } else {
-                        let pos = non_structure_columns.iter().position(|c| c==actual_col); 
-                        let orig_val = pos.and_then(|p| original.get(p)).map(|s| s.as_str()).unwrap_or(""); 
-                        let ai_val = pos.and_then(|p| ai.get(p)).map(|s| s.as_str()); 
-                        
-                        let rr = ctx.state.ai_row_reviews.get(idx).unwrap();
-                        let choice = pos.and_then(|p| rr.choices.get(p)).copied(); 
-                        // Text left, toggle right
-                        // Text on the left, Orig indicator aligned to the far right
-                        ui.columns(2, |cols| {
-                            cols[0].horizontal(|u| { render_review_original_cell(u, orig_val, ai_val, choice); });
-                            cols[1].with_layout(egui::Layout::right_to_left(egui::Align::Center), |u| {
-                                render_original_choice_toggle(u, choice, orig_val, ai_val);
-                            });
-                        });
-                    }
-                } 
-            }); } 
-        } }
-        RowKind::NewPlain => { 
-            if let Some(_nr) = ctx.state.ai_new_row_reviews.get(idx) {
-                // Check if this new row has any undecided structures in the current context
-                let has_undecided_structures = has_undecided_structures_in_context(
-                    ctx, None, Some(idx)
-                );
-                row.col(|ui| { 
-                    let btn = ui.add_enabled(!has_undecided_structures, egui::Button::new("Accept"));
-                    if btn.clicked() && !has_undecided_structures { 
-                        ctx.new_accept.push(idx); 
-                    }
-                    if has_undecided_structures {
-                        btn.on_hover_text("Review structures first (click structure buttons)");
-                    }
-                }); 
-                for _ in ctx.ancestor_key_columns { row.col(|ui| { ui.add_space(0.0); }); } 
-                // Show "AI Added" label, and for structure columns show "(AI added)"
-                let mut shown_label = false;
-                for col_entry in ctx.merged_columns { 
-                    row.col(|ui| { 
-                        match col_entry {
-                            ColumnEntry::Structure(_col_idx) => {
-                                // For structure columns in AI-added rows, show "(AI added)"
-                                ui.colored_label(Color32::LIGHT_BLUE, "(AI added)");
-                            }
-                            ColumnEntry::Regular(_actual_col) => {
-                                // For non-structure columns, show "AI Added" once in first column
-                                if !shown_label {
-                                    ui.colored_label(Color32::LIGHT_BLUE, "AI Added");
-                                    shown_label = true;
-                                } else {
-                                    ui.label("");
-                                }
-                            }
-                        }
-                    }); 
-                } 
-            } 
-        }
-        RowKind::NewDuplicate => {
-            if let Some(nr) = ctx.state.ai_new_row_reviews.get(idx) {
-                // Extract values we need before borrowing ctx immutably
-                let match_row = nr.duplicate_match_row;
-                let merge_decided = nr.merge_decided;
-                let merge_selected = nr.merge_selected;
-                
-                // Check if this new duplicate row has any undecided structures in the current context
-                // We need to check both the new row and its matched existing row
-                let has_undecided_structures = has_undecided_structures_in_context(ctx, None, Some(idx))
-                    || match_row.map_or(false, |row_idx| 
-                        has_undecided_structures_in_context(ctx, Some(row_idx), None)
-                    );
-                
-                // Extract data from nr before entering closures
-                let original_for_merge = nr.original_for_merge.clone();
-                let non_structure_columns = nr.non_structure_columns.clone();
-                let choices = nr.choices.clone();
-                let ai_values = nr.ai.clone();
-                
-                row.col(|ui| {
-                    let nr = ctx.state.ai_new_row_reviews.get_mut(idx).unwrap();
-                    if !merge_decided {
-                        if ui.radio(merge_selected, "Merge").clicked() {
-                            nr.merge_selected = true;
-                        }
-                    } else {
-                        let btn = ui.add_enabled(!has_undecided_structures, egui::Button::new("Accept"));
-                        if btn.clicked() && !has_undecided_structures {
-                            ctx.new_accept.push(idx);
-                        }
-                        if has_undecided_structures {
-                            btn.on_hover_text("Review structures first (click structure buttons)");
-                        }
-                    }
-                });
-                let ancestor_key_count = ctx.ancestor_key_columns.len();
-                let merged_cols = ctx.merged_columns.to_vec(); // Clone the slice to a vec
-                
-                for _ in 0..ancestor_key_count { row.col(|ui| { ui.add_space(0.0); }); }
-                // Treat all states except separate-decided (merge_decided && !merge_selected) as a legitimate row needing original structure preview.
-                let treat_as_regular = !merge_decided || merge_selected;
-
-                if treat_as_regular {
-                    for col_entry in &merged_cols {
-                        row.col(|ui| match col_entry {
-                            ColumnEntry::Structure(col_idx) => {
-                                // Use unified cache for duplicate row structure preview
-                                let (preview, parse_failed, is_ai_added) = get_original_structure_preview_from_cache(
-                                    ctx, None, Some(idx), *col_idx
-                                );
-                                
-                                // For new rows without a match, show "AI Added" instead of "(empty)"
-                                if is_ai_added {
-                                    ui.colored_label(Color32::LIGHT_BLUE, "(AI added)");
-                                } else {
-                                    let txt = if parse_failed {
-                                        "(parse err)".to_string()
-                                    } else if preview.is_empty() {
-                                        "(empty)".to_string()
-                                    } else {
-                                        preview
-                                    };
-                                    ui.label(txt);
-                                }
-                            }
-                            ColumnEntry::Regular(actual_col) => {
-                                // Check if in structure detail mode and this is parent_key column (index 1)
-                                let in_structure_detail = ctx.state.ai_structure_detail_context.is_some();
-                                let is_parent_key_col = in_structure_detail && *actual_col == 1;
-                                
-                                if is_parent_key_col {
-                                    // Render parent_key as green non-editable label
-                                    if let Some(orig_vec) = original_for_merge.as_ref() {
-                                        if let Some(pos) = non_structure_columns.iter().position(|c| c==actual_col) {
-                                            let orig_val = orig_vec.get(pos).cloned().unwrap_or_default();
-                                            ui.colored_label(Color32::from_rgb(0, 150, 0), orig_val);
-                                        }
-                                    }
-                                } else if let Some(orig_vec) = original_for_merge.as_ref() {
-                                    if let Some(pos) = non_structure_columns.iter().position(|c| c==actual_col) {
-                                        let orig_val = orig_vec.get(pos).cloned().unwrap_or_default();
-                                        ui.horizontal(|ui| {
-                                            let mut struck = false;
-                                            if merge_decided && merge_selected { if let Some(choices_vec)=choices.as_ref() { if let Some(choice)=choices_vec.get(pos) { if matches!(choice, ReviewChoice::AI) { ui.label(RichText::new(orig_val.clone()).strikethrough()); struck = true; } } } }
-                                            if !struck { ui.label(orig_val.clone()); }
-                                            ui.add_space(4.0);
-                                            // Show Orig toggle if merge decided and selected
-                                            if merge_decided && merge_selected {
-                                                let ai_val = ai_values.get(pos).map(|s| s.as_str());
-                                                let choice = choices.as_ref().and_then(|c| c.get(pos)).copied();
-                                                render_original_choice_toggle(ui, choice, &orig_val, ai_val);
-                                            }
-                                        });
-                                    } else { ui.label(""); }
-                                } else { ui.label("?"); }
-                            }
-                        });
-                    }
-                } else {
-                    // Separate-decided state: keep placeholders (acts like new separate row original preview is not relevant)
-                    for _ in 0..merged_cols.len() { row.col(|ui| { ui.label(""); }); }
-                }
-            }
-        }
+fn render_empty_row(row: &mut TableRow, ancestor_count: usize, merged_count: usize) {
+    row.col(|ui| {
+        ui.add_space(0.0);
+    });
+    for _ in 0..ancestor_count {
+        row.col(|ui| {
+            ui.add_space(0.0);
+        });
+    }
+    for _ in 0..merged_count {
+        row.col(|ui| {
+            ui.add_space(0.0);
+        });
     }
 }
-
-fn render_ai_suggested_row(row: &mut egui_extras::TableRow, idx: usize, kind: RowKind, ctx: &mut RowContext) {
-    match kind {
-        RowKind::Existing => {
-            if let Some(rr) = ctx.state.ai_row_reviews.get(idx) {
-                // Extract row_index and non_structure_columns before borrowing
-                let row_index = rr.row_index;
-                let non_structure_columns = rr.non_structure_columns.clone();
-                let original = rr.original.clone();
-                
-                // Check if this row has any undecided structures in the current context
-                let has_undecided_structures = has_undecided_structures_in_context(
-                    ctx, Some(row_index), None
-                );
-                
-                row.col(|ui| { 
-                    let btn = ui.add_enabled(!has_undecided_structures, egui::Button::new("Cancel"));
-                    if btn.clicked() && !has_undecided_structures { ctx.existing_cancel.push(idx); } 
-                    if has_undecided_structures {
-                        btn.on_hover_text("Review structures first (click structure buttons)");
-                    }
-                });
-                for (_h,val) in ctx.ancestor_key_columns { row.col(|ui| { ui.label(RichText::new(val).color(Color32::from_rgb(0, 200, 0))); }); }
-                
-                for col_entry in ctx.merged_columns {
-                    row.col(|ui| {
-                        match col_entry {
-                            ColumnEntry::Structure(col_idx) => {
-                                // When in structure detail mode, match nested structures by checking if their path extends the current path
-                                let sr = ctx.ai_structure_reviews.iter().find(|sr| {
-                                    sr.parent_row_index == row_index 
-                                    && sr.parent_new_row_index.is_none() 
-                                    && if let Some(detail_ctx) = ctx.state.ai_structure_detail_context.as_ref() {
-                                        // In structure detail mode: match structures whose path starts with current path + this column
-                                        sr.structure_path.len() > detail_ctx.structure_path.len()
-                                        && sr.structure_path[..detail_ctx.structure_path.len()] == detail_ctx.structure_path[..]
-                                        && sr.structure_path.get(detail_ctx.structure_path.len()) == Some(col_idx)
-                                    } else {
-                                        // Top level: match structures whose first element is this column
-                                        sr.structure_path.first() == Some(col_idx)
-                                    }
-                                });
-                                if let Some(sr) = sr {
-                                    let p = generate_structure_preview_from_rows(get_structure_preview_rows(sr));
-                                    let txt = if p.is_empty() { "(no changes)".to_string()} else { p };
-                                    let (btn_txt, btn_color) = if sr.decided {
-                                        if sr.accepted {
-                                            (RichText::new(format!("✓ {}", txt)).color(Color32::from_rgb(0, 200, 0)), Some(Color32::from_rgba_premultiplied(0, 100, 0, 40)))
-                                        } else if sr.rejected {
-                                            (RichText::new(format!("✗ {}", txt)).color(Color32::from_rgb(150, 150, 150)), Some(Color32::from_rgba_premultiplied(100, 100, 100, 40)))
-                                        } else {
-                                            (RichText::new(format!("✓ {}", txt)).color(Color32::from_rgb(0, 200, 0)), Some(Color32::from_rgba_premultiplied(0, 100, 0, 40)))
-                                        }
-                                    } else {
-                                        (RichText::new(txt), None)
-                                    };
-                                    let mut btn = egui::Button::new(btn_txt);
-                                    if let Some(color) = btn_color { btn = btn.fill(color); }
-                                    // Only allow clicking if structure is NOT decided
-                                    // Use full width like the main editor for better visual consistency
-                                    let btn_response = ui.add_enabled_ui(!sr.decided, |btn_ui| {
-                                        btn_ui.add_sized(btn_ui.available_size(), btn)
-                                    }).inner;
-                                    if btn_response.clicked() && !sr.decided {
-                                        *ctx.structure_nav_clicked = Some((Some(row_index), None, sr.structure_path.clone()));
-                                    }
-                                    // Add context menu for quick accept (only if not decided and not in detail mode)
-                                    if !sr.decided && ctx.state.ai_structure_detail_context.is_none() {
-                                        btn_response.context_menu(|menu_ui| {
-                                            if menu_ui.button("✓ Accept Structure").clicked() {
-                                                ctx.structure_quick_accept.push((Some(row_index), None, sr.structure_path.clone()));
-                                                menu_ui.close_menu();
-                                            }
-                                        });
-                                    }
-                                    if sr.decided {
-                                        btn_response.on_hover_text("Structure already decided");
-                                    }
-                                } else {
-                                    ui.label("(no changes)");
-                                }
-                            }
-                            ColumnEntry::Regular(actual_col) => {
-                                let pos = non_structure_columns.iter().position(|c| c==actual_col);
-                                if let Some(p) = pos {
-                                    // Check if in structure detail mode and this is parent_key column (index 1)
-                                    let in_structure_detail = ctx.state.ai_structure_detail_context.is_some();
-                                    let is_parent_key_col = in_structure_detail && *actual_col == 1;
-                                    
-                                    if is_parent_key_col {
-                                        // Render parent_key as green non-editable label
-                                        let rr = ctx.state.ai_row_reviews.get(idx).unwrap();
-                                        if let Some(ai_val) = rr.ai.get(p) {
-                                            ui.colored_label(Color32::from_rgb(0, 150, 0), ai_val);
-                                        } else {
-                                            ui.label("");
-                                        }
-                                    } else {
-                                        let orig_val = original.get(p).map(|s| s.as_str()).unwrap_or("");
-                                        
-                                        let rr = ctx.state.ai_row_reviews.get_mut(idx).unwrap();
-                                        ui.horizontal(|ui| {
-                                            // Left: text editor
-                                            let changed = if let Some(allowed_values) = ctx.linked_column_options.get(actual_col) {
-                                                if let Some(ai_val) = rr.ai.get_mut(p) {
-                                                    let cell_id = ui.id().with(("ai_linked_cell", row_index, *actual_col, p));
-                                                    render_review_ai_cell_linked(ui, orig_val, ai_val, allowed_values, cell_id)
-                                                } else {
-                                                    false
-                                                }
-                                            } else {
-                                                render_review_ai_cell(ui, orig_val, rr.ai.get_mut(p))
-                                            };
-
-                                            // Right: AI toggle
-                                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |u| {
-                                                let ai_val_for_toggle = rr.ai.get(p).map(|s| s.as_str());
-                                                let choice_mut = rr.choices.get_mut(p);
-                                                let _ = render_ai_choice_toggle(u, choice_mut, orig_val, ai_val_for_toggle);
-                                            });
-
-                                            if changed { if let Some(choice)= rr.choices.get_mut(p) { *choice = ReviewChoice::AI; } }
-                                        });
-                                    }
-                                } else { ui.label(""); }
-                            }
-                        }
-                    });
-                }
-            }
-        }
-        RowKind::NewPlain => {
-            if let Some(nr) = ctx.state.ai_new_row_reviews.get_mut(idx) {
-                row.col(|ui| { if ui.button("Cancel").clicked() { ctx.new_cancel.push(idx); } });
-                for (_h,val) in ctx.ancestor_key_columns { row.col(|ui| { ui.label(RichText::new(val).color(Color32::LIGHT_GREEN)); }); }
-                
-                for col_entry in ctx.merged_columns {
-                    row.col(|ui| {
-                        match col_entry {
-                            ColumnEntry::Structure(col_idx) => {
-                                // When in structure detail mode, match nested structures by checking if their path extends the current path
-                                let sr = ctx.ai_structure_reviews.iter().find(|sr| {
-                                    sr.parent_new_row_index == Some(idx)
-                                    && if let Some(detail_ctx) = ctx.state.ai_structure_detail_context.as_ref() {
-                                        // In structure detail mode: match structures whose path starts with current path + this column
-                                        sr.structure_path.len() > detail_ctx.structure_path.len()
-                                        && sr.structure_path[..detail_ctx.structure_path.len()] == detail_ctx.structure_path[..]
-                                        && sr.structure_path.get(detail_ctx.structure_path.len()) == Some(col_idx)
-                                    } else {
-                                        // Top level: match structures whose first element is this column
-                                        sr.structure_path.first() == Some(col_idx)
-                                    }
-                                });
-                                if let Some(sr) = sr {
-                                    let p = generate_structure_preview_from_rows(get_structure_preview_rows(sr));
-                                    let txt = if p.is_empty() { "(empty)".to_string() } else { p };
-                                    let (btn_txt, btn_color) = if sr.decided {
-                                        if sr.accepted {
-                                            (RichText::new(format!("✓ {}", txt)).color(Color32::from_rgb(0, 200, 0)), Some(Color32::from_rgba_premultiplied(0, 100, 0, 40)))
-                                        } else if sr.rejected {
-                                            (RichText::new(format!("✗ {}", txt)).color(Color32::from_rgb(150, 150, 150)), Some(Color32::from_rgba_premultiplied(100, 100, 100, 40)))
-                                        } else {
-                                            (RichText::new(format!("✓ {}", txt)).color(Color32::from_rgb(0, 200, 0)), Some(Color32::from_rgba_premultiplied(0, 100, 0, 40)))
-                                        }
-                                    } else {
-                                        (RichText::new(txt), None)
-                                    };
-                                    let mut btn = egui::Button::new(btn_txt);
-                                    if let Some(color) = btn_color { btn = btn.fill(color); }
-                                    // Use full width like the main editor for better visual consistency
-                                    let btn_response = ui.add_enabled_ui(!sr.decided, |btn_ui| {
-                                        btn_ui.add_sized(btn_ui.available_size(), btn)
-                                    }).inner;
-                                    if btn_response.clicked() && !sr.decided {
-                                        *ctx.structure_nav_clicked = Some((None, Some(idx), sr.structure_path.clone()));
-                                    }
-                                    // Add context menu for quick accept (only if not decided and not in detail mode)
-                                    if !sr.decided && ctx.state.ai_structure_detail_context.is_none() {
-                                        btn_response.context_menu(|menu_ui| {
-                                            if menu_ui.button("✓ Accept Structure").clicked() {
-                                                ctx.structure_quick_accept.push((None, Some(idx), sr.structure_path.clone()));
-                                                menu_ui.close_menu();
-                                            }
-                                        });
-                                    }
-                                    if sr.decided {
-                                        btn_response.on_hover_text("Structure already decided");
-                                    }
-                                } else {
-                                    ui.label("(empty)");
-                                }
-                            }
-                            ColumnEntry::Regular(actual_col) => {
-                                if let Some(pos)= nr.non_structure_columns.iter().position(|c| c==actual_col) {
-                                    if let Some(cell)= nr.ai.get_mut(pos) {
-                                        if let Some(allowed_values) = ctx.linked_column_options.get(actual_col) {
-                                            let cell_id = ui.id().with(("ai_linked_new_plain", idx, *actual_col, pos));
-                                            render_review_ai_cell_linked(ui, "", cell, allowed_values, cell_id);
-                                        } else {
-                                            // Avoid per-frame column growth
-                                            ui.add(egui::TextEdit::singleline(cell).desired_width(ui.available_width()));
-                                        }
-                                    } else { ui.label(""); }
-                                } else {
-                                    // Column is in schema but not in data
-                                    // This happens when AI didn't generate a value for this column
-                                    ui.label("—");
-                                }
-                            }
-                        }
-                    });
-                }
-            }
-        }
-        RowKind::NewDuplicate => {
-            if let Some(nr) = ctx.state.ai_new_row_reviews.get(idx) {
-                // Extract values we need before borrowing ctx immutably
-                let match_row = nr.duplicate_match_row;
-                let merge_decided = nr.merge_decided;
-                let merge_selected = nr.merge_selected;
-                let non_structure_columns = nr.non_structure_columns.clone();
-                let original_for_merge = nr.original_for_merge.clone();
-                
-                // Check if this new duplicate row has any undecided structures in the current context
-                // We need to check both the new row and its matched existing row
-                let has_undecided_structures = has_undecided_structures_in_context(ctx, None, Some(idx))
-                    || match_row.map_or(false, |row_idx| 
-                        has_undecided_structures_in_context(ctx, Some(row_idx), None)
-                    );
-                
-                row.col(|ui| {
-                    let nr = ctx.state.ai_new_row_reviews.get_mut(idx).unwrap();
-                    if merge_decided {
-                        let btn = ui.add_enabled(!has_undecided_structures, egui::Button::new("Cancel"));
-                        if btn.clicked() && !has_undecided_structures {
-                            ctx.new_cancel.push(idx);
-                        }
-                        if has_undecided_structures {
-                            btn.on_hover_text("Review structures first (click structure buttons)");
-                        }
-                    } else {
-                        if ui.radio(!merge_selected, "Separate").clicked() {
-                            nr.merge_selected = false;
-                        }
-                    }
-                });
-                for (_h,val) in ctx.ancestor_key_columns { row.col(|ui| { ui.label(RichText::new(val).color(Color32::LIGHT_GREEN)); }); }
-                
-                for col_entry in ctx.merged_columns {
-                    row.col(|ui| {
-                        match col_entry {
-                            ColumnEntry::Structure(col_idx) => {
-                                // When in structure detail mode, match nested structures by checking if their path extends the current path
-                                let sr = ctx.ai_structure_reviews.iter().find(|sr| {
-                                    sr.parent_new_row_index == Some(idx)
-                                    && if let Some(detail_ctx) = ctx.state.ai_structure_detail_context.as_ref() {
-                                        // In structure detail mode: match structures whose path starts with current path + this column
-                                        sr.structure_path.len() > detail_ctx.structure_path.len()
-                                        && sr.structure_path[..detail_ctx.structure_path.len()] == detail_ctx.structure_path[..]
-                                        && sr.structure_path.get(detail_ctx.structure_path.len()) == Some(col_idx)
-                                    } else {
-                                        // Top level: match structures whose first element is this column
-                                        sr.structure_path.first() == Some(col_idx)
-                                    }
-                                });
-                                if let Some(sr) = sr {
-                                    let p = generate_structure_preview_from_rows(get_structure_preview_rows(sr));
-                                    let txt = if p.is_empty() { "(empty)".to_string() } else { p };
-                                    let (btn_txt, btn_color) = if sr.decided {
-                                        if sr.accepted {
-                                            (RichText::new(format!("✓ {}", txt)).color(Color32::from_rgb(0, 200, 0)), Some(Color32::from_rgba_premultiplied(0, 100, 0, 40)))
-                                        } else if sr.rejected {
-                                            (RichText::new(format!("✗ {}", txt)).color(Color32::from_rgb(150, 150, 150)), Some(Color32::from_rgba_premultiplied(100, 100, 100, 40)))
-                                        } else {
-                                            (RichText::new(format!("✓ {}", txt)).color(Color32::from_rgb(0, 200, 0)), Some(Color32::from_rgba_premultiplied(0, 100, 0, 40)))
-                                        }
-                                    } else {
-                                        (RichText::new(txt), None)
-                                    };
-                                    let mut btn = egui::Button::new(btn_txt);
-                                    if let Some(color) = btn_color { btn = btn.fill(color); }
-                                    // Use full width like the main editor for better visual consistency
-                                    let btn_response = ui.add_enabled_ui(!sr.decided, |btn_ui| {
-                                        btn_ui.add_sized(btn_ui.available_size(), btn)
-                                    }).inner;
-                                    if btn_response.clicked() && !sr.decided {
-                                        *ctx.structure_nav_clicked = Some((None, Some(idx), sr.structure_path.clone()));
-                                    }
-                                    // Add context menu for quick accept (only if not decided and not in detail mode)
-                                    if !sr.decided && ctx.state.ai_structure_detail_context.is_none() {
-                                        btn_response.context_menu(|menu_ui| {
-                                            if menu_ui.button("✓ Accept Structure").clicked() {
-                                                ctx.structure_quick_accept.push((None, Some(idx), sr.structure_path.clone()));
-                                                menu_ui.close_menu();
-                                            }
-                                        });
-                                    }
-                                    if sr.decided {
-                                        btn_response.on_hover_text("Structure already decided");
-                                    }
-                                } else {
-                                    ui.label("(empty)");
-                                }
-                            }
-                            ColumnEntry::Regular(actual_col) => {
-                                let pos = non_structure_columns.iter().position(|c| c==actual_col);
-                                if let Some(p) = pos {
-                                    let nr = ctx.state.ai_new_row_reviews.get_mut(idx).unwrap();
-                                    if let Some(cell)= nr.ai.get_mut(p) {
-                                        ui.horizontal(|ui| {
-                                            // Show AI toggle if merge decided and selected
-                                            if merge_decided && merge_selected {
-                                                let orig_val = original_for_merge.as_ref().and_then(|o| o.get(p)).map(|s| s.as_str()).unwrap_or("");
-                                                let ai_val = Some(cell.as_str());
-                                                let choice_mut = nr.choices.as_mut().and_then(|c| c.get_mut(p));
-                                                let _ = render_ai_choice_toggle(ui, choice_mut, orig_val, ai_val);
-                                                ui.add_space(4.0);
-                                            }
-                                            
-                                            if let Some(allowed_values) = ctx.linked_column_options.get(actual_col) {
-                                                let cell_id = ui.id().with(("ai_linked_new_dup", idx, *actual_col, p));
-                                                render_review_ai_cell_linked(ui, "", cell, allowed_values, cell_id);
-                                            } else {
-                                                // Avoid per-frame column growth
-                                                ui.add(egui::TextEdit::singleline(cell).desired_width(ui.available_width()));
-                                            }
-                                        });
-                                    } else { ui.label(""); }
-                                } else {
-                                    // Column is in schema but not in data
-                                    ui.label("—");
-                                }
-                            }
-                        }
-                    });
-                }
-            }
-        }
-    }
-}
-
-fn render_status_row(
-    row: &mut egui_extras::TableRow,
-    idx: usize,
-    kind: RowKind,
-    ctx: &mut RowContext,
-) {
-    match kind {
-        RowKind::Existing => {
-            if let Some(_rr) = ctx.state.ai_row_reviews.get_mut(idx) {
-                row.col(|ui| { ui.add_space(2.0); });
-                for _ in ctx.ancestor_key_columns {
-                    row.col(|ui| { ui.label(""); });
-                }
-                for col_entry in ctx.merged_columns {
-                    row.col(|ui| {
-                        match col_entry {
-                            ColumnEntry::Structure(_) => { ui.label(""); },
-                            ColumnEntry::Regular(_actual_col) => {
-                                // Toggles now shown in Original/AI rows, nothing to show here
-                                ui.label("");
-                            }
-                        }
-                    });
-                }
-            }
-        }
-        RowKind::NewPlain => {
-            // Should not be present, but keep empty fallback
-            row.col(|ui| { ui.add_space(0.0); });
-            for _ in ctx.ancestor_key_columns { row.col(|ui| { ui.add_space(0.0); }); }
-            for _ in ctx.merged_columns { row.col(|ui| { ui.add_space(0.0); }); }
-        }
-        RowKind::NewDuplicate => {
-            if let Some(nr) = ctx.state.ai_new_row_reviews.get_mut(idx) {
-                // Show when undecided OR decided+merge
-                if (!nr.merge_decided) || (nr.merge_decided && nr.merge_selected) {
-                    row.col(|ui| {
-                        if nr.merge_decided && nr.merge_selected {
-                            ui.small(RichText::new("Merge Choices").color(Color32::from_rgb(180, 160, 40)));
-                        } else if !nr.merge_decided {
-                            if ui.add(egui::Button::new(RichText::new("Decide").color(Color32::WHITE)).fill(Color32::from_rgb(150, 90, 20))).on_hover_text("Confirm selection").clicked() {
-                                nr.merge_decided = true;
-                            }
-                        } else {
-                            ui.add_space(2.0);
-                        }
-                    });
-                    for _ in ctx.ancestor_key_columns { row.col(|ui| { ui.add_space(2.0); }); }
-                    for col_entry in ctx.merged_columns {
-                        row.col(|ui| {
-                            match col_entry {
-                                ColumnEntry::Structure(col_idx) => {
-                                    // Show structure preview for merge-decided rows
-                                    if nr.merge_selected && nr.merge_decided {
-                                        // Find the structure entry for this duplicate row
-                                        if let Some(sr) = ctx.ai_structure_reviews.iter().find(|sr| {
-                                            sr.parent_new_row_index.is_none() 
-                                            && sr.parent_row_index == nr.duplicate_match_row.unwrap_or(usize::MAX) 
-                                            && sr.structure_path.first() == Some(col_idx)
-                                        }) {
-                                            // Show merged structure if decided, otherwise show empty
-                                            if sr.decided {
-                                                let p = generate_structure_preview_from_rows(get_structure_preview_rows(sr));
-                                                let txt = if p.is_empty() { "(empty)".to_string() } else { p };
-                                                let display_txt = if sr.accepted {
-                                                    RichText::new(format!("✓ {}", txt)).color(Color32::from_rgb(0, 200, 0))
-                                                } else if sr.rejected {
-                                                    RichText::new(format!("✗ {}", txt)).color(Color32::from_rgb(150, 150, 150))
-                                                } else {
-                                                    RichText::new(txt)
-                                                };
-                                                ui.label(display_txt);
-                                            } else {
-                                                ui.label("");
-                                            }
-                                        } else {
-                                            ui.label("");
-                                        }
-                                    } else {
-                                        ui.label("");
-                                    }
-                                },
-                                ColumnEntry::Regular(_actual_col) => {
-                                    // Toggles now shown in Original/AI rows, nothing to show here
-                                    ui.label("");
-                                }
-                            }
-                        });
-                    }
-                } else {
-                    // Separate decided: empty placeholders
-                    row.col(|ui| { ui.add_space(0.0); });
-                    for _ in ctx.ancestor_key_columns { row.col(|ui| { ui.add_space(0.0); }); }
-                    for _ in ctx.merged_columns { row.col(|ui| { ui.add_space(0.0); }); }
-                }
-            }
-        }
-    }
-}
-

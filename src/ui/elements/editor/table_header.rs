@@ -1,15 +1,17 @@
 // src/ui/elements/editor/table_header.rs
+use bevy::log::info;
 use bevy::prelude::*;
-use bevy::log::{info, warn};
 use bevy_egui::egui::{self, Color32, Id, Order, PointerButton, Sense, Stroke};
 use egui_extras::TableRow;
 
 use super::state::{EditorWindowState, SheetInteractionState};
 use crate::sheets::definitions::{ColumnValidator, SheetMetadata};
 use crate::sheets::events::{
-    RequestReorderColumn, RequestUpdateAiSendSchema, RequestUpdateAiStructureSend,
+    RequestBatchUpdateColumnAiInclude, RequestReorderColumn, RequestUpdateAiSendSchema,
+    RequestUpdateAiStructureSend, RequestUpdateColumnAiInclude,
 };
 use crate::sheets::resources::SheetRegistry;
+use crate::sheets::systems::ui_handlers;
 pub fn sheet_table_header(
     header_row: &mut TableRow,
     ctx: &egui::Context,
@@ -19,6 +21,8 @@ pub fn sheet_table_header(
     _registry: &SheetRegistry,
     state: &mut EditorWindowState,
     mut reorder_writer: EventWriter<RequestReorderColumn>,
+    mut column_include_writer: EventWriter<RequestUpdateColumnAiInclude>,
+    mut batch_include_writer: EventWriter<RequestBatchUpdateColumnAiInclude>,
     mut send_schema_writer: EventWriter<RequestUpdateAiSendSchema>,
     mut structure_send_writer: EventWriter<RequestUpdateAiStructureSend>,
 ) {
@@ -39,6 +43,12 @@ pub fn sheet_table_header(
     let primary_released_this_frame = ctx.input(|i| i.pointer.primary_released());
 
     for c_idx in visible_columns.iter().copied() {
+        // Skip columns that are marked deleted in metadata
+        if let Some(col_def) = metadata.columns.get(c_idx) {
+            if col_def.deleted {
+                continue;
+            }
+        }
         let header_text = &headers[c_idx];
         header_row.col(|ui| {
             if _header_row_y_range.is_none() {
@@ -75,150 +85,116 @@ pub fn sheet_table_header(
                                     if is_parent_key {
                                         // Parent_key is always included and cannot be toggled
                                         let mut dummy = true;
-                                        let _ = ui_h.add_enabled(false, egui::Checkbox::new(&mut dummy, ""));
+                                        let _ =
+                                            ui_h.add_enabled(false, egui::Checkbox::new(&mut dummy, ""));
                                         ui_h.add_space(2.0);
                                     } else {
-                                    let mut is_included = !matches!(col_def.ai_include_in_send, Some(false));
-                                    let checkbox_resp = ui_h.checkbox(&mut is_included, "");
-                                    if checkbox_resp.changed() {
-                                        // Derive root context and current structure path from virtual stack
-                                        let structure_path: Vec<usize> = state
-                                            .virtual_structure_stack
-                                            .iter()
-                                            .map(|ctx| ctx.parent.parent_col)
-                                            .collect();
-                                        let (root_category, root_sheet) = if let Some(first_ctx) = state.virtual_structure_stack.first() {
-                                            (first_ctx.parent.parent_category.clone(), first_ctx.parent.parent_sheet.clone())
-                                        } else {
-                                            (category.clone(), sheet_name.to_string())
-                                        };
-                                        if root_sheet.is_empty() {
-                                            warn!("Skipping AI send schema update: missing root sheet for {:?}/{}", root_category, sheet_name);
-                                        } else {
-                                            let included_indices: Vec<usize> = metadata.columns.iter().enumerate()
-                                                .filter_map(|(idx, col)| {
-                                                    if matches!(col.validator, Some(ColumnValidator::Structure)) { return None; }
-                                                    // Parent_key is always included
-                                                    let is_parent_key = idx == 1 && headers.get(1).map(|h| h.eq_ignore_ascii_case("parent_key")).unwrap_or(false);
-                                                    let include = if is_parent_key {
-                                                        true
-                                                    } else if idx == c_idx {
-                                                        is_included
-                                                    } else {
-                                                        !matches!(col.ai_include_in_send, Some(false))
-                                                    };
-                                                    if include { Some(idx) } else { None }
-                                                }).collect();
-                                            let structure_path_opt = if structure_path.is_empty() { None } else { Some(structure_path) };
-                                            send_schema_writer.write(RequestUpdateAiSendSchema { category: root_category.clone(), sheet_name: root_sheet.clone(), structure_path: structure_path_opt, included_columns: included_indices.clone() });
-                                            state.ai_cached_included_columns_category = category.clone();
-                                            state.ai_cached_included_columns_sheet = Some(sheet_name.to_string());
-                                            state.ai_cached_included_columns_path = state.virtual_structure_stack.iter().map(|ctx| ctx.parent.parent_col).collect();
-                                            let mut flags = vec![false; metadata.columns.len()];
-                                            for &idx in &included_indices { if let Some(slot) = flags.get_mut(idx) { *slot = true; } }
-                                            state.ai_cached_included_columns = flags;
-                                            state.ai_cached_included_columns_dirty = false;
-                                            state.ai_cached_included_columns_valid = true;
-                                        }
-                                        ui_h.ctx().request_repaint();
-                                    }
-                                    // Bulk context menu for visible non-structure columns
-                                        checkbox_resp.context_menu(|menu_ui| {
-                                        if menu_ui.button("Select all visible columns").clicked() {
-                                            // Derive root context and current structure path from virtual stack
-                                            let structure_path: Vec<usize> = state
-                                                .virtual_structure_stack
-                                                .iter()
-                                                .map(|ctx| ctx.parent.parent_col)
-                                                .collect();
-                                            let (root_category, root_sheet) = if let Some(first_ctx) = state.virtual_structure_stack.first() {
-                                                (first_ctx.parent.parent_category.clone(), first_ctx.parent.parent_sheet.clone())
+                                        let in_structure_context =
+                                            !state.virtual_structure_stack.is_empty();
+                                        let mut is_included =
+                                            !matches!(col_def.ai_include_in_send, Some(false));
+                                        let checkbox_resp = ui_h.checkbox(&mut is_included, "");
+
+                                        if checkbox_resp.changed() {
+                                            if in_structure_context {
+                                                ui_handlers::handle_ai_include_change_structure(
+                                                    state,
+                                                    metadata,
+                                                    &headers,
+                                                    category,
+                                                    sheet_name,
+                                                    c_idx,
+                                                    is_included,
+                                                    &mut send_schema_writer,
+                                                );
                                             } else {
-                                                (category.clone(), sheet_name.to_string())
-                                            };
-                                            {
-                                                let mut included_set: std::collections::HashSet<usize> = metadata.columns.iter().enumerate()
-                                                    .filter_map(|(idx, col)| if !matches!(col.validator, Some(ColumnValidator::Structure)) && !matches!(col.ai_include_in_send, Some(false)) { Some(idx) } else { None })
-                                                    .collect();
-                                                for &idx in &visible_columns { if let Some(col) = metadata.columns.get(idx) { if !matches!(col.validator, Some(ColumnValidator::Structure)) { included_set.insert(idx); } } }
-                                                let mut included_indices: Vec<usize> = included_set.into_iter().collect();
-                                                included_indices.sort_unstable();
-                                                let structure_path_opt = if structure_path.is_empty() { None } else { Some(structure_path) };
-                                                send_schema_writer.write(RequestUpdateAiSendSchema { category: root_category.clone(), sheet_name: root_sheet.clone(), structure_path: structure_path_opt, included_columns: included_indices.clone() });
-                                                state.ai_cached_included_columns_category = category.clone();
-                                                state.ai_cached_included_columns_sheet = Some(sheet_name.to_string());
-                                                state.ai_cached_included_columns_path = state.virtual_structure_stack.iter().map(|ctx| ctx.parent.parent_col).collect();
-                                                let mut flags = vec![false; metadata.columns.len()];
-                                                for &idx in &included_indices { if let Some(slot) = flags.get_mut(idx) { *slot = true; } }
-                                                state.ai_cached_included_columns = flags;
-                                                state.ai_cached_included_columns_dirty = false;
-                                                state.ai_cached_included_columns_valid = true;
-                                                ui_h.ctx().request_repaint();
-                                                menu_ui.close_menu();
+                                                ui_handlers::handle_ai_include_change_root(
+                                                    state,
+                                                    metadata,
+                                                    &headers,
+                                                    category,
+                                                    sheet_name,
+                                                    c_idx,
+                                                    is_included,
+                                                    &mut column_include_writer,
+                                                );
                                             }
+                                            ui_h.ctx().request_repaint();
                                         }
-                                        if menu_ui.button("Remove selection from all visible columns").clicked() {
-                                            // Derive root context and current structure path from virtual stack
-                                            let structure_path: Vec<usize> = state
-                                                .virtual_structure_stack
-                                                .iter()
-                                                .map(|ctx| ctx.parent.parent_col)
-                                                .collect();
-                                            let (root_category, root_sheet) = if let Some(first_ctx) = state.virtual_structure_stack.first() {
-                                                (first_ctx.parent.parent_category.clone(), first_ctx.parent.parent_sheet.clone())
-                                            } else {
-                                                (category.clone(), sheet_name.to_string())
-                                            };
-                                                let mut included_indices: Vec<usize> = metadata.columns.iter().enumerate()
-                                                    .filter_map(|(idx, col)| {
-                                                        if matches!(col.validator, Some(ColumnValidator::Structure)) { return None; }
-                                                        if visible_columns.contains(&idx) { return None; }
-                                                        if matches!(col.ai_include_in_send, Some(false)) { return None; }
-                                                        Some(idx)
-                                                    }).collect();
-                                                // Ensure Parent_key (index 1) is always included
-                                                if headers.get(1).map(|h| h.eq_ignore_ascii_case("parent_key")).unwrap_or(false) {
-                                                    if !included_indices.contains(&1) { included_indices.push(1); }
+
+                                        checkbox_resp.context_menu(|menu_ui| {
+                                            if in_structure_context {
+                                                if menu_ui.button("Select all").clicked() {
+                                                    ui_handlers::handle_select_all_structure(
+                                                        state,
+                                                        metadata,
+                                                        &headers,
+                                                        category,
+                                                        sheet_name,
+                                                        &visible_columns,
+                                                        &mut send_schema_writer,
+                                                    );
+                                                    ui_h.ctx().request_repaint();
+                                                    menu_ui.close_menu();
                                                 }
-                                                let structure_path_opt = if structure_path.is_empty() { None } else { Some(structure_path) };
-                                                send_schema_writer.write(RequestUpdateAiSendSchema { category: root_category.clone(), sheet_name: root_sheet.clone(), structure_path: structure_path_opt, included_columns: included_indices.clone() });
-                                                state.ai_cached_included_columns_category = category.clone();
-                                                state.ai_cached_included_columns_sheet = Some(sheet_name.to_string());
-                                                state.ai_cached_included_columns_path = state.virtual_structure_stack.iter().map(|ctx| ctx.parent.parent_col).collect();
-                                                let mut flags = vec![false; metadata.columns.len()];
-                                                for &idx in &included_indices { if let Some(slot) = flags.get_mut(idx) { *slot = true; } }
-                                                state.ai_cached_included_columns = flags;
-                                                state.ai_cached_included_columns_dirty = false;
-                                                state.ai_cached_included_columns_valid = true;
-                                                ui_h.ctx().request_repaint();
-                                                menu_ui.close_menu();
-                                        }
+                                                if menu_ui.button("De-select all").clicked() {
+                                                    ui_handlers::handle_deselect_all_structure(
+                                                        state,
+                                                        metadata,
+                                                        &headers,
+                                                        category,
+                                                        sheet_name,
+                                                        &visible_columns,
+                                                        &mut send_schema_writer,
+                                                    );
+                                                    ui_h.ctx().request_repaint();
+                                                    menu_ui.close_menu();
+                                                }
+                                            } else {
+                                                if menu_ui.button("Select all").clicked() {
+                                                    ui_handlers::handle_select_all_root(
+                                                        state,
+                                                        metadata,
+                                                        &headers,
+                                                        category,
+                                                        sheet_name,
+                                                        &visible_columns,
+                                                        &mut batch_include_writer,
+                                                    );
+                                                    ui_h.ctx().request_repaint();
+                                                    menu_ui.close_menu();
+                                                }
+                                                if menu_ui.button("De-select all").clicked() {
+                                                    ui_handlers::handle_deselect_all_root(
+                                                        state,
+                                                        metadata,
+                                                        &headers,
+                                                        category,
+                                                        sheet_name,
+                                                        &visible_columns,
+                                                        &mut batch_include_writer,
+                                                    );
+                                                    ui_h.ctx().request_repaint();
+                                                    menu_ui.close_menu();
+                                                }
+                                            }
                                         });
+
                                         ui_h.add_space(2.0);
                                     }
                                 } else {
                                     let mut is_included = matches!(col_def.ai_include_in_send, Some(true));
                                     let checkbox_resp = ui_h.checkbox(&mut is_included, "");
                                     if checkbox_resp.changed() {
-                                        // Derive root context and current structure path from virtual stack
-                                        let mut structure_path: Vec<usize> = state
-                                            .virtual_structure_stack
-                                            .iter()
-                                            .map(|ctx| ctx.parent.parent_col)
-                                            .collect();
-                                        let (root_category, root_sheet) = if let Some(first_ctx) = state.virtual_structure_stack.first() {
-                                            (first_ctx.parent.parent_category.clone(), first_ctx.parent.parent_sheet.clone())
-                                        } else {
-                                            (category.clone(), sheet_name.to_string())
-                                        };
-                                        if root_sheet.is_empty() {
-                                            warn!("Skipping AI structure send update: missing root sheet for {:?}/{}", root_category, sheet_name);
-                                        } else {
-                                            structure_path.push(c_idx);
-                                            structure_send_writer.write(RequestUpdateAiStructureSend { category: root_category.clone(), sheet_name: root_sheet.clone(), structure_path: structure_path.clone(), include: is_included });
-                                            state.mark_ai_included_columns_dirty();
-                                            ui_h.ctx().request_repaint();
-                                        }
+                                        ui_handlers::handle_structure_checkbox_change(
+                                            state,
+                                            category,
+                                            sheet_name,
+                                            c_idx,
+                                            is_included,
+                                            &mut structure_send_writer,
+                                        );
+                                        ui_h.ctx().request_repaint();
                                     }
                                     ui_h.add_space(2.0);
                                 }
@@ -243,7 +219,7 @@ pub fn sheet_table_header(
                     };
 
                     // Style: button-like header with darker background, full column width, centered text
-                    let dark_bg_default = egui::Color32::from_rgb(40, 40, 40);
+                    let dark_bg_default = egui::Color32::from_rgb(50, 50, 52); // Slightly brighter for better visibility
                     let fill_color = if header_bg_color == egui::Color32::TRANSPARENT { dark_bg_default } else { header_bg_color };
                     let header_button = egui::Button::new(&display_text)
                         .fill(fill_color)

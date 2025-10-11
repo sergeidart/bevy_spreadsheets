@@ -20,11 +20,12 @@ pub fn parse_structure_rows_from_cell(
                 // Flat array: ["val1", "val2", "val3"] - all elements are primitives
                 // Array of rows: [["val1", "val2"], ...] or [{...}, ...] - elements are arrays/objects
                 let is_flat_array = arr.iter().all(|item| {
-                    matches!(item, 
-                        serde_json::Value::String(_) | 
-                        serde_json::Value::Number(_) | 
-                        serde_json::Value::Bool(_) | 
-                        serde_json::Value::Null
+                    matches!(
+                        item,
+                        serde_json::Value::String(_)
+                            | serde_json::Value::Number(_)
+                            | serde_json::Value::Bool(_)
+                            | serde_json::Value::Null
                     )
                 });
 

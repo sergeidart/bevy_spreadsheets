@@ -1,4 +1,5 @@
 // Header actions (Accept All / Decline All) extraction
+use crate::sheets::systems::ai_review::structure_persistence::persist_structure_detail_changes;
 use crate::ui::elements::editor::state::EditorWindowState;
 use bevy_egui::egui::{self, Color32, RichText};
 
@@ -14,26 +15,26 @@ pub fn draw_header_actions(
 ) -> HeaderActionResult {
     let mut accept_all_clicked = false;
     let mut decline_all_clicked = false;
-    
+
     // Check for ESC key to exit structure detail view
     if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
         if let Some(ref detail_ctx) = state.ai_structure_detail_context.clone() {
             // Persist changes before exiting
-            crate::ui::elements::ai_review::ai_batch_review_ui::persist_structure_detail_changes(state, detail_ctx);
+            persist_structure_detail_changes(state, detail_ctx);
             // Restore top-level reviews before exiting
             state.ai_row_reviews = detail_ctx.saved_row_reviews.clone();
             state.ai_new_row_reviews = detail_ctx.saved_new_row_reviews.clone();
             state.ai_structure_detail_context = None;
         }
     }
-    
+
     ui.horizontal(|ui| {
         // Show back button ONLY if in structure detail mode (drill-down from AI review)
         if state.ai_structure_detail_context.is_some() {
             if ui.button(RichText::new("◀ Back").strong()).clicked() {
                 if let Some(ref detail_ctx) = state.ai_structure_detail_context.clone() {
                     // Persist changes before exiting
-                    crate::ui::elements::ai_review::ai_batch_review_ui::persist_structure_detail_changes(state, detail_ctx);
+                    persist_structure_detail_changes(state, detail_ctx);
                     // Restore top-level reviews before exiting
                     state.ai_row_reviews = detail_ctx.saved_row_reviews.clone();
                     state.ai_new_row_reviews = detail_ctx.saved_new_row_reviews.clone();

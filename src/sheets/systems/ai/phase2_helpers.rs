@@ -9,9 +9,8 @@ use crate::sheets::resources::SheetRegistry;
 use crate::ui::elements::editor::state::{EditorWindowState, NewRowReview};
 
 use super::row_helpers::{
-    create_row_snapshots, extract_ai_snapshot_from_new_row,
-    generate_review_choices, normalize_cell_value,
-    skip_key_prefix,
+    create_row_snapshots, extract_ai_snapshot_from_new_row, generate_review_choices,
+    normalize_cell_value, skip_key_prefix,
 };
 use super::structure_jobs::enqueue_structure_jobs_for_batch;
 
@@ -46,13 +45,13 @@ pub fn detect_duplicate_indices(
     // Check each new row
     for (new_idx, new_row_full) in extra_slice.iter().enumerate() {
         let new_row = skip_key_prefix(new_row_full, key_prefix_count);
-        
+
         if new_row.len() < included.len() {
             continue;
         }
 
         let ai_snapshot = extract_ai_snapshot_from_new_row(new_row, included);
-        
+
         if let Some(first_val) = ai_snapshot.get(0) {
             let normalized_first = normalize_cell_value(first_val);
             if first_col_value_to_row.contains_key(&normalized_first) {
@@ -79,11 +78,17 @@ pub fn trigger_phase2_deep_review(
     key_prefix_count: usize,
 ) {
     use crate::sheets::systems::ai::control_handler::{spawn_batch_task, BatchPayload};
-    
+
     let (cat_ctx, sheet_ctx) = state.current_sheet_context();
-    let Some(sheet_name) = sheet_ctx else { return; };
-    let Some(sheet) = registry.get_sheet(&cat_ctx, &sheet_name) else { return; };
-    let Some(meta) = &sheet.metadata else { return; };
+    let Some(sheet_name) = sheet_ctx else {
+        return;
+    };
+    let Some(sheet) = registry.get_sheet(&cat_ctx, &sheet_name) else {
+        return;
+    };
+    let Some(meta) = &sheet.metadata else {
+        return;
+    };
 
     // Build Phase 2 rows:
     // 1. Originals (full data)
@@ -131,10 +136,12 @@ pub fn trigger_phase2_deep_review(
     let mut column_contexts: Vec<Option<String>> = Vec::new();
     for &col_idx in included {
         if let Some(col_def) = meta.columns.get(col_idx) {
-            column_contexts.push(crate::ui::elements::ai_review::ai_context_utils::decorate_context_with_type(
-                col_def.ai_context.as_ref(),
-                col_def.data_type,
-            ));
+            column_contexts.push(
+                crate::ui::elements::ai_review::ai_context_utils::decorate_context_with_type(
+                    col_def.ai_context.as_ref(),
+                    col_def.data_type,
+                ),
+            );
         } else {
             column_contexts.push(None);
         }
@@ -152,9 +159,15 @@ pub fn trigger_phase2_deep_review(
         general_sheet_rule: meta.ai_general_rule.clone(),
         column_contexts,
         rows_data: phase2_rows.clone(),
-        requested_grounding_with_google_search: meta.requested_grounding_with_google_search.unwrap_or(false),
-        allow_row_additions: false,  // KEY: Phase 2 treats everything as existing
-        key_prefix_count: if key_prefix_count > 0 { Some(key_prefix_count) } else { None },
+        requested_grounding_with_google_search: meta
+            .requested_grounding_with_google_search
+            .unwrap_or(false),
+        allow_row_additions: false, // KEY: Phase 2 treats everything as existing
+        key_prefix_count: if key_prefix_count > 0 {
+            Some(key_prefix_count)
+        } else {
+            None
+        },
         key_prefix_headers: None,
         parent_groups: None,
         user_prompt: String::new(),
@@ -169,7 +182,8 @@ pub fn trigger_phase2_deep_review(
     };
 
     // Pretty-print payload for logging
-    let payload_pretty = serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload_json.clone());
+    let payload_pretty =
+        serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload_json.clone());
 
     // Add log entry with request payload BEFORE sending
     state.add_ai_call_log(
@@ -187,7 +201,7 @@ pub fn trigger_phase2_deep_review(
 
     // Set flag to route next result as Phase 2
     state.ai_expecting_phase2_result = true;
-    
+
     info!("PHASE 2: Spawning batch task now...");
     spawn_batch_task(
         runtime,
@@ -231,7 +245,7 @@ pub fn handle_deep_review_result_phase2(
             if state.ai_expecting_phase2_result {
                 state.ai_completed_tasks += 1;
             }
-            
+
             if let Some(raw) = &ev.raw_response {
                 state.ai_raw_output_display = raw.clone();
                 let status = format!("Phase 2 complete - {} row(s) processed", rows.len());
@@ -240,12 +254,12 @@ pub fn handle_deep_review_result_phase2(
 
             // Now process the results properly
             super::results::setup_context_prefixes(state, registry, ev);
-            
+
             // Clear previous reviews before populating from Phase 2
             state.ai_row_reviews.clear();
             state.ai_new_row_reviews.clear();
             state.ai_structure_reviews.clear();
-            
+
             // Process originals
             let orig_slice = &rows[0..phase1.original_count];
             process_original_rows_from_phase2(state, registry, &phase1, orig_slice);
@@ -255,7 +269,13 @@ pub fn handle_deep_review_result_phase2(
             let dup_end = established_row_count;
             if dup_end > dup_start {
                 let dup_slice = &rows[dup_start..dup_end];
-                process_duplicate_rows_from_phase2(state, registry, &phase1, dup_slice, duplicate_indices);
+                process_duplicate_rows_from_phase2(
+                    state,
+                    registry,
+                    &phase1,
+                    dup_slice,
+                    duplicate_indices,
+                );
             }
 
             // Process new AI-added rows
@@ -266,9 +286,10 @@ pub fn handle_deep_review_result_phase2(
 
             // Restore original row indices for structure processing
             state.ai_last_send_root_rows = phase1.original_row_indices.clone();
-            
+
             // Enqueue structure jobs
-            let expected_structure_jobs = enqueue_structure_jobs_for_batch(state, registry, Some(&phase1));
+            let expected_structure_jobs =
+                enqueue_structure_jobs_for_batch(state, registry, Some(&phase1));
 
             state.ai_batch_has_undecided_merge = state
                 .ai_new_row_reviews
@@ -277,7 +298,7 @@ pub fn handle_deep_review_result_phase2(
 
             state.ai_mode = crate::ui::elements::editor::state::AiModeState::ResultsReady;
             state.refresh_structure_waiting_state();
-            
+
             info!(
                 "PHASE 2 COMPLETE: {} originals, {} duplicates, {} new, {} structures",
                 phase1.original_count,
@@ -302,7 +323,7 @@ fn process_original_rows_from_phase2(
     orig_slice: &[Vec<String>],
 ) {
     use crate::ui::elements::editor::state::RowReview;
-    
+
     // Same as before but using Phase 1 context
     let included = &phase1.included_columns;
     let cat_ctx = &phase1.category;
@@ -318,8 +339,9 @@ fn process_original_rows_from_phase2(
             continue;
         }
 
-        let (original_snapshot, ai_snapshot) =
-            create_row_snapshots(registry, cat_ctx, sheet_ctx, row_index, suggestion, included);
+        let (original_snapshot, ai_snapshot) = create_row_snapshots(
+            registry, cat_ctx, sheet_ctx, row_index, suggestion, included,
+        );
 
         let choices = generate_review_choices(&original_snapshot, &ai_snapshot);
 
@@ -334,10 +356,9 @@ fn process_original_rows_from_phase2(
         // Cache original row
         if let Some(sheet_ref) = registry.get_sheet(cat_ctx, sheet_ctx) {
             if let Some(full_row) = sheet_ref.grid.get(row_index) {
-                state.ai_original_row_snapshot_cache.insert(
-                    (Some(row_index), None),
-                    full_row.clone(),
-                );
+                state
+                    .ai_original_row_snapshot_cache
+                    .insert((Some(row_index), None), full_row.clone());
             }
         }
     }
@@ -381,11 +402,15 @@ fn process_duplicate_rows_from_phase2(
 
         // Find the matched existing row
         let sheet_ctx_opt = Some(sheet_ctx.clone());
+        // Choose a key column that isn't the technical parent_key (1)
+        let key_actual_col_opt = included.iter().copied().find(|&c| c != 1).or_else(|| included.first().copied());
+
         let (duplicate_match_row, choices, original_for_merge, merge_selected) =
             super::results::check_for_duplicate(
                 &ai_snapshot,
                 &first_col_value_to_row,
                 included,
+                key_actual_col_opt,
                 cat_ctx,
                 &sheet_ctx_opt,
                 registry,
@@ -407,10 +432,9 @@ fn process_duplicate_rows_from_phase2(
         if let Some(matched_idx) = duplicate_match_row {
             if let Some(sheet_ref) = registry.get_sheet(cat_ctx, sheet_ctx) {
                 if let Some(full_row) = sheet_ref.grid.get(matched_idx) {
-                    state.ai_original_row_snapshot_cache.insert(
-                        (None, Some(new_row_idx)),
-                        full_row.clone(),
-                    );
+                    state
+                        .ai_original_row_snapshot_cache
+                        .insert((None, Some(new_row_idx)), full_row.clone());
                 }
             }
         }
@@ -452,10 +476,9 @@ fn process_new_rows_from_phase2(
             if let Some(meta) = &sheet_ref.metadata {
                 let empty_row = vec![String::new(); meta.columns.len()];
                 let new_row_idx = state.ai_new_row_reviews.len() - 1;
-                state.ai_original_row_snapshot_cache.insert(
-                    (None, Some(new_row_idx)),
-                    empty_row,
-                );
+                state
+                    .ai_original_row_snapshot_cache
+                    .insert((None, Some(new_row_idx)), empty_row);
             }
         }
     }

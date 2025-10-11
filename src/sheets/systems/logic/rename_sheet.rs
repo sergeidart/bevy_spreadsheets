@@ -82,7 +82,10 @@ pub fn handle_rename_request(
                     }
                     // In DB mode, there are no filesystem files to rename or save.
                     if meta_to_save.category.is_some() {
-                        info!("DB mode: Skipping JSON file save for renamed sheet '{:?}/{}'", category, new_name);
+                        info!(
+                            "DB mode: Skipping JSON file save for renamed sheet '{:?}/{}'",
+                            category, new_name
+                        );
                     }
 
                     // --- Request File Renames using updated metadata ---
@@ -132,7 +135,10 @@ pub fn handle_rename_request(
                             });
                         }
                     } else {
-                        info!("DB mode: Skipping grid file rename request for '{:?}/{}'", category, new_name);
+                        info!(
+                            "DB mode: Skipping grid file rename request for '{:?}/{}'",
+                            category, new_name
+                        );
                     }
 
                     if meta_to_save.category.is_none() {
@@ -151,7 +157,10 @@ pub fn handle_rename_request(
                             });
                         }
                     } else {
-                        info!("DB mode: Skipping meta file rename request for '{:?}/{}'", category, new_name);
+                        info!(
+                            "DB mode: Skipping meta file rename request for '{:?}/{}'",
+                            category, new_name
+                        );
                     }
                 } else {
                     // Should not happen if rename_sheet succeeded

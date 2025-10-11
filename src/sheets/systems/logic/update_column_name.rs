@@ -58,7 +58,12 @@ pub fn handle_update_column_name(
                 .get_sheet(category, sheet_name)
                 .and_then(|s| s.metadata.as_ref())
                 .and_then(|m| m.columns.get(col_index))
-                .map(|c| matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure)))
+                .map(|c| {
+                    matches!(
+                        c.validator,
+                        Some(crate::sheets::definitions::ColumnValidator::Structure)
+                    )
+                })
                 .unwrap_or(false);
             let is_structure_sheet = registry.is_structure_table(category, sheet_name);
             (was_structure, is_structure_sheet)

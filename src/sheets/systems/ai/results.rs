@@ -4,21 +4,18 @@
 use bevy::prelude::*;
 use std::collections::HashMap;
 
-use crate::sheets::events::{
-    AiBatchResultKind, AiBatchTaskResult, SheetOperationFeedback,
-};
+use crate::sheets::events::{AiBatchResultKind, AiBatchTaskResult, SheetOperationFeedback};
 use crate::sheets::resources::SheetRegistry;
 use crate::ui::elements::editor::state::{
     EditorWindowState, NewRowReview, ReviewChoice, RowReview,
 };
 
+use super::phase2_helpers;
 use super::row_helpers::{
-    create_row_snapshots, extract_ai_snapshot_from_new_row,
-    extract_original_snapshot_for_merge, generate_review_choices, normalize_cell_value,
-    skip_key_prefix,
+    create_row_snapshots, extract_ai_snapshot_from_new_row, extract_original_snapshot_for_merge,
+    generate_review_choices, normalize_cell_value, skip_key_prefix,
 };
 use super::structure_results::{handle_structure_error, process_structure_partition};
-use super::phase2_helpers;
 
 // Re-export legacy single-row handler for backwards compatibility
 pub use super::legacy::handle_ai_task_results;
@@ -36,7 +33,7 @@ pub fn handle_ai_batch_results(
     if ev_batch.is_empty() {
         return;
     }
-    
+
     for ev in ev_batch.read() {
         // Check if we're expecting a Phase 2 result (flag-based routing)
         if state.ai_expecting_phase2_result {
@@ -45,18 +42,43 @@ pub fn handle_ai_batch_results(
                 let duplicate_indices = phase1.duplicate_indices.clone();
                 let established_row_count = phase1.original_count + duplicate_indices.len();
                 state.ai_expecting_phase2_result = false;
-                phase2_helpers::handle_deep_review_result_phase2(ev, &duplicate_indices, established_row_count, &mut state, &registry, &mut feedback_writer);
+                phase2_helpers::handle_deep_review_result_phase2(
+                    ev,
+                    &duplicate_indices,
+                    established_row_count,
+                    &mut state,
+                    &registry,
+                    &mut feedback_writer,
+                );
             } else {
                 error!("Phase 2 result expected but no Phase 1 data found!");
                 state.ai_expecting_phase2_result = false;
             }
         } else {
             match &ev.kind {
-                AiBatchResultKind::Root { structure_context: Some(context) } => {
-                    handle_structure_batch_result(ev, context, &mut state, &registry, &mut feedback_writer);
+                AiBatchResultKind::Root {
+                    structure_context: Some(context),
+                } => {
+                    handle_structure_batch_result(
+                        ev,
+                        context,
+                        &mut state,
+                        &registry,
+                        &mut feedback_writer,
+                    );
                 }
-                AiBatchResultKind::Root { structure_context: None } => {
-                    handle_root_batch_result_phase1(ev, &mut state, &registry, &mut feedback_writer, &mut commands, &runtime, &session_api_key);
+                AiBatchResultKind::Root {
+                    structure_context: None,
+                } => {
+                    handle_root_batch_result_phase1(
+                        ev,
+                        &mut state,
+                        &registry,
+                        &mut feedback_writer,
+                        &mut commands,
+                        &runtime,
+                        &session_api_key,
+                    );
                 }
                 AiBatchResultKind::DeepReview { .. } => {
                     error!("Unexpected DeepReview result kind without flag set!");
@@ -102,7 +124,10 @@ fn handle_root_batch_result_phase1(
 
             if let Some(raw) = &ev.raw_response {
                 state.ai_raw_output_display = raw.clone();
-                let status = format!("Phase 1 complete - {} row(s) received, analyzing...", rows.len());
+                let status = format!(
+                    "Phase 1 complete - {} row(s) received, analyzing...",
+                    rows.len()
+                );
                 state.add_ai_call_log(status, Some(raw.clone()), None, false);
             }
 
@@ -130,28 +155,30 @@ fn handle_root_batch_result_phase1(
             // Store Phase 1 intermediate data
             let (cat_ctx, sheet_ctx) = state.current_sheet_context();
             let sheet_name = sheet_ctx.unwrap_or_default();
-            
-            state.ai_phase1_intermediate = Some(crate::ui::elements::editor::state::Phase1IntermediateData {
-                all_ai_rows: rows.clone(),
-                duplicate_indices: duplicate_indices.clone(),
-                original_count: originals,
-                included_columns: ev.included_non_structure_columns.clone(),
-                category: cat_ctx.clone(),
-                sheet_name: sheet_name.clone(),
-                key_prefix_count: ev.key_prefix_count,
-                original_row_indices: ev.original_row_indices.clone(),
-            });
+
+            state.ai_phase1_intermediate =
+                Some(crate::ui::elements::editor::state::Phase1IntermediateData {
+                    all_ai_rows: rows.clone(),
+                    duplicate_indices: duplicate_indices.clone(),
+                    original_count: originals,
+                    included_columns: ev.included_non_structure_columns.clone(),
+                    category: cat_ctx.clone(),
+                    sheet_name: sheet_name.clone(),
+                    key_prefix_count: ev.key_prefix_count,
+                    original_row_indices: ev.original_row_indices.clone(),
+                });
 
             // OPTIMIZATION 1: Skip Phase 2 if only one column is being processed
             // With single column, there's no merge complexity, so use Phase 1 results directly
             let skip_phase2_single_column = ev.included_non_structure_columns.len() <= 1;
-            
+
             // OPTIMIZATION 2: Skip Phase 2 if in structure sheet and no planned structure paths
             // When working within a real structure sheet directly, we don't need deep review
             // since there are no parent structures to include in the context
             let in_structure_sheet = !state.structure_navigation_stack.is_empty();
-            let skip_phase2_structure_context = in_structure_sheet && state.ai_planned_structure_paths.is_empty();
-            
+            let skip_phase2_structure_context =
+                in_structure_sheet && state.ai_planned_structure_paths.is_empty();
+
             if skip_phase2_single_column || skip_phase2_structure_context {
                 if skip_phase2_single_column {
                     info!(
@@ -164,10 +191,10 @@ fn handle_root_batch_result_phase1(
                         "STRUCTURE-CONTEXT OPTIMIZATION: Skipping Phase 2 (in structure view with no parent structures), using Phase 1 results directly"
                     );
                 }
-                
+
                 // Phase 1 complete (and skipping Phase 2)
                 state.ai_completed_tasks += 1;
-                
+
                 // Process Phase 1 results directly as final results
                 let established_row_count = originals + duplicate_indices.len();
                 phase2_helpers::handle_deep_review_result_phase2(
@@ -183,7 +210,7 @@ fn handle_root_batch_result_phase1(
                 state.ai_completed_tasks += 1;
                 // Update total to include Phase 2
                 state.ai_total_tasks += 1;
-                
+
                 // Trigger Phase 2: Deep review call
                 phase2_helpers::trigger_phase2_deep_review(
                     state,
@@ -231,17 +258,16 @@ pub(super) fn setup_context_prefixes(
 
         if let Some(sheet) = registry.get_sheet(&anc_cat, &anc_sheet) {
             if let Some(meta) = &sheet.metadata {
-                if let Some(key_col_index) = meta
-                    .columns
-                    .iter()
-                    .find_map(|c| {
-                        if matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure)) {
-                            c.structure_key_parent_column_index
-                        } else {
-                            None
-                        }
-                    })
-                {
+                if let Some(key_col_index) = meta.columns.iter().find_map(|c| {
+                    if matches!(
+                        c.validator,
+                        Some(crate::sheets::definitions::ColumnValidator::Structure)
+                    ) {
+                        c.structure_key_parent_column_index
+                    } else {
+                        None
+                    }
+                }) {
                     if let Some(col_def) = meta.columns.get(key_col_index) {
                         key_headers.push(col_def.header.clone());
                     }
@@ -305,8 +331,9 @@ fn process_original_rows(
             continue;
         };
 
-        let (original_snapshot, ai_snapshot) =
-            create_row_snapshots(registry, &cat_ctx, sheet_name, row_index, suggestion, included);
+        let (original_snapshot, ai_snapshot) = create_row_snapshots(
+            registry, &cat_ctx, sheet_name, row_index, suggestion, included,
+        );
 
         let choices = generate_review_choices(&original_snapshot, &ai_snapshot);
 
@@ -323,10 +350,9 @@ fn process_original_rows(
         if let Some(sheet_name) = &sheet_ctx {
             if let Some(sheet_ref) = registry.get_sheet(&cat_ctx, sheet_name) {
                 if let Some(full_row) = sheet_ref.grid.get(row_index) {
-                    state.ai_original_row_snapshot_cache.insert(
-                        (Some(row_index), None),
-                        full_row.clone(),
-                    );
+                    state
+                        .ai_original_row_snapshot_cache
+                        .insert((Some(row_index), None), full_row.clone());
                 }
             }
         }
@@ -344,12 +370,15 @@ fn process_new_rows(
     let (cat_ctx, sheet_ctx) = state.current_sheet_context();
 
     // Build duplicate detection map
+    // Choose a key column to detect duplicates that is NOT the technical parent_key (col 1)
+    // If all included columns are parent_key (unlikely), fall back to the first one.
+    let key_actual_col_opt = included.iter().copied().find(|&c| c != 1).or_else(|| included.first().copied());
     let mut first_col_value_to_row: HashMap<String, usize> = HashMap::new();
-    if let Some(first_col_actual) = included.first() {
+    if let Some(first_col_actual) = key_actual_col_opt {
         if let Some(sheet_name) = &sheet_ctx {
             if let Some(sheet_ref) = registry.get_sheet(&cat_ctx, sheet_name) {
                 for (row_idx, row) in sheet_ref.grid.iter().enumerate() {
-                    if let Some(val) = row.get(*first_col_actual) {
+                    if let Some(val) = row.get(first_col_actual) {
                         let norm = normalize_cell_value(val);
                         if !norm.is_empty() {
                             first_col_value_to_row.entry(norm).or_insert(row_idx);
@@ -381,6 +410,7 @@ fn process_new_rows(
                 &ai_snapshot,
                 &first_col_value_to_row,
                 included,
+                key_actual_col_opt,
                 &cat_ctx,
                 &sheet_ctx,
                 registry,
@@ -405,10 +435,9 @@ fn process_new_rows(
             if let Some(sheet_name) = &sheet_ctx {
                 if let Some(sheet_ref) = registry.get_sheet(&cat_ctx, sheet_name) {
                     if let Some(full_row) = sheet_ref.grid.get(matched_idx) {
-                        state.ai_original_row_snapshot_cache.insert(
-                            (None, Some(new_row_idx)),
-                            full_row.clone(),
-                        );
+                        state
+                            .ai_original_row_snapshot_cache
+                            .insert((None, Some(new_row_idx)), full_row.clone());
                     }
                 }
             }
@@ -418,10 +447,9 @@ fn process_new_rows(
                 if let Some(sheet_ref) = registry.get_sheet(&cat_ctx, sheet_name) {
                     if let Some(meta) = &sheet_ref.metadata {
                         let empty_row = vec![String::new(); meta.columns.len()];
-                        state.ai_original_row_snapshot_cache.insert(
-                            (None, Some(new_row_idx)),
-                            empty_row,
-                        );
+                        state
+                            .ai_original_row_snapshot_cache
+                            .insert((None, Some(new_row_idx)), empty_row);
                     }
                 }
             }
@@ -434,6 +462,7 @@ pub(super) fn check_for_duplicate(
     ai_snapshot: &[String],
     first_col_value_to_row: &HashMap<String, usize>,
     included: &[usize],
+    key_actual_col_opt: Option<usize>,
     cat_ctx: &Option<String>,
     sheet_ctx: &Option<String>,
     registry: &SheetRegistry,
@@ -443,7 +472,15 @@ pub(super) fn check_for_duplicate(
     Option<Vec<String>>,
     bool,
 ) {
-    let Some(first_val) = ai_snapshot.get(0) else {
+    // Determine the ai_snapshot index corresponding to the chosen actual column
+    let ai_index = if let Some(actual_col) = key_actual_col_opt {
+        // Map actual_col to position within included[]
+        included.iter().position(|&c| c == actual_col).unwrap_or(0)
+    } else {
+        0
+    };
+
+    let Some(first_val) = ai_snapshot.get(ai_index) else {
         return (None, None, None, false);
     };
 
@@ -465,6 +502,7 @@ pub(super) fn check_for_duplicate(
     };
 
     let orig_vec = extract_original_snapshot_for_merge(existing_row, included);
+    // When generating choices, align the ai_snapshot with included[]; ai_snapshot is already in included order
     let choices = generate_review_choices(&orig_vec, ai_snapshot);
 
     (Some(matched_row_index), Some(choices), Some(orig_vec), true)
@@ -482,8 +520,7 @@ pub(super) fn handle_root_batch_error(
             format!("Batch Error: {}\n--- Raw Model Output ---\n{}", err, raw);
         state.add_ai_call_log(format!("Error: {}", err), Some(raw.clone()), None, true);
     } else {
-        state.ai_raw_output_display =
-            format!("Batch Error: {} (no raw output returned)", err);
+        state.ai_raw_output_display = format!("Batch Error: {} (no raw output returned)", err);
         state.add_ai_call_log(format!("Error: {}", err), None, None, true);
     }
 

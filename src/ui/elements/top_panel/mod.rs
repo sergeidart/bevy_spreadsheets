@@ -13,7 +13,7 @@ use crate::ui::elements::editor::main_editor::SheetEventWriters;
 use crate::visual_copier::events::RequestAppExit;
 
 // Declare sub-modules
-pub mod sheet_management_bar;
+// sheet_management_bar moved to bottom_panel
 // quick_copy_bar removed: Quick Copy UI now lives inside Settings popup
 mod sheet_interaction_modes;
 pub mod controls {

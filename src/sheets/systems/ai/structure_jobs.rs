@@ -4,7 +4,9 @@
 use bevy::prelude::*;
 
 use crate::sheets::resources::SheetRegistry;
-use crate::ui::elements::editor::state::{EditorWindowState, Phase1IntermediateData, StructureNewRowContext, StructureSendJob};
+use crate::ui::elements::editor::state::{
+    EditorWindowState, Phase1IntermediateData, StructureNewRowContext, StructureSendJob,
+};
 
 /// Enqueue structure jobs for a batch result, preparing tokens for new rows
 pub fn enqueue_structure_jobs_for_batch(
@@ -73,27 +75,28 @@ pub fn enqueue_structure_jobs_for_batch(
         }
 
         if !state.ai_new_row_reviews.is_empty() {
-            let new_row_context_inputs: Vec<(usize, Vec<(usize, String)>, Option<Vec<String>>)> = state
-                .ai_new_row_reviews
-                .iter()
-                .enumerate()
-                .map(|(new_idx, nr)| {
-                    let non_structure_values = nr
-                        .non_structure_columns
-                        .iter()
-                        .zip(nr.ai.iter())
-                        .map(|(col_idx, value)| (*col_idx, value.clone()))
-                        .collect();
-                    
-                    // Extract full AI row from phase1_data if available
-                    let full_ai_row = phase1_data.and_then(|phase1| {
-                        let row_index_in_phase1 = phase1.original_count + new_idx;
-                        phase1.all_ai_rows.get(row_index_in_phase1).cloned()
-                    });
-                    
-                    (new_idx, non_structure_values, full_ai_row)
-                })
-                .collect();
+            let new_row_context_inputs: Vec<(usize, Vec<(usize, String)>, Option<Vec<String>>)> =
+                state
+                    .ai_new_row_reviews
+                    .iter()
+                    .enumerate()
+                    .map(|(new_idx, nr)| {
+                        let non_structure_values = nr
+                            .non_structure_columns
+                            .iter()
+                            .zip(nr.ai.iter())
+                            .map(|(col_idx, value)| (*col_idx, value.clone()))
+                            .collect();
+
+                        // Extract full AI row from phase1_data if available
+                        let full_ai_row = phase1_data.and_then(|phase1| {
+                            let row_index_in_phase1 = phase1.original_count + new_idx;
+                            phase1.all_ai_rows.get(row_index_in_phase1).cloned()
+                        });
+
+                        (new_idx, non_structure_values, full_ai_row)
+                    })
+                    .collect();
 
             for (new_idx, non_structure_values, full_ai_row) in new_row_context_inputs {
                 let token = state.allocate_structure_new_row_token();

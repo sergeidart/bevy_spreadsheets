@@ -78,24 +78,35 @@ pub fn handle_cell_update(
                 if let Some(sheet_data) = registry.get_sheet_mut(&category, &sheet_name) {
                     if let Some(row) = sheet_data.grid.get_mut(row_idx) {
                         // Precompute column metadata details outside of the mutable cell borrow scope
-                        let (col_header, is_structure_col, looks_like_real_structure) = if let Some(meta) = &sheet_data.metadata {
-                            let header = meta
-                                .columns
-                                .get(col_idx)
-                                .map(|c| c.header.clone())
-                                .unwrap_or_default();
-                            let is_struct = meta
-                                .columns
-                                .get(col_idx)
-                                .map(|c| matches!(c.validator, Some(ColumnValidator::Structure)))
-                                .unwrap_or(false);
-                            let looks_like_struct = meta.columns.len() >= 2
-                                && meta.columns.get(0).map(|c| c.header.eq_ignore_ascii_case("id")).unwrap_or(false)
-                                && meta.columns.get(1).map(|c| c.header.eq_ignore_ascii_case("parent_key")).unwrap_or(false);
-                            (header, is_struct, looks_like_struct)
-                        } else {
-                            (String::new(), false, false)
-                        };
+                        let (col_header, is_structure_col, looks_like_real_structure) =
+                            if let Some(meta) = &sheet_data.metadata {
+                                let header = meta
+                                    .columns
+                                    .get(col_idx)
+                                    .map(|c| c.header.clone())
+                                    .unwrap_or_default();
+                                let is_struct = meta
+                                    .columns
+                                    .get(col_idx)
+                                    .map(|c| {
+                                        matches!(c.validator, Some(ColumnValidator::Structure))
+                                    })
+                                    .unwrap_or(false);
+                                let looks_like_struct = meta.columns.len() >= 2
+                                    && meta
+                                        .columns
+                                        .get(0)
+                                        .map(|c| c.header.eq_ignore_ascii_case("id"))
+                                        .unwrap_or(false)
+                                    && meta
+                                        .columns
+                                        .get(1)
+                                        .map(|c| c.header.eq_ignore_ascii_case("parent_key"))
+                                        .unwrap_or(false);
+                                (header, is_struct, looks_like_struct)
+                            } else {
+                                (String::new(), false, false)
+                            };
 
                         let mut changed = false;
                         let mut updated_val_for_db: Option<String> = None;
@@ -173,7 +184,8 @@ pub fn handle_cell_update(
                                 });
                                 // Persist to DB for DB-backed sheets
                                 if let Some(cat) = &metadata.category {
-                                    let base = crate::sheets::systems::io::get_default_data_base_path();
+                                    let base =
+                                        crate::sheets::systems::io::get_default_data_base_path();
                                     let db_path = base.join(format!("{}.db", cat));
                                     if db_path.exists() {
                                         if let Ok(conn) = rusqlite::Connection::open(&db_path) {
@@ -182,7 +194,10 @@ pub fn handle_cell_update(
                                                 if col_idx >= 2 {
                                                     // Safe to read id now as the mutable borrow to the cell is dropped
                                                     let id_str_opt_from_row = row.get(0).cloned();
-                                                    if let (Some(id_str), Some(val)) = (id_str_opt_from_row, updated_val_for_db.as_ref()) {
+                                                    if let (Some(id_str), Some(val)) = (
+                                                        id_str_opt_from_row,
+                                                        updated_val_for_db.as_ref(),
+                                                    ) {
                                                         if let Ok(row_id) = id_str.parse::<i64>() {
                                                             let _ = crate::sheets::database::writer::DbWriter::update_structure_cell_by_id(
                                                                 &conn,
@@ -203,6 +218,128 @@ pub fn handle_cell_update(
                                                         &col_header,
                                                         val,
                                                     );
+                                                }
+                                            } else {
+                                                // Main-sheet structure JSON updated: reflect into structure table rows
+                                                if let Some(meta) = &sheet_data.metadata {
+                                                    // Determine structure schema
+                                                    if let Some(col_def) = meta.columns.get(col_idx)
+                                                    {
+                                                        if col_def.validator
+                                                            == Some(ColumnValidator::Structure)
+                                                        {
+                                                            if let Some(schema) =
+                                                                &col_def.structure_schema
+                                                            {
+                                                                // Resolve parent_id of this main row
+                                                                if let Ok(parent_id) = conn.query_row(
+                                                                    &format!("SELECT id FROM \"{}\" WHERE row_index = ?", sheet_name),
+                                                                    [row_idx as i32],
+                                                                    |r| r.get::<_, i64>(0),
+                                                                ) {
+                                                                    let structure_table = format!("{}_{}", sheet_name, col_header);
+                                                                    // Build parent_key: prefer configured key column
+                                                                    let parent_key: String = if let Some(kidx) = col_def.structure_key_parent_column_index {
+                                                                        row.get(kidx).cloned().unwrap_or_default()
+                                                                    } else {
+                                                                        // Fallback per migration
+                                                                        let mut idx_opt: Option<usize> = None;
+                                                                        for (i, cdef) in meta.columns.iter().enumerate() {
+                                                                            if cdef.header.eq_ignore_ascii_case("Key") { idx_opt = Some(i); break; }
+                                                                        }
+                                                                        if idx_opt.is_none() {
+                                                                            for (i, cdef) in meta.columns.iter().enumerate() {
+                                                                                if cdef.header.eq_ignore_ascii_case("Name") { idx_opt = Some(i); break; }
+                                                                            }
+                                                                        }
+                                                                        if idx_opt.is_none() {
+                                                                            for (i, cdef) in meta.columns.iter().enumerate() {
+                                                                                if cdef.header.eq_ignore_ascii_case("ID") { idx_opt = Some(i); break; }
+                                                                            }
+                                                                        }
+                                                                        idx_opt.and_then(|i| row.get(i).cloned()).unwrap_or_default()
+                                                                    };
+
+                                                                    // Parse JSON from updated cell
+                                                                    let parsed = updated_val_for_db.as_deref().unwrap_or("[]");
+                                                                    let val: serde_json::Value = serde_json::from_str(parsed).unwrap_or(serde_json::Value::Null);
+
+                                                                    // Helper: normalize any value to string
+                                                                    fn json_to_str(v: &serde_json::Value) -> String {
+                                                                        match v {
+                                                                            serde_json::Value::Null => String::new(),
+                                                                            serde_json::Value::Bool(b) => b.to_string(),
+                                                                            serde_json::Value::Number(n) => n.to_string(),
+                                                                            serde_json::Value::String(s) => s.clone(),
+                                                                            _ => v.to_string(),
+                                                                        }
+                                                                    }
+
+                                                                    // Expand to rows consistent with schema order
+                                                                    let mut rows_to_insert: Vec<Vec<String>> = Vec::new();
+                                                                    match val {
+                                                                        serde_json::Value::Array(arr) => {
+                                                                            if arr.iter().all(|v| v.is_object()) {
+                                                                                for obj in arr {
+                                                                                    if let serde_json::Value::Object(m) = obj {
+                                                                                        let mut row_vec: Vec<String> = Vec::with_capacity(schema.len());
+                                                                                        for f in schema { row_vec.push(m.get(&f.header).map(json_to_str).unwrap_or_default()); }
+                                                                                        if row_vec.iter().any(|s| !s.trim().is_empty()) { rows_to_insert.push(row_vec); }
+                                                                                    }
+                                                                                }
+                                                                            } else if arr.iter().all(|v| v.is_array()) {
+                                                                                for a in arr {
+                                                                                    if let serde_json::Value::Array(inner) = a {
+                                                                                        let mut row_vec: Vec<String> = inner.iter().map(json_to_str).collect();
+                                                                                        if row_vec.len() < schema.len() { row_vec.resize(schema.len(), String::new()); }
+                                                                                        if row_vec.iter().any(|s| !s.trim().is_empty()) { rows_to_insert.push(row_vec); }
+                                                                                    }
+                                                                                }
+                                                                            } else {
+                                                                                // Array of primitives -> map by position
+                                                                                let mut row_vec: Vec<String> = arr.iter().map(json_to_str).collect();
+                                                                                if row_vec.len() < schema.len() { row_vec.resize(schema.len(), String::new()); }
+                                                                                if row_vec.iter().any(|s| !s.trim().is_empty()) { rows_to_insert.push(row_vec); }
+                                                                            }
+                                                                        }
+                                                                        serde_json::Value::Object(m) => {
+                                                                            let mut row_vec: Vec<String> = Vec::with_capacity(schema.len());
+                                                                            for f in schema { row_vec.push(m.get(&f.header).map(json_to_str).unwrap_or_default()); }
+                                                                            if row_vec.iter().any(|s| !s.trim().is_empty()) { rows_to_insert.push(row_vec); }
+                                                                        }
+                                                                        _ => {}
+                                                                    }
+
+                                                                    // Replace existing child rows for this parent_id
+                                                                    let tx = conn.unchecked_transaction().ok();
+                                                                    if let Some(tx) = tx {
+                                                                        let _ = tx.execute(
+                                                                            &format!("DELETE FROM \"{}\" WHERE parent_id = ?", structure_table),
+                                                                            [parent_id],
+                                                                        );
+                                                                        if !rows_to_insert.is_empty() {
+                                                                            let field_cols = schema.iter().map(|f| format!("\"{}\"", f.header)).collect::<Vec<_>>().join(", ");
+                                                                            let placeholders = std::iter::repeat("?").take(3 + schema.len()).collect::<Vec<_>>().join(", ");
+                                                                            let insert_sql = format!("INSERT INTO \"{}\" (parent_id, row_index, parent_key, {}) VALUES ({})", structure_table, field_cols, placeholders);
+                                                                            if let Ok(mut stmt) = tx.prepare(&insert_sql) {
+                                                                                for (sidx, srow) in rows_to_insert.iter().enumerate() {
+                                                                                    let mut padded = srow.clone();
+                                                                                    if padded.len() < schema.len() { padded.resize(schema.len(), String::new()); }
+                                                                                    let mut params: Vec<rusqlite::types::Value> = Vec::with_capacity(3 + schema.len());
+                                                                                    params.push(rusqlite::types::Value::Integer(parent_id));
+                                                                                    params.push(rusqlite::types::Value::Integer(sidx as i64));
+                                                                                    params.push(rusqlite::types::Value::Text(parent_key.clone()));
+                                                                                    for v in padded { params.push(rusqlite::types::Value::Text(v)); }
+                                                                                    let _ = stmt.execute(rusqlite::params_from_iter(params.iter()));
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                        let _ = tx.commit();
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }

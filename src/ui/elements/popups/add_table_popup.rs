@@ -5,7 +5,7 @@ use crate::ui::elements::editor::state::EditorWindowState;
 use crate::ui::elements::popups::MigrationPopupState;
 
 /// Renders the "Add Table" popup for database mode.
-/// 
+///
 /// This popup allows the user to:
 /// 1. Enter a name for a new table (manual creation - TODO)
 /// 2. Click "Migrate from JSON" to open the migration popup
@@ -51,7 +51,10 @@ pub fn show_add_table_popup(
                         .clicked()
                     {
                         // TODO: Implement manual table creation via event
-                        info!("Manual table creation not yet implemented: {}", state.new_sheet_name_input);
+                        info!(
+                            "Manual table creation not yet implemented: {}",
+                            state.new_sheet_name_input
+                        );
                     }
 
                     // Migrate from JSON button
