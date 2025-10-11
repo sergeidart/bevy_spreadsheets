@@ -49,11 +49,8 @@ pub fn create_example_items_metadata() -> SheetMetadata {
         data_filename: EXAMPLE_ITEMS_FILENAME.to_string(),
         columns,
         ai_general_rule: None,
-        // --- MODIFIED: Initialize new AI model ID field and keep existing params ---
         ai_model_id: default_ai_model_id(),
         ai_temperature: None,
-        ai_top_k: None,
-        ai_top_p: None,
         requested_grounding_with_google_search: Default::default(),
         ai_enable_row_generation: false,
         ai_schema_groups: Vec::new(),
@@ -61,7 +58,6 @@ pub fn create_example_items_metadata() -> SheetMetadata {
         random_picker: None,
         structure_parent: None,
         hidden: false,
-        // --- END MODIFIED ---
     }
 }
 
@@ -94,11 +90,8 @@ pub fn create_simple_config_metadata() -> SheetMetadata {
         data_filename: SIMPLE_CONFIG_FILENAME.to_string(),
         columns,
         ai_general_rule: None,
-        // --- MODIFIED: Initialize new AI model ID field and keep existing params ---
         ai_model_id: default_ai_model_id(),
         ai_temperature: None,
-        ai_top_k: None,
-        ai_top_p: None,
         requested_grounding_with_google_search: Default::default(),
         ai_enable_row_generation: false,
         ai_schema_groups: Vec::new(),
@@ -106,6 +99,5 @@ pub fn create_simple_config_metadata() -> SheetMetadata {
         random_picker: None,
         structure_parent: None,
         hidden: false,
-        // --- END MODIFIED ---
     }
 }

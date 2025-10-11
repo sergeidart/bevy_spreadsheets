@@ -74,8 +74,6 @@ pub fn infer_schema_and_load_table(
         ai_general_rule: None,
         ai_model_id: "gemini-flash-latest".to_string(),
         ai_temperature: None,
-        ai_top_k: None,
-        ai_top_p: None,
         requested_grounding_with_google_search: Some(false),
         ai_enable_row_generation: false,
         ai_schema_groups: Vec::new(),

@@ -65,8 +65,6 @@ impl DbReader {
                 ai_general_rule: None,
                 ai_model_id: crate::sheets::definitions::default_ai_model_id(),
                 ai_temperature: None,
-                ai_top_k: None,
-                ai_top_p: None,
                 requested_grounding_with_google_search: crate::sheets::definitions::default_grounding_with_google_search(),
                 ai_enable_row_generation: false,
                 ai_schema_groups: Vec::new(),
@@ -268,8 +266,6 @@ impl DbReader {
             ai_general_rule: ai_context,
             ai_model_id: "gemini-flash-latest".to_string(),
             ai_temperature: None,
-            ai_top_k: None,
-            ai_top_p: None,
             requested_grounding_with_google_search: Some(ai_grounding.unwrap_or(0) != 0),
             ai_enable_row_generation: ai_allow_add_rows != 0,
             ai_schema_groups: Vec::new(), // TODO: Read from groups table

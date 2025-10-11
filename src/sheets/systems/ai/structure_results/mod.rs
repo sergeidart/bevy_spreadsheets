@@ -1,4 +1,4 @@
-// src/sheets/systems/ai/structure_results.rs
+// src/sheets/systems/ai/structure_results/mod.rs
 // Main assembly functions for processing structure batch results
 // Split into submodules: builder, cache, processor, schema
 
