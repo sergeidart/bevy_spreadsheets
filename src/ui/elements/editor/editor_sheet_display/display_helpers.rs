@@ -147,7 +147,7 @@ pub fn build_table_columns<'a>(
 /// Renders the left control cell (checkbox or empty space)
 pub fn render_control_cell(
     row: &mut egui_extras::TableRow,
-    state: &EditorWindowState,
+    state: &mut EditorWindowState,
     original_row_index: usize,
     row_height: f32,
 ) {
@@ -160,10 +160,17 @@ pub fn render_control_cell(
 
         if state.current_interaction_mode == SheetInteractionState::DeleteModeActive || ai_preparing
         {
-            let mut is_selected = state.ai_selected_rows.contains(&original_row_index);
-            let _response = ui.add(egui::Checkbox::without_text(&mut is_selected));
-            // Note: We can't mutate state here since it's immutable
-            // The checkbox reflects the current state but doesn't update it
+            let is_selected = state.ai_selected_rows.contains(&original_row_index);
+            let mut checkbox_state = is_selected;
+            let response = ui.add(egui::Checkbox::without_text(&mut checkbox_state));
+            if response.changed() {
+                // Update the HashSet to match the NEW checkbox state
+                if checkbox_state {
+                    state.ai_selected_rows.insert(original_row_index);
+                } else {
+                    state.ai_selected_rows.remove(&original_row_index);
+                }
+            }
         } else {
             ui.allocate_exact_size(egui::vec2(18.0, row_height), egui::Sense::hover());
         }

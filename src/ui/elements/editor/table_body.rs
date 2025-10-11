@@ -269,11 +269,16 @@ pub fn sheet_table_body(
                             matches!(state.current_interaction_mode, SheetInteractionState::DeleteModeActive);
 
                         if col_display_idx == 0 && show_checkbox {
-                            let mut is_selected = state.ai_selected_rows.contains(&original_row_index);
-                            let response = ui.add(egui::Checkbox::without_text(&mut is_selected));
+                            let is_selected = state.ai_selected_rows.contains(&original_row_index);
+                            let mut checkbox_state = is_selected;
+                            let response = ui.add(egui::Checkbox::without_text(&mut checkbox_state));
                             if response.changed() {
-                                if is_selected { state.ai_selected_rows.insert(original_row_index); }
-                                else { state.ai_selected_rows.remove(&original_row_index); }
+                                // Update the HashSet to match the NEW checkbox state
+                                if checkbox_state {
+                                    state.ai_selected_rows.insert(original_row_index);
+                                } else {
+                                    state.ai_selected_rows.remove(&original_row_index);
+                                }
                             }
                             // Right-click context menu for bulk row selection on visible rows
                             response.context_menu(|menu_ui| {
