@@ -208,21 +208,10 @@ pub fn prepend_row(
     let is_structure_table = column_names.iter().any(|name| name == "parent_id");
     
     // Find the maximum row_index and insert at max + 1
-    let max_index = if is_structure_table {
-        // For structure tables, get max row_index for this specific parent_id
-        let parent_id = row_data.get(0)
-            .and_then(|s| s.parse::<i64>().ok())
-            .ok_or_else(|| rusqlite::Error::InvalidParameterName("parent_id not found or invalid".into()))?;
-        
-        let max: Option<i32> = tx.query_row(
-            &format!("SELECT MAX(row_index) FROM \"{}\" WHERE parent_id = ?", table_name),
-            [parent_id],
-            |r| r.get(0),
-        ).unwrap_or(None);
-        
-        max.unwrap_or(-1) + 1
-    } else {
-        // For regular tables, get global max row_index
+    // IMPORTANT: row_index must be globally unique across the entire table,
+    // not per-parent for structure tables, to prevent collisions
+    let max_index = {
+        // Always use global MAX(row_index) for all table types
         let max: Option<i32> = tx.query_row(
             &format!("SELECT MAX(row_index) FROM \"{}\"", table_name),
             [],
@@ -230,8 +219,16 @@ pub fn prepend_row(
         ).unwrap_or(None);
         
         let next = max.unwrap_or(-1) + 1;
-        info!("prepend_row: table '{}', MAX(row_index)={:?}, using next_index={}", 
-              table_name, max, next);
+        if is_structure_table {
+            let parent_id = row_data.get(0)
+                .and_then(|s| s.parse::<i64>().ok())
+                .unwrap_or(0);
+            info!("prepend_row (structure): table '{}', parent_id={}, global MAX(row_index)={:?}, using next_index={}", 
+                  table_name, parent_id, max, next);
+        } else {
+            info!("prepend_row (regular): table '{}', MAX(row_index)={:?}, using next_index={}", 
+                  table_name, max, next);
+        }
         next
     };
     
@@ -262,26 +259,10 @@ pub fn prepend_rows_batch(
     let is_structure_table = column_names.iter().any(|name| name == "parent_id");
     
     // Find the starting row_index (max + 1)
-    let start_index = if is_structure_table {
-        // For structure tables, get max row_index for this specific parent_id
-        // All rows in batch must have same parent_id
-        let parent_id = rows_data.get(0)
-            .and_then(|row| row.get(0))
-            .and_then(|s| s.parse::<i64>().ok())
-            .ok_or_else(|| rusqlite::Error::InvalidParameterName("parent_id not found or invalid".into()))?;
-        
-        let max: Option<i32> = tx.query_row(
-            &format!("SELECT MAX(row_index) FROM \"{}\" WHERE parent_id = ?", table_name),
-            [parent_id],
-            |r| r.get(0),
-        ).unwrap_or(None);
-        
-        let next = max.unwrap_or(-1) + 1;
-        info!("prepend_rows_batch (structure): table '{}', parent_id={}, MAX(row_index)={:?}, using start_index={}", 
-              table_name, parent_id, max, next);
-        next
-    } else {
-        // For regular tables, get global max row_index
+    // IMPORTANT: row_index must be globally unique across the entire table,
+    // not per-parent for structure tables, to prevent collisions
+    let start_index = {
+        // Always use global MAX(row_index) for all table types
         let max: Option<i32> = tx.query_row(
             &format!("SELECT MAX(row_index) FROM \"{}\"", table_name),
             [],
@@ -296,12 +277,22 @@ pub fn prepend_rows_batch(
         ).unwrap_or(0);
         
         let next = max.unwrap_or(-1) + 1;
-        if max.is_none() && count > 0 {
-            warn!("prepend_rows_batch: table '{}' has {} rows but MAX(row_index) is NULL! Row indexes not initialized. Next will be 0.", 
-                  table_name, count);
+        
+        if is_structure_table {
+            let parent_id = rows_data.get(0)
+                .and_then(|row| row.get(0))
+                .and_then(|s| s.parse::<i64>().ok())
+                .unwrap_or(0);
+            info!("prepend_rows_batch (structure): table '{}', parent_id={}, global MAX(row_index)={:?}, using start_index={}", 
+                  table_name, parent_id, max, next);
+        } else {
+            if max.is_none() && count > 0 {
+                warn!("prepend_rows_batch: table '{}' has {} rows but MAX(row_index) is NULL! Row indexes not initialized. Next will be 0.", 
+                      table_name, count);
+            }
+            info!("prepend_rows_batch (regular): table '{}', row_count={}, MAX(row_index)={:?}, using start_index={}", 
+                  table_name, count, max, next);
         }
-        info!("prepend_rows_batch (regular): table '{}', row_count={}, MAX(row_index)={:?}, using start_index={}", 
-              table_name, count, max, next);
         next
     };
     
