@@ -145,9 +145,10 @@ pub fn persist_column_validator_by_name(
         Ok(conn) => {
             let _ = crate::sheets::database::schema::ensure_global_metadata_table(&conn)
                 .map_err(|e| e.to_string())?;
+            
             // Lookup column_index by name in the metadata table
             let meta_table = format!("{}_Metadata", table_name);
-            let idx_row: Option<i32> = conn
+            let persisted_idx: Option<i32> = conn
                 .query_row(
                     &format!("SELECT column_index FROM \"{}\" WHERE column_name = ?", meta_table),
                     [column_name],
@@ -156,11 +157,33 @@ pub fn persist_column_validator_by_name(
                 .optional()
                 .map_err(|e| e.to_string())?;
 
-            if let Some(ci) = idx_row {
+            if let Some(persisted_ci) = persisted_idx {
+                // Convert persisted index to runtime index
+                // Determine if this is a structure table
+                let table_type: Option<String> = conn
+                    .query_row(
+                        "SELECT table_type FROM _Metadata WHERE table_name = ?",
+                        [table_name],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .map_err(|e| e.to_string())?;
+                
+                let is_structure = matches!(table_type.as_deref(), Some("structure"));
+                
+                // Calculate runtime index by adding back the technical columns
+                let runtime_idx = if is_structure {
+                    // Structure tables have 2 technical columns (row_index, parent_key) before persisted columns
+                    persisted_ci as usize + 2
+                } else {
+                    // Regular tables have 1 technical column (row_index) before persisted columns
+                    persisted_ci as usize + 1
+                };
+                
                 crate::sheets::database::writer::DbWriter::update_column_validator(
                     &conn,
                     table_name,
-                    ci as usize,
+                    runtime_idx,
                     data_type,
                     validator,
                     ai_include_in_send,

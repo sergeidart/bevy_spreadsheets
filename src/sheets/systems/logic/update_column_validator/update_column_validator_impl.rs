@@ -27,6 +27,7 @@ pub fn handle_update_column_validator(
     mut feedback_writer: EventWriter<SheetOperationFeedback>,
     mut revalidation_writer: EventWriter<RequestSheetRevalidation>,
     mut data_modified_writer: EventWriter<SheetDataModifiedInRegistryEvent>,
+    mut editor_state: Option<ResMut<crate::ui::elements::editor::state::EditorWindowState>>,
 ) {
     // Track sheets whose metadata changed so we can save after loop with immutable borrow
     let mut sheets_to_save: HashMap<(Option<String>, String), SheetMetadata> = HashMap::new();
@@ -293,6 +294,21 @@ pub fn handle_update_column_validator(
             category: category.clone(),
             sheet_name: sheet_name.clone(),
         });
+        
+        // Clear linked column caches to force rebuild with new validator
+        if let Some(ref mut state) = editor_state {
+            // Clear both regular and normalized caches for the affected sheet
+            state.linked_column_cache.retain(|(sheet, _), _| {
+                sheet != sheet_name
+            });
+            state.linked_column_cache_normalized.retain(|(sheet, _), _| {
+                sheet != sheet_name
+            });
+            info!(
+                "Cleared linked column cache for sheet '{}' after validator update",
+                sheet_name
+            );
+        }
     }
 
     // --- Phase 2.5: Create structure sheets ---
