@@ -24,6 +24,7 @@ pub mod update_render_cache;
 
 pub use add_column::handle_add_column_request;
 pub use add_row::handle_add_row_request;
+pub use add_row::handle_add_rows_batch_request;
 pub use add_row::handle_create_ai_schema_group;
 pub use add_row::handle_delete_ai_schema_group;
 pub use add_row::handle_rename_ai_schema_group;

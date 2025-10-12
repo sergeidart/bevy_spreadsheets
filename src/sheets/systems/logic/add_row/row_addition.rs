@@ -31,7 +31,7 @@ pub fn handle_add_row_request(
         );
 
         // Get structure context (parent_key) if in structure navigation
-        let structure_context = get_structure_context(&editor_state, &sheet_name, &category);
+        let structure_context = get_structure_context(&editor_state, &sheet_name, &category, &registry);
 
         let mut metadata_cache: Option<crate::sheets::definitions::SheetMetadata> = None;
         let mut pending_json_save: Option<crate::sheets::definitions::SheetMetadata> = None;
@@ -43,12 +43,12 @@ pub fn handle_add_row_request(
                 // Unified behavior: always insert at top for consistency
                 sheet_data.grid.insert(0, vec![String::new(); num_cols]);
 
-                // Detect if this is a structure sheet by checking if it has 'id' and 'parent_key' columns at indices 0 and 1
+                // Detect if this is a structure sheet by checking if it has 'row_index' and 'parent_key' columns at indices 0 and 1
                 let is_structure_sheet = num_cols >= 2
                     && metadata
                         .columns
                         .get(0)
-                        .map(|c| c.header.eq_ignore_ascii_case("id"))
+                        .map(|c| c.header.eq_ignore_ascii_case("row_index"))
                         .unwrap_or(false)
                     && metadata
                         .columns
@@ -59,22 +59,9 @@ pub fn handle_add_row_request(
                 // Auto-fill structure sheet columns if in structure navigation context OR if this is a structure sheet
                 if is_structure_sheet {
                     if let Some(row0) = sheet_data.grid.get_mut(0) {
-                        // Auto-fill id column (index 0) with unique ID
+                        // Auto-fill row_index column (index 0) with placeholder - will be updated after DB insert
                         if row0.len() > 0 && row0[0].is_empty() {
-                            // Generate unique ID using timestamp + random component
-                            let unique_id = format!(
-                                "{}-{}",
-                                std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_millis(),
-                                uuid::Uuid::new_v4()
-                                    .to_string()
-                                    .split('-')
-                                    .next()
-                                    .unwrap_or("0")
-                            );
-                            row0[0] = unique_id;
+                            row0[0] = "PENDING".to_string();  // Placeholder until DB assigns actual row_index
                         }
                         // Auto-fill parent_key column (index 1) if we have a parent_key from navigation context
                         if row0.len() > 1 && row0[1].is_empty() {
@@ -123,6 +110,33 @@ pub fn handle_add_row_request(
                                     info!("Row persisted to DB in {:?} (slow operation)", duration);
                                 } else {
                                     trace!("Row persisted to DB in {:?}", duration);
+                                }
+                                
+                                // For structure sheets, reload row_index value from DB
+                                let is_structure_sheet = meta.columns.len() >= 2
+                                    && meta.columns.get(0).map(|c| c.header.eq_ignore_ascii_case("row_index")).unwrap_or(false);
+                                
+                                if is_structure_sheet {
+                                    // Query the top row from DB to get actual row_index value
+                                    if let Some(cat) = &meta.category {
+                                        let base_path = crate::sheets::systems::io::get_default_data_base_path();
+                                        let db_path = base_path.join(format!("{}.db", cat));
+                                        if let Ok(conn) = rusqlite::Connection::open(&db_path) {
+                                            let query = format!(
+                                                "SELECT row_index FROM \"{}\" ORDER BY row_index DESC LIMIT 1",
+                                                sheet_name
+                                            );
+                                            if let Ok(row_index) = conn.query_row(&query, [], |row| row.get::<_, i64>(0)) {
+                                                info!("Reloaded row_index from DB: {}", row_index);
+                                                // Update grid with actual row_index value
+                                                if let Some(row0) = sheet_data.grid.get_mut(0) {
+                                                    if !row0.is_empty() {
+                                                        row0[0] = row_index.to_string();
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                             Err(e) => {

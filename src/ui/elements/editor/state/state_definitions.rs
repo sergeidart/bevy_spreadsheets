@@ -469,6 +469,8 @@ pub struct EditorWindowState {
 
     // Throttled apply queue for Accept All (row_index, col_index, new_value)
     pub ai_throttled_apply_queue: VecDeque<ThrottledAiAction>,
+    // Batch add queue for AI new rows - stores (category, sheet_name, Vec<row_initial_values>)
+    pub ai_throttled_batch_add_queue: VecDeque<(Option<String>, String, Vec<Vec<(usize, String)>>)>,
     // Cached flag: true if there are duplicate new rows needing a Merge/Separate decision
     pub ai_batch_has_undecided_merge: bool,
     // NEW: Prompt popup for zero-row AI request

@@ -199,7 +199,7 @@ impl DbReader {
             
             // Always prepend technical columns in order: row_index (0), parent_key (1)
             // Note: 'id' is not prepended as it's redundant with row_index for user visibility
-            // - row_index: hidden (internal-only, used for sorting/indexing)
+            // - row_index: VISIBLE FOR DEBUGGING (normally hidden, internal-only for sorting/indexing)
             // - parent_key: visible as read-only green text (users need to see parent relationships)
             let mut with_tech = Vec::with_capacity(filtered.len() + 2);
             with_tech.push(ColumnDefinition {
@@ -216,7 +216,7 @@ impl DbReader {
                 structure_key_parent_column_index: None,
                 structure_ancestor_key_parent_column_indices: None,
                 deleted: false,
-                hidden: true, // Hidden - internal indexing column
+                hidden: false, // TEMPORARILY VISIBLE FOR DEBUGGING - should be true normally
             });
             with_tech.push(ColumnDefinition {
                 header: "parent_key".to_string(),
@@ -237,7 +237,41 @@ impl DbReader {
             with_tech.extend(filtered);
             with_tech
         } else {
-            columns
+            // For regular (non-structure) tables, prepend row_index column
+            // Filter out if it exists in persisted metadata
+            let original_len = columns.len();
+            let filtered: Vec<ColumnDefinition> = columns
+                .into_iter()
+                .filter(|c| c.header != "row_index")
+                .collect();
+            
+            if filtered.len() < original_len {
+                bevy::log::warn!(
+                    "read_metadata: regular table '{}' had row_index in persisted metadata (removed and will re-prepend)",
+                    table_name
+                );
+            }
+            
+            // Prepend row_index as first column
+            let mut with_row_index = Vec::with_capacity(filtered.len() + 1);
+            with_row_index.push(ColumnDefinition {
+                header: "row_index".to_string(),
+                validator: None,
+                data_type: ColumnDataType::I64,
+                filter: None,
+                ai_context: None,
+                ai_enable_row_generation: None,
+                ai_include_in_send: None,
+                width: None,
+                structure_schema: None,
+                structure_column_order: None,
+                structure_key_parent_column_index: None,
+                structure_ancestor_key_parent_column_indices: None,
+                deleted: false,
+                hidden: false, // TEMPORARILY VISIBLE FOR DEBUGGING - should be true normally
+            });
+            with_row_index.extend(filtered);
+            with_row_index
         };
 
         // Log final column headers after potential prepend

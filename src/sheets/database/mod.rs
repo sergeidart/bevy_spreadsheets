@@ -7,6 +7,7 @@ pub mod reader;
 pub mod schema;
 pub mod systems;
 pub mod writer;
+pub mod validation;
 
 pub use connection::DbConnection;
 pub use error::{DbError, DbResult};
@@ -18,7 +19,7 @@ pub use schema::{
 };
 pub use systems::{
     handle_export_requests, handle_migration_completion, handle_migration_requests,
-    handle_upload_json_to_current_db,
+    handle_upload_json_to_current_db, poll_migration_background, MigrationBackgroundState,
 };
 pub use writer::DbWriter;
 use rusqlite::OptionalExtension;

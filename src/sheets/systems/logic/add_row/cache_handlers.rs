@@ -34,8 +34,33 @@ pub(super) fn get_structure_context(
     editor_state: &Option<bevy::prelude::ResMut<EditorWindowState>>,
     sheet_name: &str,
     category: &Option<String>,
+    registry: &crate::sheets::resources::SheetRegistry,
 ) -> Option<String> {
     let state = editor_state.as_ref()?;
+    
+    // First check virtual_structure_stack (for AI operations in virtual sheets)
+    if let Some(vctx) = state.virtual_structure_stack.last() {
+        if &vctx.virtual_sheet_name == sheet_name {
+            // Extract parent_key from the parent context
+            // For virtual structure sheets, we need to get the parent row's key value
+            if let Some(parent_sheet) = registry.get_sheet(&vctx.parent.parent_category, &vctx.parent.parent_sheet) {
+                if let Some(parent_row) = parent_sheet.grid.get(vctx.parent.parent_row) {
+                    if let Some(meta) = &parent_sheet.metadata {
+                        // Find the key column index for the structure column
+                        if let Some(struct_col) = meta.columns.get(vctx.parent.parent_col) {
+                            if let Some(key_col_idx) = struct_col.structure_key_parent_column_index {
+                                if let Some(key_value) = parent_row.get(key_col_idx) {
+                                    return Some(key_value.clone());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    
+    // Fall back to structure_navigation_stack (for regular structure navigation)
     let nav_ctx = state.structure_navigation_stack.last()?;
     
     if &nav_ctx.structure_sheet_name == sheet_name && &nav_ctx.parent_category == category {

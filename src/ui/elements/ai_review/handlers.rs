@@ -279,7 +279,7 @@ pub fn process_new_accept(
     selected_category: &Option<String>,
     active_sheet_name: &str,
     cell_update_writer: &mut EventWriter<UpdateCellEvent>,
-    _add_row_writer: &mut EventWriter<AddSheetRowRequest>, // Kept for compatibility, but using throttling queue instead
+    _add_row_writer: &mut EventWriter<AddSheetRowRequest>, // Kept for compatibility, but now using batch queue
 ) {
     let mut sorted = indices.to_vec();
     if sorted.is_empty() {
@@ -288,6 +288,10 @@ pub fn process_new_accept(
     sorted.sort_unstable();
     sorted.dedup();
     sorted.sort_unstable_by(|a, b| b.cmp(a));
+    
+    // Collect all new rows to add in batch
+    let mut batch_rows: Vec<Vec<(usize, String)>> = Vec::new();
+    
     for idx in sorted {
         if idx < state.ai_new_row_reviews.len() {
             let nr = state.ai_new_row_reviews.remove(idx);
@@ -376,24 +380,12 @@ pub fn process_new_accept(
                         });
                     }
                 } else {
-                    // Creating separate new row with structure data (throttled)
-                    queue_new_row_add(
-                        &nr,
-                        selected_category,
-                        active_sheet_name,
-                        state,
-                        structure_entries,
-                    );
+                    // Creating separate new row with structure data - collect for batch
+                    batch_rows.push(build_row_initial_values(&nr, structure_entries));
                 }
             } else {
-                // Creating new row with structure data (throttled)
-                queue_new_row_add(
-                    &nr,
-                    selected_category,
-                    active_sheet_name,
-                    state,
-                    structure_entries,
-                );
+                // Creating new row with structure data - collect for batch
+                batch_rows.push(build_row_initial_values(&nr, structure_entries));
             }
 
             // CRITICAL: Update all structure entries with higher parent_new_row_index
@@ -407,6 +399,71 @@ pub fn process_new_accept(
             }
         }
     }
+    
+    // Send all new rows as a batch to avoid race conditions
+    if !batch_rows.is_empty() {
+        info!("Queuing batch of {} new rows for addition", batch_rows.len());
+        state.ai_throttled_batch_add_queue.push_back((
+            selected_category.clone(),
+            active_sheet_name.to_string(),
+            batch_rows,
+        ));
+    }
+}
+
+/// Build initial values for a new row (helper for batch operations)
+fn build_row_initial_values(
+    review: &NewRowReview,
+    structure_entries: Vec<StructureReviewEntry>,
+) -> Vec<(usize, String)> {
+    let mut init_vals: Vec<(usize, String)> = Vec::new();
+
+    // Add non-structure column values
+    for (pos, actual_col) in review.non_structure_columns.iter().enumerate() {
+        if let Some(val) = review.ai.get(pos).cloned() {
+            init_vals.push((*actual_col, val));
+        }
+    }
+
+    // Add structure column values (serialized as JSON)
+    for entry in structure_entries {
+        // Skip rejected structures
+        if entry.rejected {
+            continue;
+        }
+
+        // Use merged_rows if decided, otherwise use ai_rows
+        let rows_to_serialize = if entry.decided {
+            &entry.merged_rows
+        } else {
+            &entry.ai_rows
+        };
+
+        // Convert to JSON
+        let array_of_objects: Vec<serde_json::Map<String, serde_json::Value>> = rows_to_serialize
+            .iter()
+            .map(|row| {
+                let mut obj = serde_json::Map::new();
+                for (i, value) in row.iter().enumerate() {
+                    let field_name = entry
+                        .schema_headers
+                        .get(i)
+                        .cloned()
+                        .unwrap_or_else(|| format!("field_{}", i));
+                    obj.insert(field_name, serde_json::Value::String(value.clone()));
+                }
+                obj
+            })
+            .collect();
+
+        let json_value = serde_json::json!(array_of_objects);
+        let json_string = serde_json::to_string(&json_value).unwrap_or_else(|_| "[]".to_string());
+
+        let col_index = *entry.structure_path.first().unwrap_or(&0);
+        init_vals.push((col_index, json_string));
+    }
+
+    init_vals
 }
 
 pub fn process_new_decline(indices: &[usize], state: &mut EditorWindowState) {

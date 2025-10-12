@@ -78,6 +78,17 @@ impl DbWriter {
         insertions::prepend_row(conn, table_name, row_data, column_names)
     }
 
+    /// Batch prepend multiple rows with single row_index calculation
+    /// Prevents race conditions when adding multiple rows at once
+    pub fn prepend_rows_batch(
+        conn: &Connection,
+        table_name: &str,
+        rows_data: &[Vec<String>],
+        column_names: &[String],
+    ) -> DbResult<Vec<i64>> {
+        insertions::prepend_rows_batch(conn, table_name, rows_data, column_names)
+    }
+
     // ============================================================================
     // UPDATES - See updates.rs
     // ============================================================================

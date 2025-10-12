@@ -5,6 +5,7 @@ pub mod io_helpers;
 pub mod json_extractor;
 pub mod json_migration;
 pub mod occasional_fixes;
+pub mod fix_row_index_duplicates;
 
 // Re-export main types and functions for backward compatibility
 pub use dependency_handler::DependencyHandler;

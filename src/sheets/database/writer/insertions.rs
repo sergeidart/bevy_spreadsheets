@@ -4,6 +4,7 @@
 use super::super::error::DbResult;
 use crate::sheets::definitions::{ColumnValidator, SheetMetadata};
 use rusqlite::{params, Connection, Transaction};
+use bevy::prelude::*;
 
 /// Insert grid data rows
 pub fn insert_grid_data(
@@ -228,11 +229,94 @@ pub fn prepend_row(
             |r| r.get(0),
         ).unwrap_or(None);
         
-        max.unwrap_or(-1) + 1
+        let next = max.unwrap_or(-1) + 1;
+        info!("prepend_row: table '{}', MAX(row_index)={:?}, using next_index={}", 
+              table_name, max, next);
+        next
     };
     
     // Insert new row at max_index (no shifting needed!)
+    info!("prepend_row: Inserting row with row_index={} into '{}'", max_index, table_name);
     let inserted = insert_row_with_index(&tx, table_name, max_index, row_data, column_names)?;
     tx.commit()?;
     Ok(inserted)
+}
+
+/// Batch append multiple rows at the end with single row_index calculation.
+/// This prevents race conditions when adding multiple rows - all rows get sequential
+/// row_index values starting from max + 1.
+/// With DESC sort order, newest rows appear at the top visually (in reverse order of insertion).
+pub fn prepend_rows_batch(
+    conn: &Connection,
+    table_name: &str,
+    rows_data: &[Vec<String>],
+    column_names: &[String],
+) -> DbResult<Vec<i64>> {
+    if rows_data.is_empty() {
+        return Ok(Vec::new());
+    }
+    
+    let tx = conn.unchecked_transaction()?;
+    
+    // Check if this is a structure table by looking for parent_id column
+    let is_structure_table = column_names.iter().any(|name| name == "parent_id");
+    
+    // Find the starting row_index (max + 1)
+    let start_index = if is_structure_table {
+        // For structure tables, get max row_index for this specific parent_id
+        // All rows in batch must have same parent_id
+        let parent_id = rows_data.get(0)
+            .and_then(|row| row.get(0))
+            .and_then(|s| s.parse::<i64>().ok())
+            .ok_or_else(|| rusqlite::Error::InvalidParameterName("parent_id not found or invalid".into()))?;
+        
+        let max: Option<i32> = tx.query_row(
+            &format!("SELECT MAX(row_index) FROM \"{}\" WHERE parent_id = ?", table_name),
+            [parent_id],
+            |r| r.get(0),
+        ).unwrap_or(None);
+        
+        let next = max.unwrap_or(-1) + 1;
+        info!("prepend_rows_batch (structure): table '{}', parent_id={}, MAX(row_index)={:?}, using start_index={}", 
+              table_name, parent_id, max, next);
+        next
+    } else {
+        // For regular tables, get global max row_index
+        let max: Option<i32> = tx.query_row(
+            &format!("SELECT MAX(row_index) FROM \"{}\"", table_name),
+            [],
+            |r| r.get(0),
+        ).unwrap_or(None);
+        
+        // Check if we got NULL (no rows with row_index set)
+        let count: i64 = tx.query_row(
+            &format!("SELECT COUNT(*) FROM \"{}\"", table_name),
+            [],
+            |r| r.get(0),
+        ).unwrap_or(0);
+        
+        let next = max.unwrap_or(-1) + 1;
+        if max.is_none() && count > 0 {
+            warn!("prepend_rows_batch: table '{}' has {} rows but MAX(row_index) is NULL! Row indexes not initialized. Next will be 0.", 
+                  table_name, count);
+        }
+        info!("prepend_rows_batch (regular): table '{}', row_count={}, MAX(row_index)={:?}, using start_index={}", 
+              table_name, count, max, next);
+        next
+    };
+    
+    // Insert all rows with sequential row_index values
+    let mut inserted_ids = Vec::with_capacity(rows_data.len());
+    let mut row_indices = Vec::with_capacity(rows_data.len());
+    for (i, row_data) in rows_data.iter().enumerate() {
+        let row_index = start_index + i as i32;
+        let id = insert_row_with_index(&tx, table_name, row_index, row_data, column_names)?;
+        inserted_ids.push(id);
+        row_indices.push(row_index);
+    }
+    
+    tx.commit()?;
+    info!("prepend_rows_batch: Inserted {} rows into '{}' with row_index values: {:?}", 
+          rows_data.len(), table_name, row_indices);
+    Ok(inserted_ids)
 }

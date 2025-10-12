@@ -38,9 +38,9 @@ pub(super) fn persist_row_to_db(
     // Get the first row from grid_data
     let row0 = grid_data.get(0).ok_or("No data to insert")?;
 
-    // Detect if this is a structure sheet (has id and parent_key columns at indices 0 and 1)
+    // Detect if this is a structure sheet (has row_index and parent_key columns at indices 0 and 1)
     let is_structure_sheet = metadata.columns.len() >= 2
-        && metadata.columns.get(0).map(|c| c.header.eq_ignore_ascii_case("id")).unwrap_or(false)
+        && metadata.columns.get(0).map(|c| c.header.eq_ignore_ascii_case("row_index")).unwrap_or(false)
         && metadata.columns.get(1).map(|c| c.header.eq_ignore_ascii_case("parent_key")).unwrap_or(false);
 
     if is_structure_sheet {
@@ -102,10 +102,10 @@ pub(super) fn persist_row_to_db(
         let mut column_names: Vec<String> = vec!["parent_id".to_string()];
         let mut row_data: Vec<String> = vec![parent_id.to_string()];
         
-        // Skip id (index 0) and parent_key (index 1) as they are handled separately
+        // Skip row_index (index 0) and parent_key (index 1) as they are handled separately
         for (i, col_def) in metadata.columns.iter().enumerate() {
             if i <= 1 {
-                continue; // Skip id and parent_key
+                continue; // Skip row_index and parent_key
             }
             if matches!(col_def.validator, Some(ColumnValidator::Structure)) {
                 continue; // Skip nested structure columns
@@ -151,6 +151,165 @@ pub(super) fn persist_row_to_db(
             &column_names,
         )
         .map_err(|e| format!("Failed to prepend row to database: {:?}", e))?;
+    }
+
+    Ok(())
+}
+
+/// Batch prepends multiple rows to the database table with single row_index calculation
+pub(super) fn persist_rows_batch_to_db(
+    metadata: &SheetMetadata,
+    sheet_name: &str,
+    category: &Option<String>,
+    grid_data: &[Vec<String>],
+    num_rows: usize,
+) -> Result<(), String> {
+    // Only proceed if this is a DB-backed sheet
+    let Some(cat) = category.as_ref() else {
+        return Ok(()); // Not a DB sheet, skip
+    };
+
+    let base_path = crate::sheets::systems::io::get_default_data_base_path();
+    let db_path = base_path.join(format!("{}.db", cat));
+    
+    if !db_path.exists() {
+        return Err(format!("Database file not found: {:?}", db_path));
+    }
+
+    let conn = rusqlite::Connection::open(&db_path)
+        .map_err(|e| format!("Failed to open database: {}", e))?;
+
+    // Configure connection
+    conn.execute_batch(
+        "PRAGMA journal_mode=WAL;
+         PRAGMA synchronous=NORMAL;
+         PRAGMA foreign_keys=ON;
+         PRAGMA busy_timeout=5000;",
+    )
+    .map_err(|e| format!("Failed to configure database: {}", e))?;
+
+    // Detect if this is a structure sheet
+    let is_structure_sheet = metadata.columns.len() >= 2
+        && metadata.columns.get(0).map(|c| c.header.eq_ignore_ascii_case("row_index")).unwrap_or(false)
+        && metadata.columns.get(1).map(|c| c.header.eq_ignore_ascii_case("parent_key")).unwrap_or(false);
+
+    if is_structure_sheet {
+        // For structure sheets, batch insert with parent_id resolution
+        let first_row = grid_data.get(0).ok_or("No data to insert")?;
+        let parent_key = first_row.get(1).cloned().unwrap_or_default();
+        
+        if parent_key.is_empty() {
+            return Err(format!("Cannot insert rows into structure table '{}': parent_key is empty", sheet_name));
+        }
+
+        // Resolve parent_id
+        let parent_table = sheet_name.rsplit_once('_')
+            .map(|(parent, _)| parent)
+            .ok_or_else(|| format!("Cannot determine parent table from structure sheet name: {}", sheet_name))?;
+
+        let parent_id: i64 = {
+            let mut id_opt: Option<i64> = None;
+            
+            // Try Key, Name, then ID columns
+            id_opt = conn.query_row(
+                &format!("SELECT id FROM \"{}\" WHERE \"Key\" = ? LIMIT 1", parent_table),
+                [&parent_key],
+                |r| r.get(0)
+            ).ok();
+            
+            if id_opt.is_none() {
+                id_opt = conn.query_row(
+                    &format!("SELECT id FROM \"{}\" WHERE \"Name\" = ? LIMIT 1", parent_table),
+                    [&parent_key],
+                    |r| r.get(0)
+                ).ok();
+            }
+            
+            if id_opt.is_none() {
+                id_opt = conn.query_row(
+                    &format!("SELECT id FROM \"{}\" WHERE \"ID\" = ? LIMIT 1", parent_table),
+                    [&parent_key],
+                    |r| r.get(0)
+                ).ok();
+            }
+            
+            id_opt.ok_or_else(|| format!("Cannot find parent row with key '{}' in table '{}'", parent_key, parent_table))?
+        };
+
+        // Build column names and batch data
+        let mut column_names: Vec<String> = vec!["parent_id".to_string()];
+        let mut batch_rows: Vec<Vec<String>> = Vec::with_capacity(num_rows);
+        
+        // Process each row in grid
+        for row_idx in 0..num_rows {
+            if let Some(row) = grid_data.get(row_idx) {
+                let mut row_data: Vec<String> = vec![parent_id.to_string()];
+                
+                // Skip row_index (0) and parent_key (1), add other columns
+                for (i, col_def) in metadata.columns.iter().enumerate() {
+                    if i <= 1 {
+                        continue; // Skip technical columns
+                    }
+                    if matches!(col_def.validator, Some(ColumnValidator::Structure)) {
+                        continue; // Skip nested structures
+                    }
+                    if row_idx == 0 {
+                        column_names.push(col_def.header.clone());
+                    }
+                    row_data.push(row.get(i).cloned().unwrap_or_default());
+                }
+                
+                // Add parent_key
+                if row_idx == 0 {
+                    column_names.push("parent_key".to_string());
+                }
+                row_data.push(parent_key.clone());
+                
+                batch_rows.push(row_data);
+            }
+        }
+
+        crate::sheets::database::writer::DbWriter::prepend_rows_batch(
+            &conn,
+            sheet_name,
+            &batch_rows,
+            &column_names,
+        )
+        .map_err(|e| format!("Failed to batch prepend rows to structure table: {:?}", e))?;
+
+    } else {
+        // Regular table: batch insert
+        let mut column_names: Vec<String> = Vec::new();
+        let mut batch_rows: Vec<Vec<String>> = Vec::with_capacity(num_rows);
+        
+        for row_idx in 0..num_rows {
+            if let Some(row) = grid_data.get(row_idx) {
+                let mut row_data: Vec<String> = Vec::new();
+                
+                for (i, col_def) in metadata.columns.iter().enumerate() {
+                    if i == 0 && col_def.header.eq_ignore_ascii_case("id") {
+                        continue; // Skip autoincrement id
+                    }
+                    if matches!(col_def.validator, Some(ColumnValidator::Structure)) {
+                        continue;
+                    }
+                    if row_idx == 0 {
+                        column_names.push(col_def.header.clone());
+                    }
+                    row_data.push(row.get(i).cloned().unwrap_or_default());
+                }
+                
+                batch_rows.push(row_data);
+            }
+        }
+
+        crate::sheets::database::writer::DbWriter::prepend_rows_batch(
+            &conn,
+            sheet_name,
+            &batch_rows,
+            &column_names,
+        )
+        .map_err(|e| format!("Failed to batch prepend rows to database: {:?}", e))?;
     }
 
     Ok(())

@@ -237,6 +237,7 @@ impl EditorWindowState {
     /// Returns the list of visible column indices for the current sheet view
     /// Respects the 'hidden' flag on columns to hide technical columns
     /// For structure tables, technical columns (row_index at 0, parent_key at 1) are hidden by default
+    /// When show_hidden_sheets is true, shows ALL columns including row_index
     pub fn get_visible_column_indices(
         &self,
         category: &Option<String>,
@@ -247,7 +248,18 @@ impl EditorWindowState {
             .columns
             .iter()
             .enumerate()
-            .filter(|(_, col)| !col.hidden && !col.deleted)
+            .filter(|(_, col)| {
+                // Always filter out deleted columns
+                if col.deleted {
+                    return false;
+                }
+                // If show_hidden_sheets is enabled, show all non-deleted columns
+                if self.show_hidden_sheets {
+                    return true;
+                }
+                // Otherwise respect the hidden flag
+                !col.hidden
+            })
             .map(|(idx, _)| idx)
             .collect()
     }

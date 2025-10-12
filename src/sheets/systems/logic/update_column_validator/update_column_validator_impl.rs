@@ -255,6 +255,13 @@ pub fn handle_update_column_validator(
                 if let Some(cat_str) = &meta_mut.category {
                     // Persist by column name to avoid index mismatch when metadata contains technical columns
                     let column_name = meta_mut.columns[col_index].header.clone();
+                    
+                    // Skip technical columns (row_index, parent_key) - they're not in metadata table
+                    if column_name.eq_ignore_ascii_case("row_index") || column_name.eq_ignore_ascii_case("parent_key") {
+                        // These are runtime-only columns, not persisted in metadata table
+                        continue;
+                    }
+                    
                     let _ = crate::sheets::database::persist_column_validator_by_name(
                         cat_str,
                         sheet_name,

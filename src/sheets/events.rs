@@ -20,6 +20,18 @@ pub struct AddSheetRowRequest {
     // Vector of (col_index, value)
     pub initial_values: Option<Vec<(usize, String)>>,
 }
+
+/// Batch add multiple rows at once with single row_index calculation
+/// Prevents race conditions when adding multiple rows from AI operations
+#[derive(Event, Debug, Clone)]
+pub struct AddSheetRowsBatchRequest {
+    pub category: Option<String>,
+    pub sheet_name: String,
+    // Each row can have its own initial values
+    // Vector of rows, where each row is Vector of (col_index, value)
+    pub rows_initial_values: Vec<Vec<(usize, String)>>,
+}
+
 // ... (rest of the existing events remain the same) ...
 #[derive(Event, Debug, Clone)]
 pub struct RequestAddColumn {

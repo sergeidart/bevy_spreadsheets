@@ -57,7 +57,7 @@ pub fn send_selected_rows(
     let (root_category, root_sheet_opt) = state.resolve_root_sheet(registry);
 
     // Collect non-structure columns to include (influenced by schema groups) and
-    // when in a structure sheet: exclude the internal 'id' column, keep 'parent_key'.
+    // when in a structure sheet: exclude the technical columns (row_index, id), keep 'parent_key'.
     let mut included_indices: Vec<usize> = Vec::new();
     let mut column_contexts: Vec<Option<String>> = Vec::new();
     // Check if we're in a real structure sheet (not virtual)
@@ -72,8 +72,10 @@ pub fn send_selected_rows(
         if matches!(col.ai_include_in_send, Some(false)) {
             continue;
         }
-        // Omit ID from structure sheets payloads (structure sheets have id column at index 0)
-        if in_structure_sheet && col.header.eq_ignore_ascii_case("id") {
+        // Omit technical columns (row_index, id) from structure sheets payloads
+        // row_index is at index 0 and is a hidden technical column that should never be sent to AI
+        // parent_key at index 1 is kept as it provides important context
+        if in_structure_sheet && (col.header.eq_ignore_ascii_case("row_index") || col.header.eq_ignore_ascii_case("id")) {
             continue;
         }
         included_indices.push(idx);

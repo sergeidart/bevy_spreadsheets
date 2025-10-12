@@ -3,6 +3,7 @@ use bevy::prelude::*;
 
 use super::events::{
     AddSheetRowRequest,
+    AddSheetRowsBatchRequest,
     AiBatchTaskResult,
     AiTaskResult,
     JsonSheetUploaded,
@@ -90,6 +91,7 @@ impl Plugin for SheetsPlugin {
         app.init_resource::<super::database::systems::MigrationBackgroundState>();
 
         app.add_event::<AddSheetRowRequest>()
+            .add_event::<AddSheetRowsBatchRequest>()
             .add_event::<RequestAddColumn>()
             .add_event::<RequestReorderColumn>()
             // NEW: Register RequestCreateNewSheet event
@@ -165,6 +167,7 @@ impl Plugin for SheetsPlugin {
             systems::logic::handle_rename_request,
             systems::logic::handle_delete_request,
             systems::logic::handle_add_row_request,
+            systems::logic::handle_add_rows_batch_request,
             systems::logic::handle_toggle_ai_row_generation,
             systems::logic::handle_update_column_ai_include,
             systems::logic::handle_update_ai_send_schema,

@@ -138,6 +138,7 @@ impl Default for EditorWindowState {
             fps_setting: FpsSetting::default(),
             show_hidden_sheets: false,
             ai_throttled_apply_queue: VecDeque::new(),
+            ai_throttled_batch_add_queue: VecDeque::new(),
             ai_batch_has_undecided_merge: false,
             show_ai_prompt_popup: false,
             ai_prompt_input: String::new(),

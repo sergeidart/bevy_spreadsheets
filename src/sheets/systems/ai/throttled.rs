@@ -6,7 +6,19 @@ pub fn apply_throttled_ai_changes(
     mut state: ResMut<EditorWindowState>,
     mut cell_update_writer: EventWriter<crate::sheets::events::UpdateCellEvent>,
     mut add_row_writer: EventWriter<crate::sheets::events::AddSheetRowRequest>,
+    mut add_rows_batch_writer: EventWriter<crate::sheets::events::AddSheetRowsBatchRequest>,
 ) {
+    // Process batch adds first (higher priority to avoid race conditions)
+    if let Some((category, sheet_name, rows_initial_values)) = state.ai_throttled_batch_add_queue.pop_front() {
+        info!("Processing batch add: {} rows to '{:?}/{}'", rows_initial_values.len(), category, sheet_name);
+        add_rows_batch_writer.write(crate::sheets::events::AddSheetRowsBatchRequest {
+            category,
+            sheet_name,
+            rows_initial_values,
+        });
+        return; // Process only one batch per frame
+    }
+    
     // Process multiple operations per frame for better throughput
     // Limit to avoid frame drops, but allow batching for efficiency
     const MAX_OPERATIONS_PER_FRAME: usize = 5;

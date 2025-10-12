@@ -3,6 +3,7 @@
 
 mod ai_config_handlers;
 mod ai_schema_handlers;
+mod batch_row_addition;
 mod cache_handlers;
 mod common;
 mod db_persistence;
@@ -18,4 +19,5 @@ pub use ai_schema_handlers::{
     handle_toggle_ai_row_generation, handle_update_ai_send_schema,
     handle_update_ai_structure_send, handle_update_column_ai_include,
 };
+pub use batch_row_addition::handle_add_rows_batch_request;
 pub use row_addition::handle_add_row_request;

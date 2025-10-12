@@ -165,6 +165,21 @@ impl JsonMigration {
             let (row_index, id_val) = row?;
             id_map.insert(row_index, id_val);
         }
+        
+        // Pre-calculate starting row_index for each structure table to avoid race conditions
+        // Each structure table maintains its own global sequential row_index counter
+        let mut row_index_counters: HashMap<String, i32> = HashMap::new();
+        for (&col_idx, _schema_fields) in structure_fields_by_col {
+            let structure_table = format!("{}_{}", table_name, metadata.columns[col_idx].header);
+            let max_row_index: Option<i32> = tx.query_row(
+                &format!("SELECT MAX(row_index) FROM \"{}\"", structure_table),
+                [],
+                |r| r.get(0),
+            ).unwrap_or(None);
+            let start_index = max_row_index.unwrap_or(-1) + 1;
+            row_index_counters.insert(structure_table.clone(), start_index);
+            info!("Structure table '{}': starting row_index at {}", structure_table, start_index);
+        }
 
         for (row_index, row) in grid.iter().enumerate() {
             let parent_id = match id_map.get(&(row_index as i32)) {
@@ -214,7 +229,7 @@ impl JsonMigration {
                 );
                 let mut stmt = tx.prepare(&insert_sql)?;
                 
-                for (sidx, srow) in rows_to_insert.iter().enumerate() {
+                for (_sidx, srow) in rows_to_insert.iter().enumerate() {
                     // Ensure the row width matches the schema width
                     let mut row_padded: Vec<String> = srow.clone();
                     let cols = schema_fields.len();
@@ -225,10 +240,17 @@ impl JsonMigration {
                         row_padded.truncate(cols);
                     }
                     
+                    // Get and increment the global row_index counter for this structure table
+                    let current_row_index = row_index_counters.get_mut(&structure_table)
+                        .expect("row_index counter should exist");
+                    let row_idx_value = *current_row_index;
+                    *current_row_index += 1;
+                    
                     let mut params: Vec<rusqlite::types::Value> =
                         Vec::with_capacity(3 + schema_fields.len());
                     params.push(rusqlite::types::Value::Integer(parent_id));
-                    params.push(rusqlite::types::Value::Integer(sidx as i64));
+                    // Use global sequential row_index from counter
+                    params.push(rusqlite::types::Value::Integer(row_idx_value as i64));
                     
                     // Parent key: use value from key parent column if set, otherwise fallback to a sensible main-table key
                     let parent_key = metadata
