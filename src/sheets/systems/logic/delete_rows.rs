@@ -56,13 +56,15 @@ pub fn handle_delete_rows_request(
         let mut error_message: Option<String> = None;
         let mut metadata_cache: Option<SheetMetadata> = None;
 
-        // Pre-capture info for DB deletion (need row IDs) before mutating the grid
+        // Pre-capture info for DB deletion using row_index values directly from grid
         let mut db_backed: Option<(
-            String,   /*db_name*/
-            bool,     /*is_structure_table*/
-            Vec<i64>, /*row_ids to delete*/
+            String,      /*db_name*/
+            bool,        /*is_structure_table*/
+            Vec<i64>,    /*row_index values to delete*/
         )> = None;
         if let Some(sheet_ro) = registry.get_sheet(category, sheet_name) {
+            info!("delete_rows: Got sheet '{:?}/{}' from registry: grid.len()={}, row_indices.len()={}",
+                  category, sheet_name, sheet_ro.grid.len(), sheet_ro.row_indices.len());
             if let Some(meta) = &sheet_ro.metadata {
                 if let Some(db_name) = &meta.category {
                     // Detect structure table by checking if row_index is at position 0
@@ -84,30 +86,39 @@ pub fn handle_delete_rows_request(
                           sheet_name, is_structure, 
                           meta.columns.iter().take(3).map(|c| &c.header).collect::<Vec<_>>());
                     
-                    // Extract row IDs from the grid
-                    let mut row_ids: Vec<i64> = Vec::new();
+                    // Extract row_index values from the grid BEFORE any deletion
+                    let mut row_index_values: Vec<i64> = Vec::new();
                     
-                    // For structure tables, row_index is in column 0, and we can extract IDs directly from DB
-                    // by querying WHERE row_index = X
                     if is_structure {
+                        // For structure tables, row_index is in column 0
                         for &idx in indices_to_delete.iter() {
                             if let Some(row) = sheet_ro.grid.get(idx) {
                                 // Column 0 is row_index for structure sheets
                                 if let Some(row_index_str) = row.get(0) {
                                     if let Ok(row_index_val) = row_index_str.trim().parse::<i64>() {
-                                        row_ids.push(row_index_val);
-                                        info!("Structure sheet: Mapped visual_idx {} to row_index {} in '{}'", 
+                                        row_index_values.push(row_index_val);
+                                        info!("Structure sheet: Grid idx {} -> row_index {} in '{}'", 
                                               idx, row_index_val, sheet_name);
                                     }
                                 }
                             }
                         }
                     } else {
-                        // For regular tables, we need to map visual indices back to DB
-                        // Since we ORDER BY row_index DESC, we need to find the actual row IDs
-                        // We'll do this during DB deletion phase below
+                        // For regular tables, use the row_indices field which maps grid index to row_index
+                        for &grid_idx in indices_to_delete.iter() {
+                            if let Some(&row_index_val) = sheet_ro.row_indices.get(grid_idx) {
+                                row_index_values.push(row_index_val);
+                                info!("Regular table: Grid idx {} -> row_index {} in '{}'", 
+                                      grid_idx, row_index_val, sheet_name);
+                            } else {
+                                error!(
+                                    "Could not find row_index for grid index {} in '{:?}/{}' (row_indices len: {})",
+                                    grid_idx, category, sheet_name, sheet_ro.row_indices.len()
+                                );
+                            }
+                        }
                     }
-                    db_backed = Some((db_name.clone(), is_structure, row_ids));
+                    db_backed = Some((db_name.clone(), is_structure, row_index_values));
                 }
             }
         }
@@ -122,6 +133,10 @@ pub fn handle_delete_rows_request(
             for &index in &sorted_indices {
                 if index < sheet_data.grid.len() {
                     sheet_data.grid.remove(index);
+                    // Also remove corresponding row_index if it exists
+                    if index < sheet_data.row_indices.len() {
+                        sheet_data.row_indices.remove(index);
+                    }
                     deleted_count += 1;
                 } else {
                     error_message = Some(format!(
@@ -266,7 +281,7 @@ pub fn handle_delete_rows_request(
             }
 
             // Persist deletions to database when sheet is DB-backed
-            if let Some((db_name, is_structure, mut row_ids)) = db_backed {
+            if let Some((db_name, is_structure, row_index_values)) = db_backed {
                 let base = crate::sheets::systems::io::get_default_data_base_path();
                 let db_path = base.join(format!("{}.db", db_name));
                 if db_path.exists() {
@@ -277,78 +292,28 @@ pub fn handle_delete_rows_request(
                                 warn!("Failed to enable foreign keys: {}", e);
                             }
                             
-                            if is_structure {
-                                // Delete structure rows by row_index (not by id)
-                                info!("Deleting {} structure rows from '{}' with row_index values: {:?}", 
-                                      row_ids.len(), sheet_name, row_ids);
-                                for row_index_val in row_ids {
-                                    // Structure tables: DELETE WHERE row_index = X
-                                    match conn.execute(
-                                        &format!("DELETE FROM \"{}\" WHERE row_index = ?", sheet_name),
-                                        [row_index_val],
-                                    ) {
-                                        Ok(deleted_count) => {
-                                            if deleted_count == 0 {
-                                                warn!("DELETE (structure) query for row_index={} affected 0 rows in '{}'", 
-                                                      row_index_val, sheet_name);
-                                            } else {
-                                                info!("Successfully deleted structure row with row_index={} from '{}' (affected {} row)", 
-                                                      row_index_val, sheet_name, deleted_count);
-                                            }
-                                        }
-                                        Err(e) => {
-                                            error!("Failed to delete structure row row_index={} from '{}': {}", 
-                                                   row_index_val, sheet_name, e);
+                            // Both structure and regular tables use row_index for deletion
+                            let table_type = if is_structure { "structure" } else { "regular" };
+                            info!("Deleting {} {} table rows from '{}' with row_index values: {:?}", 
+                                  row_index_values.len(), table_type, sheet_name, row_index_values);
+                            
+                            for row_index_val in row_index_values {
+                                match conn.execute(
+                                    &format!("DELETE FROM \"{}\" WHERE row_index = ?", sheet_name),
+                                    [row_index_val],
+                                ) {
+                                    Ok(deleted_count) => {
+                                        if deleted_count == 0 {
+                                            warn!("DELETE query for row_index={} affected 0 rows in '{}'", 
+                                                  row_index_val, sheet_name);
+                                        } else {
+                                            info!("Successfully deleted row with row_index={} from '{}' (affected {} row)", 
+                                                  row_index_val, sheet_name, deleted_count);
                                         }
                                     }
-                                }
-                            } else {
-                                // For regular tables, collect ALL row IDs BEFORE deleting any
-                                // This prevents race condition where deletion shifts remaining indices
-                                row_ids.clear();
-                                for &visual_idx in indices_to_delete.iter() {
-                                    // Query: SELECT id FROM table ORDER BY row_index DESC LIMIT 1 OFFSET visual_idx
-                                    let id_result: Result<i64, _> = conn.query_row(
-                                        &format!(
-                                            "SELECT id FROM \"{}\" ORDER BY row_index DESC LIMIT 1 OFFSET {}",
-                                            sheet_name, visual_idx
-                                        ),
-                                        [],
-                                        |row| row.get(0),
-                                    );
-                                    if let Ok(row_id) = id_result {
-                                        row_ids.push(row_id);
-                                        info!("Regular table: Mapped visual_idx {} to row_id {} in '{}'", 
-                                              visual_idx, row_id, sheet_name);
-                                    } else {
-                                        error!(
-                                            "Could not find row ID for visual index {} in '{:?}/{}': {:?}",
-                                            visual_idx, category, sheet_name, id_result
-                                        );
-                                    }
-                                }
-                                
-                                // Now delete all collected IDs in one transaction
-                                info!("Deleting {} regular table rows from '{}' with IDs: {:?}", 
-                                      row_ids.len(), sheet_name, row_ids);
-                                for row_id in row_ids {
-                                    match conn.execute(
-                                        &format!("DELETE FROM \"{}\" WHERE id = ?", sheet_name),
-                                        [row_id],
-                                    ) {
-                                        Ok(deleted_count) => {
-                                            if deleted_count == 0 {
-                                                warn!("DELETE (regular) query for id={} affected 0 rows in '{}'", 
-                                                      row_id, sheet_name);
-                                            } else {
-                                                info!("Successfully deleted regular table row id={} from '{}' (affected {} row)", 
-                                                      row_id, sheet_name, deleted_count);
-                                            }
-                                        }
-                                        Err(e) => {
-                                            error!("Failed to delete regular table row id={} from '{}': {}", 
-                                                   row_id, sheet_name, e);
-                                        }
+                                    Err(e) => {
+                                        error!("Failed to delete row row_index={} from '{}': {}", 
+                                               row_index_val, sheet_name, e);
                                     }
                                 }
                             }

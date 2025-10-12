@@ -119,6 +119,7 @@ pub(super) fn add_scanned_sheet_to_registry(
     let sheet_data = SheetGridData {
         metadata: Some(metadata), // Store the metadata
         grid,                     // Store the grid
+        row_indices: Vec::new(),  // JSON-backed sheets don't track row_indices
     };
 
     registry.add_or_replace_sheet(category.clone(), sheet_name.clone(), sheet_data);

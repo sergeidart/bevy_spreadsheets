@@ -131,5 +131,7 @@ fn render_sheet_tab(
     
     if resp.clicked() && !is_sel {
         sheet_handlers::handle_sheet_selection(state, Some(name.to_string()));
+        // Mark that we need to trigger revalidation
+        state.pending_sheet_revalidation = true;
     }
 }

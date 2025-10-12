@@ -240,6 +240,7 @@ mod tests {
         let sheet = crate::sheets::definitions::SheetGridData {
             grid: vec![vec![json.to_string()]],
             metadata: Some(meta),
+            row_indices: Vec::new(), // JSON-backed sheets don't track row_indices
         };
 
         // Target schema is the nested field schema (val)

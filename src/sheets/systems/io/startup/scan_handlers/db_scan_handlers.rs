@@ -206,7 +206,7 @@ fn load_single_table(
     has_metadata_table: bool,
 ) {
     // Try to load with metadata first
-    let (metadata, grid) = if has_metadata_table {
+    let (metadata, grid, row_indices) = if has_metadata_table {
         // Load from SkylineDB metadata
         match crate::sheets::database::reader::DbReader::read_metadata(conn, table_name) {
             Ok(mut metadata) => {
@@ -216,7 +216,7 @@ fn load_single_table(
                     table_name,
                     &metadata,
                 ) {
-                    Ok(grid) => (metadata, grid),
+                    Ok((grid, row_indices)) => (metadata, grid, row_indices),
                     Err(e) => {
                         error!(
                             "Startup DB Scan: Failed to load grid data for '{}': {}",
@@ -242,7 +242,7 @@ fn load_single_table(
         );
 
         match infer_schema_and_load_table(conn, table_name, db_name) {
-            Ok((metadata, grid)) => (metadata, grid),
+            Ok((metadata, grid)) => (metadata, grid, Vec::new()), // Inferred schemas don't have row_indices yet
             Err(e) => {
                 error!(
                     "Startup DB Scan: Failed to infer schema for '{}': {}",
@@ -257,7 +257,13 @@ fn load_single_table(
     let sheet_data = crate::sheets::definitions::SheetGridData {
         metadata: Some(metadata.clone()),
         grid,
+        row_indices,
     };
+    
+    info!(
+        "Startup DB Scan: Registering table '{}' with {} rows and {} row_indices",
+        table_name, sheet_data.grid.len(), sheet_data.row_indices.len()
+    );
 
     registry.add_or_replace_sheet(Some(db_name.to_string()), table_name.to_string(), sheet_data);
 

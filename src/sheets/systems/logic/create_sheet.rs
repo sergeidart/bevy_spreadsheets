@@ -69,6 +69,7 @@ pub fn handle_create_new_sheet_request(
         let new_sheet_data = SheetGridData {
             metadata: Some(new_metadata.clone()),
             grid: Vec::new(), // 0 rows
+            row_indices: Vec::new(),
         };
 
         // Add to registry

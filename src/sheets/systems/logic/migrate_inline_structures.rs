@@ -143,6 +143,7 @@ pub fn migrate_inline_structure_data(
         let sheet_data = SheetGridData {
             metadata: Some(metadata.clone()),
             grid,
+            row_indices: Vec::new(), // JSON-backed sheets don't track row_indices
         };
 
         registry.add_or_replace_sheet(category.clone(), sheet_name.clone(), sheet_data);

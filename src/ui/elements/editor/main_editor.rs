@@ -129,6 +129,17 @@ pub fn generic_sheet_editor_ui(
         &initial_selected_sheet_name,
     );
 
+    // Trigger revalidation when a sheet is opened/re-opened
+    if state.pending_sheet_revalidation {
+        state.pending_sheet_revalidation = false;
+        if let Some(ref sheet_name) = state.selected_sheet_name {
+            sheet_writers.revalidate.write(RequestSheetRevalidation {
+                category: state.selected_category.clone(),
+                sheet_name: sheet_name.clone(),
+            });
+        }
+    }
+
     editor_popups_integration::display_active_popups(
         ctx,
         &mut state,

@@ -18,6 +18,7 @@ pub fn add_scanned_sheet_to_registry(
     let sheet_data = crate::sheets::definitions::SheetGridData {
         metadata: Some(metadata),
         grid,
+        row_indices: Vec::new(), // JSON-backed sheets don't track row_indices
     };
 
     // Add to registry

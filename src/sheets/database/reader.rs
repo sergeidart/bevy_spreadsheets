@@ -317,7 +317,7 @@ impl DbReader {
         conn: &Connection,
         table_name: &str,
         metadata: &SheetMetadata,
-    ) -> DbResult<Vec<Vec<String>>> {
+    ) -> DbResult<(Vec<Vec<String>>, Vec<i64>)> {
         // Detect if this is a structure table
         let table_type: Option<String> = conn
             .query_row(
@@ -347,7 +347,7 @@ impl DbReader {
             .collect();
 
         if non_structure_cols.is_empty() && structure_cols.is_empty() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), Vec::new()));
         }
 
         // Cast all values to TEXT to avoid rusqlite type mismatch when retrieving as String
@@ -358,7 +358,7 @@ impl DbReader {
             .join(", ");
 
         let query = format!(
-            "SELECT id, {} FROM \"{}\" ORDER BY row_index DESC",
+            "SELECT id, row_index, {} FROM \"{}\" ORDER BY CAST(row_index AS INTEGER) DESC",
             select_cols, table_name
         );
         bevy::log::info!("Prepared read_grid_data SQL for '{}': {}", table_name, query);
@@ -376,9 +376,10 @@ impl DbReader {
             is_structure
         );
 
-        let rows = stmt
+        let results = stmt
             .query_map([], |row| {
                 let row_id: i64 = row.get(0)?;
+                let row_index: i64 = row.get(1)?;
 
                 // Read non-structure columns
                 let mut non_structure_values = Vec::new();
@@ -386,10 +387,10 @@ impl DbReader {
                 
                 // Ensure we don't try to read more columns than the statement returns
                 if stmt_col_count > 0 {
-                    let max_values = stmt_col_count.saturating_sub(1); // minus id
+                    let max_values = stmt_col_count.saturating_sub(2); // minus id and row_index
                     if value_cols_count > max_values {
                         bevy::log::warn!(
-                            "read_grid_data: metadata expects {} value columns but statement returns {} (id excluded) for table '{}'. Truncating read to available columns.",
+                            "read_grid_data: metadata expects {} value columns but statement returns {} (id and row_index excluded) for table '{}'. Truncating read to available columns.",
                             value_cols_count,
                             max_values,
                             table_name
@@ -397,10 +398,10 @@ impl DbReader {
                     }
                 }
                 
-                // Read values (skip column 0 which is always 'id' in SELECT)
-                let actual_count = value_cols_count.min(stmt_col_count.saturating_sub(1));
+                // Read values (skip columns 0 and 1 which are 'id' and 'row_index' in SELECT)
+                let actual_count = value_cols_count.min(stmt_col_count.saturating_sub(2));
                 for i in 0..actual_count {
-                    let value: Option<String> = row.get(i + 1).unwrap_or(None); // +1 because id is first
+                    let value: Option<String> = row.get(i + 2).unwrap_or(None); // +2 because id and row_index are first
                     non_structure_values.push(value.unwrap_or_default());
                 }
 
@@ -438,21 +439,23 @@ impl DbReader {
                     cells[col_idx] = count_str;
                 }
 
-                Ok(cells)
+                Ok((cells, row_index))
             })?
             .collect::<Result<Vec<_>, _>>()?;
 
-        Ok(rows)
+        let (rows, row_indices): (Vec<_>, Vec<_>) = results.into_iter().unzip();
+        Ok((rows, row_indices))
     }
 
     /// Read complete sheet (metadata + grid)
     pub fn read_sheet(conn: &Connection, table_name: &str) -> DbResult<SheetGridData> {
         let metadata = Self::read_metadata(conn, table_name)?;
-        let grid = Self::read_grid_data(conn, table_name, &metadata)?;
+        let (grid, row_indices) = Self::read_grid_data(conn, table_name, &metadata)?;
 
         Ok(SheetGridData {
             metadata: Some(metadata),
             grid,
+            row_indices,
         })
     }
 

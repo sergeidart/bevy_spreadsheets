@@ -491,4 +491,7 @@ pub struct EditorWindowState {
         std::collections::HashMap<(Option<String>, String, usize, usize, usize), usize>,
     // Tracks the right edge of the last rendered header in content coordinates for Add Column placement
     pub last_header_right_edge_x: f32,
+    
+    // Flag to trigger revalidation when a sheet is opened/re-opened
+    pub pending_sheet_revalidation: bool,
 }

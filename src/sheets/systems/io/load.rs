@@ -64,6 +64,7 @@ pub fn handle_json_sheet_upload(
         let sheet_data = SheetGridData {
             metadata: Some(generated_metadata.clone()),
             grid: event.grid_data.clone(),
+            row_indices: Vec::new(), // JSON-backed sheets don't track row_indices
         };
 
         registry.add_or_replace_sheet(category.clone(), sheet_name.clone(), sheet_data);

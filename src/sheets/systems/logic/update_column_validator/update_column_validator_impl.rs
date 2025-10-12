@@ -317,6 +317,7 @@ pub fn handle_update_column_validator(
             let structure_sheet_data = crate::sheets::definitions::SheetGridData {
                 metadata: Some(structure_metadata.clone()),
                 grid: Vec::new(), // Empty initially
+                row_indices: Vec::new(), // JSON-backed sheets don't track row_indices
             };
 
             registry.add_or_replace_sheet(

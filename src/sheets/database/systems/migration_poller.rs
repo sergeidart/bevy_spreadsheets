@@ -67,8 +67,8 @@ pub fn poll_migration_background(
                                     Ok(mut metadata) => {
                                         metadata.category = Some(db_name.clone());
                                         match crate::sheets::database::reader::DbReader::read_grid_data(&conn, table_name, &metadata) {
-                                            Ok(grid) => {
-                                                let sheet_data = crate::sheets::definitions::SheetGridData { grid, metadata: Some(metadata.clone()) };
+                                            Ok((grid, row_indices)) => {
+                                                let sheet_data = crate::sheets::definitions::SheetGridData { grid, metadata: Some(metadata.clone()), row_indices };
                                                 registry.add_or_replace_sheet(metadata.category.clone(), table_name.clone(), sheet_data);
                                                 data_modified_writer.write(crate::sheets::events::SheetDataModifiedInRegistryEvent { category: Some(db_name.clone()), sheet_name: table_name.clone() });
                                                 revalidate_writer.write(crate::sheets::events::RequestSheetRevalidation { category: Some(db_name.clone()), sheet_name: table_name.clone() });
