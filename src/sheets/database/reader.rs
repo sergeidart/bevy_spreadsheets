@@ -199,7 +199,7 @@ impl DbReader {
             
             // Always prepend technical columns in order: row_index (0), parent_key (1)
             // Note: 'id' is not prepended as it's redundant with row_index for user visibility
-            // - row_index: VISIBLE FOR DEBUGGING (normally hidden, internal-only for sorting/indexing)
+            // - row_index: hidden by default, shown only when show_hidden_sheets is true
             // - parent_key: visible as read-only green text (users need to see parent relationships)
             let mut with_tech = Vec::with_capacity(filtered.len() + 2);
             with_tech.push(ColumnDefinition {
@@ -216,7 +216,7 @@ impl DbReader {
                 structure_key_parent_column_index: None,
                 structure_ancestor_key_parent_column_indices: None,
                 deleted: false,
-                hidden: false, // TEMPORARILY VISIBLE FOR DEBUGGING - should be true normally
+                hidden: true, // Hidden by default, respects show_hidden_sheets setting
             });
             with_tech.push(ColumnDefinition {
                 header: "parent_key".to_string(),
@@ -268,7 +268,7 @@ impl DbReader {
                 structure_key_parent_column_index: None,
                 structure_ancestor_key_parent_column_indices: None,
                 deleted: false,
-                hidden: false, // TEMPORARILY VISIBLE FOR DEBUGGING - should be true normally
+                hidden: true, // Hidden by default, respects show_hidden_sheets setting
             });
             with_row_index.extend(filtered);
             with_row_index

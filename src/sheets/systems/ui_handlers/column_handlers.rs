@@ -49,15 +49,21 @@ pub fn build_ancestor_key_columns(
                         if let Some(struct_col_def) =
                             parent_meta.columns.get(vctx.parent.parent_col)
                         {
-                            // Prefer parent-selected key; fallback to first non-structure
-                            if let Some(key_col_idx) =
-                                struct_col_def.structure_key_parent_column_index
-                            {
-                                if let Some(key_col_def) =
-                                    parent_meta.columns.get(key_col_idx)
-                                {
+                            // Prefer parent-selected key; fallback to first non-technical data column
+                            let key_col_idx = struct_col_def.structure_key_parent_column_index
+                                .or_else(|| {
+                                    // Fall back to first data column (skip row_index at 0, and parent_key at 1 if structure table)
+                                    if parent_meta.is_structure_table() {
+                                        Some(2) // First data column in structure table
+                                    } else {
+                                        Some(1) // First data column in regular table (skip row_index at 0)
+                                    }
+                                });
+                            
+                            if let Some(key_idx) = key_col_idx {
+                                if let Some(key_col_def) = parent_meta.columns.get(key_idx) {
                                     let value = parent_row
-                                        .get(key_col_idx)
+                                        .get(key_idx)
                                         .cloned()
                                         .unwrap_or_default();
                                     ancestor_key_columns

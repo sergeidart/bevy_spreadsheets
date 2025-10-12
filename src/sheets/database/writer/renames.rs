@@ -32,19 +32,56 @@ pub fn rename_data_column(
 }
 
 /// Update metadata column_name only (for columns that don't exist physically in main table, e.g., Structure validators)
+/// Note: column_index is the RUNTIME index (includes technical columns like row_index)
 pub fn update_metadata_column_name(
     conn: &Connection,
     table_name: &str,
     column_index: usize,
     new_name: &str,
 ) -> DbResult<()> {
+    // Convert runtime column index to persisted index
+    use rusqlite::OptionalExtension;
+    let table_type: Option<String> = conn
+        .query_row(
+            "SELECT table_type FROM _Metadata WHERE table_name = ?",
+            [table_name],
+            |row| row.get(0),
+        )
+        .optional()?;
+    
+    let is_structure = matches!(table_type.as_deref(), Some("structure"));
+    let persisted_index = if is_structure {
+        if column_index < 2 {
+            bevy::log::warn!(
+                "Attempted to rename technical column {} in structure table '{}'",
+                column_index,
+                table_name
+            );
+            return Ok(());
+        }
+        column_index - 2
+    } else {
+        if column_index == 0 {
+            bevy::log::warn!(
+                "Attempted to rename technical column 0 (row_index) in regular table '{}'",
+                table_name
+            );
+            return Ok(());
+        }
+        column_index - 1
+    };
+    
     let meta_table = format!("{}_Metadata", table_name);
+    bevy::log::info!(
+        "SQL update_metadata_column_name: table='{}' runtime_idx={} -> persisted_idx={} new_name='{}'",
+        table_name, column_index, persisted_index, new_name
+    );
     conn.execute(
         &format!(
             "UPDATE \"{}\" SET column_name = ? WHERE column_index = ?",
             meta_table
         ),
-        params![new_name, column_index as i32],
+        params![new_name, persisted_index as i32],
     )?;
     Ok(())
 }

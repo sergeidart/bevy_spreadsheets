@@ -163,18 +163,35 @@ pub fn handle_sheet_render_cache_update(
                                 if matches!(col_def.validator, Some(ColumnValidator::Structure)) {
                                     // Try to form "<Key> <ColumnName>" if possible
                                     let mut label: Option<String> = None;
-                                    if let Some(parent_row) = registry
-                                        .get_sheet(&category, &sheet_name)
-                                        .and_then(|sd| sd.grid.get(r_idx))
-                                    {
-                                        // Parent key is usually first column (index 0)
-                                        let parent_key =
-                                            parent_row.get(0).cloned().unwrap_or_default();
-                                        let col_name = col_def.header.trim();
-                                        if !parent_key.trim().is_empty() {
-                                            label = Some(format!("{} {}", parent_key, col_name));
-                                        } else {
-                                            label = Some(col_name.to_string());
+                                    if let Some(parent_sheet) = registry.get_sheet(&category, &sheet_name) {
+                                        if let Some(parent_row) = parent_sheet.grid.get(r_idx) {
+                                            // Find the key column index
+                                            // First check if structure has a designated key column
+                                            let key_col_idx = col_def.structure_key_parent_column_index
+                                                .or_else(|| {
+                                                    // Fall back to first non-technical data column
+                                                    // For structure tables: skip row_index (0) and parent_key (1), use index 2+
+                                                    // For regular tables: skip row_index (0), use index 1+
+                                                    if let Some(meta) = &parent_sheet.metadata {
+                                                        if meta.is_structure_table() {
+                                                            Some(2) // First data column in structure table
+                                                        } else {
+                                                            Some(1) // First data column in regular table
+                                                        }
+                                                    } else {
+                                                        Some(0) // Fallback to first column if no metadata
+                                                    }
+                                                });
+                                            
+                                            if let Some(key_idx) = key_col_idx {
+                                                let parent_key = parent_row.get(key_idx).cloned().unwrap_or_default();
+                                                let col_name = col_def.header.trim();
+                                                if !parent_key.trim().is_empty() {
+                                                    label = Some(format!("{} {}", parent_key, col_name));
+                                                } else {
+                                                    label = Some(col_name.to_string());
+                                                }
+                                            }
                                         }
                                     }
 

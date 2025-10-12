@@ -1,7 +1,4 @@
 // src/ui/common.rs
-//! Cell widget rendering and interaction logic for the spreadsheet editor.
-//! This module handles the visual presentation of different cell types including
-//! numeric, boolean, string, linked, and structure cells.
 
 use bevy::prelude::*;
 use bevy_egui::egui::{self, Color32, Response, Sense};
@@ -22,9 +19,6 @@ use crate::ui::elements::editor::state::EditorWindowState;
 use crate::ui::validation::ValidationState;
 use crate::ui::widgets::handle_linked_column_edit;
 
-/// Renders interactive UI for editing a single cell based on its validator.
-/// Handles displaying the appropriate widget and visual validation state.
-/// Returns Some(new_value) if the value was changed by the user interaction.
 #[allow(clippy::too_many_arguments, unused_variables, unused_assignments)]
 pub fn edit_cell_widget(
     ui: &mut egui::Ui,
@@ -185,6 +179,10 @@ pub fn edit_cell_widget(
                                     });
                                     menu_ui.close_menu();
                                 }
+                                if menu_ui.button("🗑 Clear").clicked() {
+                                    temp_new_value = Some(String::new());
+                                    menu_ui.close_menu();
+                                }
                             });
                             response_opt = Some(resp);
                         }};
@@ -199,11 +197,27 @@ pub fn edit_cell_widget(
                                 
                                 if let Some(col_def) = column_def {
                                     let structure_sheet_name = format!("{}_{}", sheet_name, col_def.header);
+                                    // Get parent key: use structure_key_parent_column_index if available, 
+                                    // otherwise use first real data column (index 1 for regular, 2 for structure)
                                     let parent_key = registry
                                         .get_sheet(category, sheet_name)
-                                        .and_then(|sd| sd.grid.get(row_index))
-                                        .and_then(|row| row.first())
-                                        .map(|s| s.clone())
+                                        .and_then(|sd| {
+                                            let row = sd.grid.get(row_index)?;
+                                            let key_col_idx = col_def.structure_key_parent_column_index
+                                                .or_else(|| {
+                                                    // Fallback: first data column
+                                                    if let Some(meta) = &sd.metadata {
+                                                        if meta.is_structure_table() {
+                                                            Some(2) // Skip row_index (0) and parent_key (1)
+                                                        } else {
+                                                            Some(1) // Skip row_index (0)
+                                                        }
+                                                    } else {
+                                                        Some(0) // Fallback if no metadata
+                                                    }
+                                                });
+                                            key_col_idx.and_then(|idx| row.get(idx)).map(|s| s.clone())
+                                        })
                                         .unwrap_or_else(|| row_index.to_string());
                                     let button_text = if current_display_text.trim().is_empty() {
                                         col_def.header.clone()
@@ -362,6 +376,10 @@ pub fn edit_cell_widget(
                                         });
                                         menu_ui.close_menu();
                                     }
+                                    if menu_ui.button("🗑 Clear").clicked() {
+                                        temp_new_value = Some(String::new());
+                                        menu_ui.close_menu();
+                                    }
                                 });
                                 response_opt = Some(resp);
                             }
@@ -395,6 +413,10 @@ pub fn edit_cell_widget(
                                                     row_index,
                                                     col_index,
                                                 });
+                                                menu_ui.close_menu();
+                                            }
+                                            if menu_ui.button("🗑 Clear").clicked() {
+                                                temp_new_value = Some(String::new());
                                                 menu_ui.close_menu();
                                             }
                                         });
@@ -438,6 +460,10 @@ pub fn edit_cell_widget(
                                                     row_index,
                                                     col_index,
                                                 });
+                                                menu_ui.close_menu();
+                                            }
+                                            if menu_ui.button("🗑 Clear").clicked() {
+                                                temp_new_value = Some(String::new());
                                                 menu_ui.close_menu();
                                             }
                                         });

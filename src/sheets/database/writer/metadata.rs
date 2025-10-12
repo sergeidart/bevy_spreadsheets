@@ -4,7 +4,58 @@
 use super::super::error::DbResult;
 use super::super::schema::sql_type_for_column;
 use crate::sheets::definitions::{ColumnDataType, ColumnValidator};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
+
+/// Convert runtime column index (which includes technical columns) to persisted column index
+/// (which excludes technical columns that are added at runtime).
+/// 
+/// For regular tables: technical column is row_index at index 0
+/// For structure tables: technical columns are row_index (0) and parent_key (1)
+/// 
+/// Returns the persisted index, or None if the column_index refers to a technical column
+fn runtime_to_persisted_column_index(
+    conn: &Connection,
+    table_name: &str,
+    runtime_column_index: usize,
+) -> DbResult<Option<usize>> {
+    // Determine if this is a structure table
+    let table_type: Option<String> = conn
+        .query_row(
+            "SELECT table_type FROM _Metadata WHERE table_name = ?",
+            [table_name],
+            |row| row.get(0),
+        )
+        .optional()?;
+    
+    let is_structure = matches!(table_type.as_deref(), Some("structure"));
+    
+    if is_structure {
+        // Structure tables have row_index (0) and parent_key (1) as technical columns
+        if runtime_column_index < 2 {
+            // This is a technical column, should not be persisted
+            bevy::log::warn!(
+                "Attempted to persist metadata for technical column {} in structure table '{}'",
+                runtime_column_index,
+                table_name
+            );
+            return Ok(None);
+        }
+        // Subtract 2 to get persisted index
+        Ok(Some(runtime_column_index - 2))
+    } else {
+        // Regular tables have row_index (0) as technical column
+        if runtime_column_index == 0 {
+            // This is a technical column, should not be persisted
+            bevy::log::warn!(
+                "Attempted to persist metadata for technical column 0 (row_index) in regular table '{}'",
+                table_name
+            );
+            return Ok(None);
+        }
+        // Subtract 1 to get persisted index
+        Ok(Some(runtime_column_index - 1))
+    }
+}
 
 /// Update a table's hidden flag in the global _Metadata table
 pub fn update_table_hidden(conn: &Connection, table_name: &str, hidden: bool) -> DbResult<()> {
@@ -65,6 +116,7 @@ pub fn update_table_ai_settings(
 }
 
 /// Update a column's filter, ai_context, and include flag in the table's metadata table
+/// Note: column_index is the RUNTIME index (includes technical columns like row_index)
 pub fn update_column_metadata(
     conn: &Connection,
     table_name: &str,
@@ -73,6 +125,20 @@ pub fn update_column_metadata(
     ai_context: Option<&str>,
     ai_include_in_send: Option<bool>,
 ) -> DbResult<()> {
+    // Convert runtime column index to persisted index
+    let persisted_index = match runtime_to_persisted_column_index(conn, table_name, column_index)? {
+        Some(idx) => idx,
+        None => {
+            // This is a technical column, skip the update
+            bevy::log::debug!(
+                "Skipping metadata update for technical column {} in table '{}'",
+                column_index,
+                table_name
+            );
+            return Ok(());
+        }
+    };
+    
     // Defensive: ensure per-table metadata table structure and rows exist
     // We don't know the full metadata here; construct a minimal synthetic one from DB if needed.
     // Call global _Metadata ensure first (no-op if exists)
@@ -134,32 +200,55 @@ pub fn update_column_metadata(
     if let Some(v) = ai_include_in_send {
         params_vec.push(Box::new(v as i32));
     }
-    params_vec.push(Box::new(column_index as i32));
+    params_vec.push(Box::new(persisted_index as i32));
     // Log SQL and high-level params for debugging visibility
-    bevy::log::info!("SQL update_column_metadata: {} ; params_count={}", sql, params_vec.len());
+    bevy::log::info!(
+        "SQL update_column_metadata: {} ; params_count={} ; runtime_idx={} -> persisted_idx={}",
+        sql, params_vec.len(), column_index, persisted_index
+    );
     conn.execute(&sql, rusqlite::params_from_iter(params_vec.iter()))?;
     Ok(())
 }
 
 /// Explicitly set the AI include flag for a column in the metadata table (true = 1, false = 0)
+/// Note: column_index is the RUNTIME index (includes technical columns like row_index)
 pub fn update_column_ai_include(
     conn: &Connection,
     table_name: &str,
     column_index: usize,
     include: bool,
 ) -> DbResult<()> {
+    // Convert runtime column index to persisted index
+    let persisted_index = match runtime_to_persisted_column_index(conn, table_name, column_index)? {
+        Some(idx) => idx,
+        None => {
+            // This is a technical column, skip the update
+            bevy::log::debug!(
+                "Skipping AI include update for technical column {} in table '{}'",
+                column_index,
+                table_name
+            );
+            return Ok(());
+        }
+    };
+    
     let meta_table = format!("{}_Metadata", table_name);
+    bevy::log::info!(
+        "SQL update_column_ai_include: table='{}' runtime_idx={} -> persisted_idx={} include={}",
+        table_name, column_index, persisted_index, include
+    );
     conn.execute(
         &format!(
             "UPDATE \"{}\" SET ai_include_in_send = ? WHERE column_index = ?",
             meta_table
         ),
-        params![include as i32, column_index as i32],
+        params![include as i32, persisted_index as i32],
     )?;
     Ok(())
 }
 
 /// Update a column's validator (data_type, validator_type, validator_config) and optional AI flags in metadata
+/// Note: column_index is the RUNTIME index (includes technical columns like row_index)
 pub fn update_column_validator(
     conn: &Connection,
     table_name: &str,
@@ -169,6 +258,20 @@ pub fn update_column_validator(
     ai_include_in_send: Option<bool>,
     ai_enable_row_generation: Option<bool>,
 ) -> DbResult<()> {
+    // Convert runtime column index to persisted index
+    let persisted_index = match runtime_to_persisted_column_index(conn, table_name, column_index)? {
+        Some(idx) => idx,
+        None => {
+            // This is a technical column, skip the update
+            bevy::log::debug!(
+                "Skipping validator update for technical column {} in table '{}'",
+                column_index,
+                table_name
+            );
+            return Ok(());
+        }
+    };
+    
     // Defensive: ensure per-table metadata table structure and rows exist
     let _ = crate::sheets::database::schema::ensure_global_metadata_table(conn);
     let inferred_meta =
@@ -241,7 +344,7 @@ pub fn update_column_validator(
     if let Some(v) = ai_enable_row_generation {
         params_vec.push(Box::new(v as i32));
     }
-    params_vec.push(Box::new(column_index as i32));
+    params_vec.push(Box::new(persisted_index as i32));
 
     // Log SQL and parameter summary before executing (show param values derived from known locals)
     let mut param_preview: Vec<String> = Vec::new();
@@ -254,7 +357,7 @@ pub fn update_column_validator(
     if let Some(v) = ai_enable_row_generation {
         param_preview.push(format!("ai_enable_row_generation={}", v));
     }
-    param_preview.push(format!("column_index={}", column_index));
+    param_preview.push(format!("runtime_idx={} -> persisted_idx={}", column_index, persisted_index));
     bevy::log::info!(
         "SQL update_column_validator: {} ; params_count={} ; params={:?}",
         sql,
@@ -267,6 +370,7 @@ pub fn update_column_validator(
 }
 
 /// Add a new column to a table (main or structure) and insert its metadata row with given index.
+/// Note: column_index is the RUNTIME index (includes technical columns like row_index)
 pub fn add_column_with_metadata(
     conn: &Connection,
     table_name: &str,
@@ -279,6 +383,19 @@ pub fn add_column_with_metadata(
     ai_enable_row_generation: Option<bool>,
     ai_include_in_send: Option<bool>,
 ) -> DbResult<()> {
+    // Convert runtime column index to persisted index
+    let persisted_index = match runtime_to_persisted_column_index(conn, table_name, column_index)? {
+        Some(idx) => idx,
+        None => {
+            // This is a technical column, skip the add
+            bevy::log::debug!(
+                "Skipping add for technical column {} in table '{}'",
+                column_index,
+                table_name
+            );
+            return Ok(());
+        }
+    };
     // Check if column exists physically; if not, add it
     let mut exists_stmt = conn.prepare(&format!("PRAGMA table_info(\"{}\")", table_name))?;
     let mut col_exists = false;
@@ -321,6 +438,10 @@ pub fn add_column_with_metadata(
         "UPDATE \"{}\" SET column_name = ?, data_type = ?, validator_type = ?, validator_config = ?, ai_context = ?, filter_expr = ?, ai_enable_row_generation = ?, ai_include_in_send = ?, deleted = 0 WHERE column_index = ? AND deleted = 1",
         meta_table
     );
+    bevy::log::info!(
+        "SQL add_column_with_metadata: table='{}' runtime_idx={} -> persisted_idx={} col_name='{}'",
+        table_name, column_index, persisted_index, column_name
+    );
     let reused = conn.execute(&reuse_sql, params![
         column_name,
         format!("{:?}", data_type),
@@ -330,11 +451,12 @@ pub fn add_column_with_metadata(
         filter_expr,
         ai_enable_row_generation.unwrap_or(false) as i32,
         ai_include_in_send.unwrap_or(true) as i32,
-        column_index as i32,
+        persisted_index as i32,
     ])?;
     if reused > 0 {
         bevy::log::info!(
-            "Reused deleted metadata slot for column_index={} in '{}'.",
+            "Reused deleted metadata slot for persisted_index={} (runtime={}) in '{}'.",
+            persisted_index,
             column_index,
             meta_table
         );
@@ -346,7 +468,7 @@ pub fn add_column_with_metadata(
             meta_table
         ),
         params![
-            column_index as i32,
+            persisted_index as i32,
             column_name,
             format!("{:?}", data_type),
             validator_type,

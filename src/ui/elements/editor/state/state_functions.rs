@@ -240,8 +240,8 @@ impl EditorWindowState {
     /// When show_hidden_sheets is true, shows ALL columns including row_index
     pub fn get_visible_column_indices(
         &self,
-        category: &Option<String>,
-        sheet_name: &str,
+        _category: &Option<String>,
+        _sheet_name: &str,
         metadata: &crate::sheets::definitions::SheetMetadata,
     ) -> Vec<usize> {
         metadata

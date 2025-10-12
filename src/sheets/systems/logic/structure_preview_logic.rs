@@ -107,14 +107,17 @@ pub fn generate_structure_preview(raw: &str) -> (String, bool) {
 
 /// Generate a preview string from structure rows (Vec<Vec<String>>)
 /// Similar to generate_structure_preview but takes rows directly instead of JSON
+/// Skips the first 2 columns (row_index at 0, parent_key at 1) to show only data columns
 pub fn generate_structure_preview_from_rows(rows: &[Vec<String>]) -> String {
     if rows.is_empty() {
         return String::new();
     }
 
     let first_row = &rows[0];
+    // Skip first 2 columns (row_index and parent_key) - start from index 2
     let values: Vec<String> = first_row
         .iter()
+        .skip(2)
         .filter(|s| !s.trim().is_empty())
         .map(|s| s.trim().to_string())
         .collect();
