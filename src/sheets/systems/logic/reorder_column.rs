@@ -86,17 +86,40 @@ pub fn handle_reorder_column_request(
                         let db_path = base.join(format!("{}.db", cat));
                         if db_path.exists() {
                             if let Ok(conn) = rusqlite::Connection::open(&db_path) {
-                                // Build ordered pairs (column_name, new_index) for non-structure columns only
+                                // Determine if this is a structure table
+                                let table_type: Option<String> = conn
+                                    .query_row(
+                                        "SELECT table_type FROM _Metadata WHERE table_name = ?",
+                                        [sheet_name.as_str()],
+                                        |row| row.get(0),
+                                    )
+                                    .ok();
+                                
+                                let is_structure = matches!(table_type.as_deref(), Some("structure"));
+                                
+                                // Calculate how many technical columns to skip
+                                let tech_cols_count = if is_structure { 2 } else { 1 };
+                                
+                                // Build ordered pairs (column_name, persisted_index) 
+                                // Skip technical columns (row_index for regular, row_index+parent_key for structure)
                                 let mut pairs: Vec<(String, i32)> = Vec::new();
-                                for (idx, c) in metadata.columns.iter().enumerate() {
-                                    // Skip technical columns for structure sheets: id/parent_key stay 0/1 in metadata reader; our metadata here includes them only for real structure sheets
-                                    pairs.push((c.header.clone(), idx as i32));
+                                for (runtime_idx, c) in metadata.columns.iter().enumerate() {
+                                    // Skip technical columns
+                                    if runtime_idx < tech_cols_count {
+                                        continue;
+                                    }
+                                    // Convert runtime index to persisted index
+                                    let persisted_idx = runtime_idx - tech_cols_count;
+                                    pairs.push((c.header.clone(), persisted_idx as i32));
                                 }
-                                let _ = crate::sheets::database::writer::DbWriter::update_column_indices(
-                                    &conn,
-                                    sheet_name,
-                                    &pairs,
-                                );
+                                
+                                if !pairs.is_empty() {
+                                    let _ = crate::sheets::database::writer::DbWriter::update_column_indices(
+                                        &conn,
+                                        sheet_name,
+                                        &pairs,
+                                    );
+                                }
                             }
                         }
                     }
