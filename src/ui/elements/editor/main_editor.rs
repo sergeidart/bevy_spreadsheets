@@ -129,6 +129,12 @@ pub fn generic_sheet_editor_ui(
         &initial_selected_sheet_name,
     );
 
+    // Reload cache from DB if sheet was switched
+    crate::sheets::systems::ui_handlers::sheet_handlers::reload_sheet_cache_from_db(
+        &mut state,
+        &mut misc.registry,
+    );
+
     // Trigger revalidation when a sheet is opened/re-opened
     if state.pending_sheet_revalidation {
         state.pending_sheet_revalidation = false;

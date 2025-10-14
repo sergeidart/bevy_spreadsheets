@@ -76,6 +76,7 @@ pub fn show_column_options_popup(
 
         if actions_ok {
             let new_name_trimmed = state.options_column_rename_input.trim();
+            debug!("Column rename check: new_name='{}', current_name={:?}", new_name_trimmed, current_name);
             if Some(new_name_trimmed.to_string()) != current_name {
                 if new_name_trimmed.is_empty() {
                     warn!("Column rename failed: New name empty.");
@@ -86,10 +87,12 @@ pub fn show_column_options_popup(
                         .and_then(|s| s.metadata.as_ref())
                         .map_or(false, |m| {
                             m.columns.iter().enumerate().any(|(i, c)| {
-                                i != col_index && c.header.eq_ignore_ascii_case(new_name_trimmed)
+                                i != col_index && !c.deleted && c.header.eq_ignore_ascii_case(new_name_trimmed)
                             })
                         });
+                    debug!("Duplicate check result: is_duplicate={}", is_duplicate);
                     if !is_duplicate {
+                        info!("Sending column rename request: {} -> {}", current_name.as_ref().unwrap_or(&"<none>".to_string()), new_name_trimmed);
                         column_rename_writer.write(RequestUpdateColumnName {
                             category: category.clone(),
                             sheet_name: sheet_name.clone(),
@@ -105,6 +108,8 @@ pub fn show_column_options_popup(
                         actions_ok = false;
                     }
                 }
+            } else {
+                debug!("Column rename skipped: name unchanged");
             }
         }
 

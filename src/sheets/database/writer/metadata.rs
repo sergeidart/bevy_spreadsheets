@@ -479,6 +479,6 @@ pub fn add_column_with_metadata(
             ai_include_in_send.unwrap_or(true) as i32
         ],
     )?;
-    bevy::log::info!("SQL add_column metadata: INSERT OR REPLACE INTO '{}' (column_index={}, column_name='{}')", meta_table, column_index, column_name);
+    bevy::log::info!("SQL add_column metadata: INSERT OR REPLACE INTO '{}' (column_index={}, column_name='{}')", meta_table, persisted_index, column_name);
     Ok(())
 }

@@ -1,9 +1,7 @@
 // src/ui/common.rs
-
 use bevy::prelude::*;
 use bevy_egui::egui::{self, Color32, Response, Sense};
 use std::collections::HashSet;
-
 use crate::sheets::{
     definitions::{ColumnDataType, ColumnValidator},
     events::{
@@ -18,7 +16,6 @@ use crate::sheets::{
 use crate::ui::elements::editor::state::EditorWindowState;
 use crate::ui::validation::ValidationState;
 use crate::ui::widgets::handle_linked_column_edit;
-
 #[allow(clippy::too_many_arguments, unused_variables, unused_assignments)]
 pub fn edit_cell_widget(
     ui: &mut egui::Ui,
@@ -40,11 +37,8 @@ pub fn edit_cell_widget(
     let is_column_selected_for_deletion = state.selected_columns_for_deletion.contains(&col_index);
     let is_row_selected = state.ai_selected_rows.contains(&row_index);
     let current_interaction_mode = state.current_interaction_mode;
-
-    // --- 1. Read Pre-calculated RenderableCellData ---
     let render_cell_data_opt =
         render_cache.get_cell_data(category, sheet_name, row_index, col_index);
-
     let (current_display_text, cell_validation_state) = match render_cell_data_opt {
         Some(data) => (data.display_text.as_str(), data.validation_state),
         None => {
@@ -58,19 +52,30 @@ pub fn edit_cell_widget(
             ("", ValidationState::default())
         }
     };
-
     let basic_type = registry
         .get_sheet(category, sheet_name)
         .and_then(|sd| sd.metadata.as_ref())
         .and_then(|meta| meta.columns.get(col_index))
         .map_or(ColumnDataType::String, |col_def| col_def.data_type);
-
     let prefetch = prefetch_linked_column_values(validator_opt, registry, state);
     let prefetch_allowed_values = prefetch.raw_values;
     let prefetch_allowed_values_norm = prefetch.normalized_values;
-
-    // Parent_key column in structure tables is read-only and centered
-    if state.should_hide_structure_technical_columns(category, sheet_name) && col_index == 1 {
+    // Check if this is a technical column that should be displayed as green read-only
+    let is_technical_column = if state.should_hide_structure_technical_columns(category, sheet_name) {
+        registry
+            .get_sheet(category, sheet_name)
+            .and_then(|sd| sd.metadata.as_ref())
+            .and_then(|meta| meta.columns.get(col_index))
+            .map(|col_def| {
+                col_def.header.eq_ignore_ascii_case("row_index")
+                    || col_def.header.eq_ignore_ascii_case("parent_key")
+                    || (col_def.header.starts_with("grand_") && col_def.header.ends_with("_parent"))
+            })
+            .unwrap_or(false)
+    } else {
+        false
+    };
+    if is_technical_column {
         let display = if current_display_text.is_empty() {
             "(empty)"
         } else {
@@ -93,31 +98,24 @@ pub fn edit_cell_widget(
         });
         return None;
     }
-
     let desired_size = egui::vec2(ui.available_width(), ui.style().spacing.interact_size.y);
     let (frame_id, frame_rect) = ui.allocate_space(desired_size);
-
     let effective_validation_state = determine_effective_validation_state(
         current_display_text,
         &prefetch_allowed_values_norm,
         cell_validation_state,
     );
-
     let col_ai_included = is_column_ai_included(state, category, sheet_name, col_index);
-
     let is_structure_column = matches!(
         validator_opt,
         Some(ColumnValidator::Structure)
     );
-
     let is_linked_column = matches!(
         validator_opt,
         Some(ColumnValidator::Linked { .. })
     );
-
     let struct_ai_included =
         is_structure_column_ai_included(state, category, sheet_name, col_index, is_structure_column);
-
     let bg_color = determine_cell_background_color(
         is_column_selected_for_deletion,
         is_row_selected,
@@ -129,17 +127,14 @@ pub fn edit_cell_widget(
         is_linked_column,
         basic_type,
     );
-
     let frame = egui::Frame::NONE
         .inner_margin(egui::Margin::symmetric(2, 1))
         .fill(bg_color);
-
     let inner_response = ui
         .allocate_new_ui(egui::UiBuilder::new().max_rect(frame_rect), |frame_ui| {
             frame.show(frame_ui, |widget_ui| {
                     let mut response_opt: Option<Response> = None;
                     let mut temp_new_value: Option<String> = None;
-
                     macro_rules! handle_numeric {
                         ($ui:ident, $T:ty, $id_suffix:expr, $default:expr, $speed:expr) => {{
                             let mut value_for_widget: $T =
@@ -187,14 +182,12 @@ pub fn edit_cell_widget(
                             response_opt = Some(resp);
                         }};
                     }
-
                     match validator_opt {
                             Some(ColumnValidator::Structure) => {
                                 let column_def = registry
                                     .get_sheet(category, sheet_name)
                                     .and_then(|sd| sd.metadata.as_ref())
                                     .and_then(|meta| meta.columns.get(col_index));
-                                
                                 if let Some(col_def) = column_def {
                                     let structure_sheet_name = format!("{}_{}", sheet_name, col_def.header);
                                     // Get parent key: use structure_key_parent_column_index if available, 
@@ -253,14 +246,29 @@ pub fn edit_cell_widget(
                                         "Structure: {}\nParent: {}\nRows: {}\nPreview: {}\n\nClick to open",
                                         structure_sheet_name, parent_key, rows_count, current_display_text
                                     ));
-                                    
                                     if resp.clicked() {
                                         if registry.get_sheet(category, &structure_sheet_name).is_some() {
+                                            // Collect ancestor keys and display value from parent row
+                                            let (mut ancestor_keys, display_value) = 
+                                                crate::ui::elements::editor::structure_navigation::collect_structure_ancestors(
+                                                    registry,
+                                                    category,
+                                                    sheet_name,
+                                                    &structure_sheet_name,
+                                                    row_index,
+                                                );
+                                            // Add the display value as the final ancestor (becomes child's parent_key)
+                                            ancestor_keys.push(display_value.clone());
+                                            bevy::log::info!(
+                                                "Opening structure: {} -> {} | parent_row_key='{}' | ancestor_keys={:?}",
+                                                sheet_name, structure_sheet_name, display_value, ancestor_keys
+                                            );
                                             let nav_context = crate::ui::elements::editor::state::StructureNavigationContext {
                                                 structure_sheet_name: structure_sheet_name.clone(),
                                                 parent_category: category.clone(),
                                                 parent_sheet_name: sheet_name.to_string(),
-                                                parent_row_key: parent_key.clone(),
+                                                parent_row_key: display_value,
+                                                ancestor_keys,
                                                 parent_column_name: col_def.header.clone(),
                                             };
                                             state.structure_navigation_stack.push(nav_context);
@@ -275,7 +283,6 @@ pub fn edit_cell_widget(
                                             });
                                         }
                                     }
-                                    
                                     response_opt = Some(resp);
                                 } else {
                                     let resp = widget_ui.label("?");
@@ -308,7 +315,6 @@ pub fn edit_cell_widget(
                                                 let available_for_edit =
                                                     (ui_h.available_width() - nav_button_size - spacing)
                                                         .max(8.0);
-
                                                 let (new_val, resp) = ui_h
                                                     .allocate_ui_with_layout(
                                                         egui::vec2(available_for_edit, nav_button_size),
@@ -329,7 +335,6 @@ pub fn edit_cell_widget(
                                                         },
                                                     )
                                                     .inner;
-
                                                 let nav_btn = ui_h
                                                     .add_sized([
                                                         nav_button_size,
@@ -339,7 +344,6 @@ pub fn edit_cell_widget(
                                                         "Navigate to sheet: {}",
                                                         target_sheet_name
                                                     ));
-
                                                 if nav_btn.clicked() {
                                                     state.selected_category = category.clone();
                                                     state.selected_sheet_name =
@@ -347,14 +351,12 @@ pub fn edit_cell_widget(
                                                     state.reset_interaction_modes_and_selections();
                                                     state.force_filter_recalculation = true;
                                                 }
-
                                                 (new_val, resp)
                                             })
                                             .inner
                                         },
                                     )
                                     .inner;
-                                
                                 temp_new_value = new_val;
                                 resp.context_menu(|menu_ui| {
                                     if menu_ui.button("📋 Copy").clicked() {
@@ -483,9 +485,7 @@ pub fn edit_cell_widget(
                 .inner
         })
         .inner;
-
     let (_widget_resp_opt, final_new_value) = inner_response;
-
     if effective_validation_state == ValidationState::Invalid {
         let hover_text = format!(
             "Invalid Value! '{}' is not allowed here.",

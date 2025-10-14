@@ -74,16 +74,22 @@ pub fn handle_update_column_name(
                 // --- CORRECTED: Check bounds using columns.len() ---
                 if col_index < metadata.columns.len() {
                     // --- CORRECTED: Check duplicates using columns[idx].header ---
-                    if metadata
+                    let is_duplicate = metadata
                         .columns // Iterate over columns
                         .iter()
                         .enumerate()
                         .any(|(idx, c)| {
                             // c is &ColumnDefinition
-                            idx != col_index && c.header.eq_ignore_ascii_case(new_name)
+                            // Exclude deleted columns from duplicate check
+                            idx != col_index && !c.deleted && c.header.eq_ignore_ascii_case(new_name)
                             // Access header field
-                        })
-                    {
+                        });
+                    
+                    debug!("Column rename '{}' -> '{}': duplicate check = {}", 
+                        metadata.columns.get(col_index).map(|c| c.header.as_str()).unwrap_or("?"),
+                        new_name, is_duplicate);
+                    
+                    if is_duplicate {
                         feedback_writer.write(SheetOperationFeedback {
                             message: format!(
                                 "Failed column rename in '{:?}/{}': Name '{}' already exists.",
@@ -113,48 +119,73 @@ pub fn handle_update_column_name(
                         });
                         // Persist rename to DB when DB-backed
                         if let Some(cat) = &metadata.category {
+                            debug!("Persisting column rename to DB: category={}, sheet={}, old={}, new={}", 
+                                cat, sheet_name, old_name, new_name);
                             let base = crate::sheets::systems::io::get_default_data_base_path();
                             let db_path = base.join(format!("{}.db", cat));
                             if db_path.exists() {
-                                if let Ok(conn) = rusqlite::Connection::open(&db_path) {
-                                    if is_real_structure_sheet_now {
-                                        // Rename actual column in structure table data + metadata
-                                        let _ = crate::sheets::database::writer::DbWriter::rename_data_column(
-                                            &conn,
-                                            sheet_name,
-                                            &old_name,
-                                            new_name,
-                                        );
-                                    } else {
-                                        // Parent main table column rename
-                                        // If it's a Structure validator column being renamed, rename the underlying structure table as well
-                                        if was_structure_before {
-                                            let _ = crate::sheets::database::writer::DbWriter::rename_structure_table(
+                                match rusqlite::Connection::open(&db_path) {
+                                    Ok(conn) => {
+                                        if is_real_structure_sheet_now {
+                                            // Rename actual column in structure table data + metadata
+                                            debug!("Renaming data column in structure table");
+                                            match crate::sheets::database::writer::DbWriter::rename_data_column(
                                                 &conn,
                                                 sheet_name,
                                                 &old_name,
                                                 new_name,
-                                            );
-                                        }
-                                        // Rename data column if it exists physically (non-structure)
-                                        if !was_structure_before {
-                                            let _ = crate::sheets::database::writer::DbWriter::rename_data_column(
-                                                &conn,
-                                                sheet_name,
-                                                &old_name,
-                                                new_name,
-                                            );
+                                            ) {
+                                                Ok(_) => info!("Successfully renamed column in DB"),
+                                                Err(e) => error!("Failed to rename column in DB: {}", e),
+                                            }
                                         } else {
-                                            // Update metadata column_name for the parent (structure columns still have metadata)
-                                            let _ = crate::sheets::database::writer::DbWriter::update_metadata_column_name(
-                                                &conn,
-                                                sheet_name,
-                                                col_index,
-                                                new_name,
-                                            );
+                                            // Parent main table column rename
+                                            // If it's a Structure validator column being renamed, rename the underlying structure table as well
+                                            if was_structure_before {
+                                                debug!("Renaming structure table");
+                                                match crate::sheets::database::writer::DbWriter::rename_structure_table(
+                                                    &conn,
+                                                    sheet_name,
+                                                    &old_name,
+                                                    new_name,
+                                                ) {
+                                                    Ok(_) => info!("Successfully renamed structure table in DB"),
+                                                    Err(e) => error!("Failed to rename structure table in DB: {}", e),
+                                                }
+                                            }
+                                            // Rename data column if it exists physically (non-structure)
+                                            if !was_structure_before {
+                                                debug!("Renaming data column in main table");
+                                                match crate::sheets::database::writer::DbWriter::rename_data_column(
+                                                    &conn,
+                                                    sheet_name,
+                                                    &old_name,
+                                                    new_name,
+                                                ) {
+                                                    Ok(_) => info!("Successfully renamed column in DB"),
+                                                    Err(e) => error!("Failed to rename column in DB: {}", e),
+                                                }
+                                            } else {
+                                                // Update metadata column_name for the parent (structure columns still have metadata)
+                                                debug!("Updating metadata column name");
+                                                match crate::sheets::database::writer::DbWriter::update_metadata_column_name(
+                                                    &conn,
+                                                    sheet_name,
+                                                    col_index,
+                                                    new_name,
+                                                ) {
+                                                    Ok(_) => info!("Successfully updated metadata column name in DB"),
+                                                    Err(e) => error!("Failed to update metadata column name in DB: {}", e),
+                                                }
+                                            }
                                         }
                                     }
+                                    Err(e) => {
+                                        error!("Failed to open DB connection for column rename: {}", e);
+                                    }
                                 }
+                            } else {
+                                warn!("DB file not found for column rename: {:?}", db_path);
                             }
                         }
                         success = true;

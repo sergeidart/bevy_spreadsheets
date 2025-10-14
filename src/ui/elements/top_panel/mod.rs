@@ -202,7 +202,7 @@ mod orchestrator {
                             if matches!(state.toybox_mode, ToyboxMode::Summarizer) {
                                 // Build header map excluding Structure columns with data types
                                 let mut header_map2: Vec<(usize, String, crate::sheets::definitions::ColumnDataType)> = Vec::new();
-                                if let Some(sheet_name) = &active_sheet_opt { if let Some(sheet) = registry.get_sheet(&active_cat, sheet_name) { if let Some(meta) = &sheet.metadata { for (i,c) in meta.columns.iter().enumerate() { if !matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure)) { header_map2.push((i, c.header.clone(), c.data_type)); } } } } }
+                                if let Some(sheet_name) = &active_sheet_opt { if let Some(sheet) = registry.get_sheet(&active_cat, sheet_name) { if let Some(meta) = &sheet.metadata { for (i,c) in meta.columns.iter().enumerate() { if !c.deleted && !matches!(c.validator, Some(crate::sheets::definitions::ColumnValidator::Structure)) { header_map2.push((i, c.header.clone(), c.data_type)); } } } } }
                                 if header_map2.is_empty() { ui_h.label("<no columns>"); return; }
                                 let sel_idx = header_map2.iter().position(|(actual,_,_)| *actual == state.summarizer_selected_col).unwrap_or(0);
                                 // Show selected column as a label; editing moved to popup

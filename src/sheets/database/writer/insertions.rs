@@ -204,8 +204,8 @@ pub fn prepend_row(
 ) -> DbResult<i64> {
     let tx = conn.unchecked_transaction()?;
     
-    // Check if this is a structure table by looking for parent_id column
-    let is_structure_table = column_names.iter().any(|name| name == "parent_id");
+    // Check if this is a structure table by looking for parent_key column
+    let is_structure_table = column_names.iter().any(|name| name == "parent_key");
     
     // Find the maximum row_index and insert at max + 1
     // IMPORTANT: row_index must be globally unique across the entire table,
@@ -220,11 +220,13 @@ pub fn prepend_row(
         
         let next = max.unwrap_or(-1) + 1;
         if is_structure_table {
-            let parent_id = row_data.get(0)
-                .and_then(|s| s.parse::<i64>().ok())
-                .unwrap_or(0);
-            info!("prepend_row (structure): table '{}', parent_id={}, global MAX(row_index)={:?}, using next_index={}", 
-                  table_name, parent_id, max, next);
+            let parent_key = row_data.iter()
+                .zip(column_names.iter())
+                .find(|(_, name)| *name == "parent_key")
+                .map(|(val, _)| val.as_str())
+                .unwrap_or("");
+            info!("prepend_row (structure): table '{}', parent_key='{}', global MAX(row_index)={:?}, using next_index={}", 
+                  table_name, parent_key, max, next);
         } else {
             info!("prepend_row (regular): table '{}', MAX(row_index)={:?}, using next_index={}", 
                   table_name, max, next);
@@ -255,8 +257,8 @@ pub fn prepend_rows_batch(
     
     let tx = conn.unchecked_transaction()?;
     
-    // Check if this is a structure table by looking for parent_id column
-    let is_structure_table = column_names.iter().any(|name| name == "parent_id");
+    // Check if this is a structure table by looking for parent_key column
+    let is_structure_table = column_names.iter().any(|name| name == "parent_key");
     
     // Find the starting row_index (max + 1)
     // IMPORTANT: row_index must be globally unique across the entire table,
@@ -279,12 +281,16 @@ pub fn prepend_rows_batch(
         let next = max.unwrap_or(-1) + 1;
         
         if is_structure_table {
-            let parent_id = rows_data.get(0)
-                .and_then(|row| row.get(0))
-                .and_then(|s| s.parse::<i64>().ok())
-                .unwrap_or(0);
-            info!("prepend_rows_batch (structure): table '{}', parent_id={}, global MAX(row_index)={:?}, using start_index={}", 
-                  table_name, parent_id, max, next);
+            let parent_key = rows_data.get(0)
+                .and_then(|row| {
+                    row.iter()
+                        .zip(column_names.iter())
+                        .find(|(_, name)| *name == "parent_key")
+                        .map(|(val, _)| val.as_str())
+                })
+                .unwrap_or("");
+            info!("prepend_rows_batch (structure): table '{}', parent_key='{}', global MAX(row_index)={:?}, using start_index={}", 
+                  table_name, parent_key, max, next);
         } else {
             if max.is_none() && count > 0 {
                 warn!("prepend_rows_batch: table '{}' has {} rows but MAX(row_index) is NULL! Row indexes not initialized. Next will be 0.", 

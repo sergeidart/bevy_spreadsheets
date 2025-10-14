@@ -153,6 +153,7 @@ impl Default for EditorWindowState {
             ui_structure_row_count_cache: std::collections::HashMap::new(),
             last_header_right_edge_x: 0.0,
             pending_sheet_revalidation: false,
+            force_cache_reload: false,
         }
     }
 }

@@ -63,6 +63,9 @@ pub fn send_selected_rows(
     // Check if we're in a real structure sheet (not virtual)
     let in_structure_sheet = !state.structure_navigation_stack.is_empty();
     for (idx, col) in meta.columns.iter().enumerate() {
+        if col.deleted {
+            continue; // Filter out deleted columns
+        }
         if matches!(
             col.validator,
             Some(crate::sheets::definitions::ColumnValidator::Structure)

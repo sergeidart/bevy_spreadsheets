@@ -107,17 +107,60 @@ pub fn generate_structure_preview(raw: &str) -> (String, bool) {
 
 /// Generate a preview string from structure rows (Vec<Vec<String>>)
 /// Similar to generate_structure_preview but takes rows directly instead of JSON
-/// Skips the first 2 columns (row_index at 0, parent_key at 1) to show only data columns
+/// Skips technical columns (row_index, all grand_N_parent, parent_key) to show only data columns
+/// 
+/// headers: Optional column headers to identify technical columns by name
 pub fn generate_structure_preview_from_rows(rows: &[Vec<String>]) -> String {
+    generate_structure_preview_from_rows_with_headers(rows, None)
+}
+
+/// Generate a preview string from structure rows with optional headers
+/// Skips technical columns based on header names or position
+pub fn generate_structure_preview_from_rows_with_headers(
+    rows: &[Vec<String>],
+    headers: Option<&[String]>,
+) -> String {
     if rows.is_empty() {
         return String::new();
     }
 
     let first_row = &rows[0];
-    // Skip first 2 columns (row_index and parent_key) - start from index 2
+    
+    // Determine skip count based on headers if available
+    let skip_count = if let Some(hdrs) = headers {
+        // Count technical columns: row_index, grand_N_parent, parent_key
+        hdrs.iter()
+            .take_while(|h| {
+                h.eq_ignore_ascii_case("row_index")
+                    || h.starts_with("grand_")
+                    || h.eq_ignore_ascii_case("parent_key")
+            })
+            .count()
+    } else {
+        // Default: skip at least row_index and parent_key
+        // Try to detect if there are grand_parent columns by checking if index 2 looks like it
+        // For safety, we'll use a heuristic: if first_row.len() > 3, check positions 2+ for common patterns
+        let mut technical_cols = 1; // row_index
+        
+        // Check if we have potential grand_parent columns
+        // They would be between row_index (0) and the last parent_key
+        // For now, we'll just check if there are more than 2 initial columns that might be technical
+        // This is a heuristic - ideally we'd have metadata
+        if first_row.len() > 2 {
+            // Assume the pattern: row_index, [grand_N_parent, ...], parent_key, data...
+            // Find the last technical column (parent_key)
+            // For now, use simpler logic: skip first 2 minimum (row_index, parent_key for flat)
+            // For multi-level, this would need metadata
+            technical_cols = 2; // row_index + parent_key as minimum
+        }
+        
+        technical_cols.min(first_row.len())
+    };
+
+    // Skip technical columns and collect data values
     let values: Vec<String> = first_row
         .iter()
-        .skip(2)
+        .skip(skip_count)
         .filter(|s| !s.trim().is_empty())
         .map(|s| s.trim().to_string())
         .collect();

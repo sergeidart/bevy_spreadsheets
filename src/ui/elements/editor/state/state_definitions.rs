@@ -136,8 +136,11 @@ pub struct StructureNavigationContext {
     /// Parent sheet information
     pub parent_category: Option<String>,
     pub parent_sheet_name: String,
-    /// Parent row's primary key value (for filtering)
+    /// Parent row's primary key value (for filtering on parent_key column)
     pub parent_row_key: String,
+    /// Ancestor keys for multi-level structures (grand_1_parent, grand_2_parent, etc.)
+    /// Order: [grand_N_parent, ..., grand_1_parent] (deepest to shallowest)
+    pub ancestor_keys: Vec<String>,
     /// Column name in parent that was clicked
     pub parent_column_name: String,
 }
@@ -395,6 +398,8 @@ pub struct EditorWindowState {
     pub filtered_row_indices_cache: HashMap<(Option<String>, String), FilteredRowsCacheEntry>,
     pub force_filter_recalculation: bool,
     pub request_scroll_to_new_row: bool,
+    /// Flag to trigger cache reload from DB when switching sheets
+    pub force_cache_reload: bool,
     pub scroll_to_row_index: Option<usize>,
 
     // Core Interaction Mode
@@ -476,7 +481,6 @@ pub struct EditorWindowState {
     // NEW: Prompt popup for zero-row AI request
     pub show_ai_prompt_popup: bool,
     pub ai_prompt_input: String,
-    // Marker that last AI batch send was prompt-only (no original rows) so we treat incoming rows specially
     pub last_ai_prompt_only: bool,
     pub ai_cached_included_columns: Vec<bool>,
     pub ai_cached_included_structure_columns: Vec<bool>,

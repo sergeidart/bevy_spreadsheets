@@ -221,7 +221,7 @@ pub fn handle_cell_update(
                                                         // Update by ID instead of row_index
                                                         let _ = conn.execute(
                                                             &format!(
-                                                                "UPDATE \"{}\" SET \"{}\" = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                                                                "UPDATE \"{}\" SET \"{}\" = ? WHERE id = ?",
                                                                 sheet_name, col_header
                                                             ),
                                                             rusqlite::params![val, row_id],
@@ -245,17 +245,8 @@ pub fn handle_cell_update(
                                                             if let Some(schema) =
                                                                 &col_def.structure_schema
                                                             {
-                                                                // Resolve parent_id of this main row
-                                                                // Map visual index to actual DB row ID
-                                                                let parent_id_result: Result<i64, _> = conn.query_row(
-                                                                    &format!(
-                                                                        "SELECT id FROM \"{}\" ORDER BY row_index DESC LIMIT 1 OFFSET {}",
-                                                                        sheet_name, row_idx
-                                                                    ),
-                                                                    [],
-                                                                    |r| r.get(0),
-                                                                );
-                                                                if let Ok(parent_id) = parent_id_result {
+                                                                // Build parent_key from this main row
+                                                                {
                                                                     let structure_table = format!("{}_{}", sheet_name, col_header);
                                                                     // Build parent_key: prefer configured key column
                                                                     let parent_key: String = if let Some(kidx) = col_def.structure_key_parent_column_index {
@@ -328,25 +319,36 @@ pub fn handle_cell_update(
                                                                         }
                                                                         _ => {}
                                                                     }
-
-                                                                    // Replace existing child rows for this parent_id
+                                                                    // Replace existing child rows for this parent_key
                                                                     let tx = conn.unchecked_transaction().ok();
                                                                     if let Some(tx) = tx {
                                                                         let _ = tx.execute(
-                                                                            &format!("DELETE FROM \"{}\" WHERE parent_id = ?", structure_table),
-                                                                            [parent_id],
+                                                                            &format!("DELETE FROM \"{}\" WHERE parent_key = ?", structure_table),
+                                                                            [&parent_key],
                                                                         );
                                                                         if !rows_to_insert.is_empty() {
+                                                                            // FIX: Get the maximum row_index from the entire table to ensure globally unique row_index values
+                                                                            // This prevents AI-added rows with different key columns from resetting to row_index=0
+                                                                            let max_row_index: Option<i64> = tx.query_row(
+                                                                                &format!("SELECT MAX(row_index) FROM \"{}\"", structure_table),
+                                                                                [],
+                                                                                |r| r.get(0),
+                                                                            ).unwrap_or(None);
+                                                                            let start_index = max_row_index.unwrap_or(-1) + 1;
+                                                                            
+                                                                            info!("Inserting {} structure rows for parent_key='{}' in table '{}', starting at row_index={} (MAX was {:?})", 
+                                                                                  rows_to_insert.len(), parent_key, structure_table, start_index, max_row_index);
+                                                                            
                                                                             let field_cols = schema.iter().map(|f| format!("\"{}\"", f.header)).collect::<Vec<_>>().join(", ");
-                                                                            let placeholders = std::iter::repeat("?").take(3 + schema.len()).collect::<Vec<_>>().join(", ");
-                                                                            let insert_sql = format!("INSERT INTO \"{}\" (parent_id, row_index, parent_key, {}) VALUES ({})", structure_table, field_cols, placeholders);
+                                                                            let placeholders = std::iter::repeat("?").take(2 + schema.len()).collect::<Vec<_>>().join(", ");
+                                                                            let insert_sql = format!("INSERT INTO \"{}\" (row_index, parent_key, {}) VALUES ({})", structure_table, field_cols, placeholders);
                                                                             if let Ok(mut stmt) = tx.prepare(&insert_sql) {
                                                                                 for (sidx, srow) in rows_to_insert.iter().enumerate() {
                                                                                     let mut padded = srow.clone();
                                                                                     if padded.len() < schema.len() { padded.resize(schema.len(), String::new()); }
-                                                                                    let mut params: Vec<rusqlite::types::Value> = Vec::with_capacity(3 + schema.len());
-                                                                                    params.push(rusqlite::types::Value::Integer(parent_id));
-                                                                                    params.push(rusqlite::types::Value::Integer(sidx as i64));
+                                                                                    let mut params: Vec<rusqlite::types::Value> = Vec::with_capacity(2 + schema.len());
+                                                                                    // Use globally unique row_index: start_index + sidx
+                                                                                    params.push(rusqlite::types::Value::Integer(start_index + (sidx as i64)));
                                                                                     params.push(rusqlite::types::Value::Text(parent_key.clone()));
                                                                                     for v in padded { params.push(rusqlite::types::Value::Text(v)); }
                                                                                     let _ = stmt.execute(rusqlite::params_from_iter(params.iter()));
@@ -393,7 +395,6 @@ pub fn handle_cell_update(
                 });
             }
         }
-
         // If virtual sheet cell changed, propagate back to original parent cell JSON
         if is_virtual {
             if let Some(parent_ctx) = parent_ctx_opt.clone() {
@@ -486,7 +487,6 @@ pub fn handle_cell_update(
             }
         }
     }
-
     // Send revalidation requests
     for (cat, name) in sheets_to_revalidate.keys() {
         revalidate_writer.write(RequestSheetRevalidation {

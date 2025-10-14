@@ -112,14 +112,91 @@ pub(crate) fn get_filtered_row_indices_cached(
     let mut indices = get_filtered_row_indices_internal(grid, metadata);
 
     // Apply hidden structure filter if present
+    // For multi-level structures, we need to match ALL parent keys (grand_N_parent, parent_key)
     if let Some(nav_ctx) = structure_filter {
         indices = indices
             .into_iter()
             .filter(|&row_idx| {
-                grid.get(row_idx)
-                    .and_then(|row| row.get(1)) // parent_key is in column 1
-                    .map(|parent_key_value| parent_key_value == &nav_ctx.parent_row_key)
-                    .unwrap_or(false)
+                let row = match grid.get(row_idx) {
+                    Some(r) => r,
+                    None => return false,
+                };
+
+                // Get parent_key column (usually column 1, but could vary with grands)
+                // Find it by checking metadata
+                let parent_key_col_idx = metadata
+                    .columns
+                    .iter()
+                    .position(|c| c.header.eq_ignore_ascii_case("parent_key"))
+                    .unwrap_or(1); // Default fallback
+
+                // Check parent_key matches
+                let parent_key_matches = row
+                    .get(parent_key_col_idx)
+                    .map(|pk| {
+                        let matches = pk == &nav_ctx.parent_row_key;
+                        if !matches {
+                            bevy::log::debug!(
+                                "Filtering row_idx={}: parent_key mismatch - row has '{}', expected '{}'",
+                                row_idx, pk, nav_ctx.parent_row_key
+                            );
+                        } else {
+                            bevy::log::debug!(
+                                "Filtering row_idx={}: parent_key MATCH - '{}'",
+                                row_idx, pk
+                            );
+                        }
+                        matches
+                    })
+                    .unwrap_or(false);
+
+                if !parent_key_matches {
+                    return false;
+                }
+
+                // Check all ancestor keys match (grand_N_parent columns)
+                // ancestor_keys is ordered: [oldest ancestor, ..., parent's parent_key]
+                // Mapping: grand_N_parent (where N=1,2,3...) should match ancestor_keys[N-1]
+                // Example: grand_1_parent → ancestor_keys[0], grand_2_parent → ancestor_keys[1]
+                if !nav_ctx.ancestor_keys.is_empty() {
+                    // Find all grand_N_parent columns and check by level
+                    for (col_idx, col) in metadata.columns.iter().enumerate() {
+                        if col.header.starts_with("grand_") && col.header.ends_with("_parent") {
+                            // Extract N from grand_N_parent
+                            let n_str = col.header.trim_start_matches("grand_").trim_end_matches("_parent");
+                            if let Ok(n) = n_str.parse::<usize>() {
+                                // grand_1_parent → ancestor_keys[0]
+                                // grand_2_parent → ancestor_keys[1]
+                                // grand_N_parent → ancestor_keys[N-1]
+                                let ancestor_idx = n.saturating_sub(1);
+                                if let Some(expected_key) = nav_ctx.ancestor_keys.get(ancestor_idx) {
+                                    if let Some(row_grand_key) = row.get(col_idx) {
+                                        if row_grand_key != expected_key {
+                                            bevy::log::debug!(
+                                                "Filtering row_idx={}: {} mismatch - expected '{}' (ancestor_keys[{}]), got '{}'",
+                                                row_idx, col.header, expected_key, ancestor_idx, row_grand_key
+                                            );
+                                            return false; // Mismatch
+                                        } else {
+                                            bevy::log::debug!(
+                                                "Filtering row_idx={}: {} match - '{}' == ancestor_keys[{}]",
+                                                row_idx, col.header, row_grand_key, ancestor_idx
+                                            );
+                                        }
+                                    } else {
+                                        bevy::log::debug!(
+                                            "Filtering row_idx={}: {} column missing in row data",
+                                            row_idx, col.header
+                                        );
+                                        return false; // Column missing
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                true
             })
             .collect();
     }

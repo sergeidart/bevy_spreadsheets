@@ -56,7 +56,7 @@ impl JsonMigration {
         for (col_idx, col) in metadata.columns.iter().enumerate() {
             if matches!(col.validator, Some(ColumnValidator::Structure)) {
                 if let Some(schema_fields) = &col.structure_schema {
-                    schema::create_structure_table(&tx, table_name, col)?;
+                    schema::create_structure_table(&tx, table_name, col, None)?;
 
                     let structure_table = format!("{}_{}", table_name, col.header);
 

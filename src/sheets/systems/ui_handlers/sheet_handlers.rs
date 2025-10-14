@@ -4,6 +4,7 @@ use crate::sheets::resources::SheetRegistry;
 use crate::ui::elements::editor::state::{EditorWindowState, SheetInteractionState};
 
 /// Handle sheet selection change
+/// NOTE: This function only updates UI state. Cache reload happens in the system that has access to SheetRegistry.
 pub fn handle_sheet_selection(
     state: &mut EditorWindowState,
     new_sheet: Option<String>,
@@ -16,9 +17,77 @@ pub fn handle_sheet_selection(
             // On direct sheet open, clear hidden navigation filters
             state.structure_navigation_stack.clear();
             state.filtered_row_indices_cache.clear();
+            
+            // Mark that cache needs to be reloaded from DB
+            state.force_cache_reload = true;
         }
         state.force_filter_recalculation = true;
         state.show_column_options_popup = false;
+    }
+}
+
+/// Reload sheet data from DB if needed (call this from a system with access to SheetRegistry)
+pub fn reload_sheet_cache_from_db(
+    state: &mut EditorWindowState,
+    registry: &mut SheetRegistry,
+) {
+    if !state.force_cache_reload {
+        return;
+    }
+    
+    state.force_cache_reload = false;
+    
+    let Some(sheet_name) = &state.selected_sheet_name else {
+        return;
+    };
+    
+    let category = &state.selected_category;
+    
+    // Check if this is a DB-backed sheet
+    let is_db_backed = registry
+        .get_sheet(category, sheet_name)
+        .and_then(|s| s.metadata.as_ref())
+        .and_then(|m| m.category.as_ref())
+        .is_some();
+    
+    if !is_db_backed {
+        debug!("Sheet '{}' is not DB-backed, skipping cache reload", sheet_name);
+        return;
+    }
+    
+    // Reload from database
+    let Some(cat_str) = category.as_ref() else {
+        return;
+    };
+    
+    info!("Reloading cache for sheet '{}' from DB", sheet_name);
+    let base_path = crate::sheets::systems::io::get_default_data_base_path();
+    let db_path = base_path.join(format!("{}.db", cat_str));
+    
+    if !db_path.exists() {
+        warn!("Database file not found for cache reload: {:?}", db_path);
+        return;
+    }
+    
+    match rusqlite::Connection::open(&db_path) {
+        Ok(conn) => {
+            match crate::sheets::database::reader::DbReader::read_sheet(&conn, sheet_name) {
+                Ok(sheet_data) => {
+                    info!("Successfully reloaded {} rows from DB for sheet '{}'", sheet_data.grid.len(), sheet_name);
+                    registry.add_or_replace_sheet(
+                        category.clone(),
+                        sheet_name.clone(),
+                        sheet_data,
+                    );
+                }
+                Err(e) => {
+                    error!("Failed to reload sheet data from DB: {}", e);
+                }
+            }
+        }
+        Err(e) => {
+            error!("Failed to open DB for cache reload: {}", e);
+        }
     }
 }
 

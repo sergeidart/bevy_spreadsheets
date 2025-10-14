@@ -1,26 +1,14 @@
 // src/sheets/resources.rs
 use bevy::prelude::*;
 use std::collections::{BTreeMap, HashMap};
-// ADDED: Import ValidationState from ui::validation
 use crate::ui::validation::ValidationState;
-
 use super::definitions::{ColumnValidator, SheetGridData, SheetMetadata};
-
-// --- NEW: RenderableCellData ---
-/// Holds pre-processed data for rendering a single cell.
 #[derive(Clone, Debug, Default)]
 pub struct RenderableCellData {
-    /// The string to actually display in the UI widget.
-    /// This might be the raw string or a formatted version (e.g., "true" for bool).
     pub display_text: String,
-    /// The calculated validation state for this cell.
     pub validation_state: ValidationState,
-    // pub background_color: egui::Color32, // Example: Could be added if not derived in widget
-    // pub text_color: egui::Color32,     // Example
 }
 
-// --- NEW: SheetRenderCache Resource ---
-/// Resource holding the pre-calculated renderable data for each cell of each sheet.
 #[derive(Resource, Default, Debug)]
 pub struct SheetRenderCache {
     // Key: (Category Name Opt, Sheet Name)
@@ -94,9 +82,6 @@ impl SheetRenderCache {
         }
     }
 
-    /// Ensures the render cache for a sheet has the correct dimensions,
-    /// adding default `RenderableCellData` if rows/columns are missing.
-    /// Returns a mutable reference to the cached grid.
     pub(crate) fn ensure_and_get_sheet_cache_mut(
         &mut self,
         category: &Option<String>,
@@ -127,22 +112,15 @@ impl SheetRenderCache {
         sheet_cache
     }
 }
-
-// --- SheetRegistry definition (remains the same) ---
 #[derive(Resource, Default, Debug)]
 pub struct SheetRegistry {
     categorized_sheets: BTreeMap<Option<String>, HashMap<String, SheetGridData>>,
-    // Tracks categories that exist even if they currently have no sheets
     explicit_categories: BTreeMap<String, ()>,
 }
-
-// --- SheetRegistry impl (remains the same) ---
 impl SheetRegistry {
     pub fn register(&mut self, mut metadata: SheetMetadata) -> bool {
         let name = metadata.sheet_name.clone();
-        let category = metadata.category.clone(); // Can be None
-
-        // Ensure data_filename is just the filename part if not already
+        let category = metadata.category.clone(); 
         if let Some(filename_only) = std::path::Path::new(&metadata.data_filename).file_name() {
             metadata.data_filename = filename_only.to_string_lossy().into_owned();
         } else {
@@ -151,11 +129,8 @@ impl SheetRegistry {
                 metadata.data_filename, name
             );
         }
-
         metadata.ensure_ai_schema_groups_initialized();
-
         let category_map = self.categorized_sheets.entry(category.clone()).or_default();
-
         if !category_map.contains_key(&name) {
             let mut data = SheetGridData::default();
             data.metadata = Some(metadata); // Store the owned metadata
@@ -263,19 +238,28 @@ impl SheetRegistry {
         show_hidden_sheets: bool,
     ) -> Vec<String> {
         let mut names = Vec::new();
+        let mut skipped_no_meta = 0;
+        let mut skipped_hidden = 0;
+        
         if let Some(category_map) = self.categorized_sheets.get(category) {
             for (name, data) in category_map.iter() {
                 // If there's no metadata, skip (technical sheets etc.)
                 let Some(meta) = &data.metadata else {
+                    skipped_no_meta += 1;
+                    debug!("Skipping sheet '{}' in category {:?}: no metadata", name, category);
                     continue;
                 };
                 // If not showing hidden sheets and this sheet is hidden, skip it
                 if !show_hidden_sheets && meta.hidden {
+                    skipped_hidden += 1;
+                    debug!("Skipping hidden sheet '{}' in category {:?}", name, category);
                     continue;
                 }
                 names.push(name.clone());
             }
             names.sort_unstable();
+            debug!("get_sheet_names_in_category_filtered: category={:?}, show_hidden={}, found={}, skipped_no_meta={}, skipped_hidden={}", 
+                category, show_hidden_sheets, names.len(), skipped_no_meta, skipped_hidden);
         }
         names
     }
@@ -452,9 +436,6 @@ impl SheetRegistry {
         self.explicit_categories.insert(trimmed.to_string(), ());
         Ok(())
     }
-
-    /// Delete a category (folder) and all its sheets.
-    /// Removes both data and explicit flag. Returns the list of deleted sheet names.
     pub fn delete_category(&mut self, name: &str) -> Result<Vec<String>, String> {
         let key = Some(name.to_string());
         let mut deleted: Vec<String> = Vec::new();
@@ -466,15 +447,11 @@ impl SheetRegistry {
         if deleted.is_empty() {
             // If nothing was deleted and explicit flag removed, category might not have existed
             if !self.explicit_categories.contains_key(name) {
-                // Still accept as success if it existed as empty
-                // Check whether it existed implicitly earlier (no longer, because removed)
-                // Return Ok even if no sheets were present
                 return Ok(deleted);
             }
         }
         Ok(deleted)
     }
-
     /// Rename a category (folder) in the registry. Updates all sheets' metadata and moves map.
     pub fn rename_category(&mut self, old_name: &str, new_name: &str) -> Result<(), String> {
         let old_key = Some(old_name.to_string());
@@ -511,15 +488,11 @@ impl SheetRegistry {
         Ok(())
     }
 }
-
 // --- Clipboard Buffer Resource ---
 /// Resource for holding copied cell data, including structure content
 #[derive(Resource, Default, Debug, Clone)]
 pub struct ClipboardBuffer {
-    /// The raw cell value as a string
     pub cell_value: Option<String>,
-    /// The validator type of the source cell (to help with paste validation)
     pub source_validator: Option<ColumnValidator>,
-    /// For structure cells: the parsed structure rows
     pub structure_data: Option<Vec<Vec<String>>>,
 }

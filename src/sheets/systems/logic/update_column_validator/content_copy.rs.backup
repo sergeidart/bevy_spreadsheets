@@ -1,0 +1,276 @@
+// src/sheets/systems/logic/update_column_validator/content_copy.rs
+// Database content copying for structure tables
+
+use bevy::prelude::*;
+use unicode_normalization::UnicodeNormalization;
+
+use crate::sheets::definitions::ColumnDefinition;
+
+/// Normalize column name for comparison (same logic as UI validation)
+fn normalize_column_name(s: &str) -> String {
+    s.replace(['\r', '\n'], "")
+        .nfd()
+        .filter(|c| !unicode_normalization::char::is_combining_mark(*c))
+        .collect::<String>()
+        .to_lowercase()
+}
+
+/// Copy content from parent table to newly created structure table
+/// Reads all rows from parent table and creates corresponding child rows in structure table
+pub fn copy_parent_content_to_structure_table(
+    conn: &rusqlite::Connection,
+    parent_table_name: &str,
+    structure_table_name: &str,
+    parent_col_def: &ColumnDefinition,
+    structure_columns: &[ColumnDefinition],
+) -> Result<(), String> {
+    // Use structure_columns which includes ALL columns (technical + data)
+    // Filter out row_index (index 0) since it's auto-generated
+    let columns_to_copy: Vec<&ColumnDefinition> = structure_columns.iter()
+        .filter(|col| !col.header.eq_ignore_ascii_case("row_index"))
+        .collect();
+    
+    info!("copy_parent_content: structure has {} total columns, {} to copy (excluding row_index)", 
+        structure_columns.len(), columns_to_copy.len());
+    for (i, col) in columns_to_copy.iter().enumerate() {
+        info!("  column[{}]: header='{}', data_type={:?}", i, col.header, col.data_type);
+    }
+    
+    // Find the key column index in parent table
+    let key_column_index = parent_col_def
+        .structure_key_parent_column_index
+        .ok_or_else(|| "Structure column missing key_parent_column_index".to_string())?;
+    
+    info!("copy_parent_content: key_column_index={}", key_column_index);
+    
+    // Get all column names from parent table
+    let parent_columns: Vec<String> = conn
+        .prepare(&format!("PRAGMA table_info(\"{}\")", parent_table_name))
+        .and_then(|mut stmt| {
+            stmt.query_map([], |row| row.get::<_, String>(1))
+                .and_then(|mapped_rows| mapped_rows.collect::<Result<Vec<_>, _>>())
+        })
+        .map_err(|e| format!("Failed to query parent table schema: {}", e))?;
+    
+    info!("======================================");
+    info!("PARENT TABLE ANALYSIS: {}", parent_table_name);
+    info!("Parent table columns ({} total): {:?}", parent_columns.len(), parent_columns);
+    
+    // Check for hierarchy columns
+    let has_parent_key = parent_columns.iter().any(|c| normalize_column_name(c) == normalize_column_name("parent_key"));
+    let grand_columns: Vec<&String> = parent_columns.iter()
+        .filter(|c| c.starts_with("grand_") && c.ends_with("_parent"))
+        .collect();
+    
+    info!("  - Has parent_key: {}", has_parent_key);
+    info!("  - Grand columns: {:?}", grand_columns);
+    info!("======================================");
+    
+    // Find key column name (skip id, row_index)
+    let _key_column_name = parent_columns.get(key_column_index + 2)
+        .ok_or_else(|| format!("Key column index {} out of bounds", key_column_index))?;
+    
+    // Read all rows from parent table
+    let query = format!("SELECT * FROM \"{}\" ORDER BY row_index", parent_table_name);
+    let mut stmt = conn.prepare(&query)
+        .map_err(|e| format!("Failed to prepare parent query: {}", e))?;
+    
+    let column_count = parent_columns.len();
+    let mut parent_rows: Vec<Vec<String>> = Vec::new();
+    
+    let rows = stmt.query_map([], |row| {
+        let mut row_data = Vec::with_capacity(column_count);
+        for i in 0..column_count {
+            let val: Result<String, _> = row.get(i);
+            row_data.push(val.unwrap_or_default());
+        }
+        Ok(row_data)
+    }).map_err(|e| format!("Failed to query parent rows: {}", e))?;
+    
+    for row_result in rows {
+        if let Ok(row_data) = row_result {
+            parent_rows.push(row_data);
+        }
+    }
+    
+    info!("Found {} parent rows to copy", parent_rows.len());
+    
+    // Start transaction
+    let tx = conn.unchecked_transaction()
+        .map_err(|e| format!("Failed to start transaction: {}", e))?;
+    
+    let mut child_row_index = 0i64;
+    
+    for parent_row in parent_rows {
+        // Get parent_key value from parent row (key column + 2 for id, row_index)
+        let parent_key = parent_row.get(key_column_index + 2)
+            .cloned()
+            .unwrap_or_default();
+        
+        if parent_key.is_empty() {
+            continue; // Skip rows without a key
+        }
+        
+        // Build normalized parent column map for efficient lookup
+        let parent_col_map: std::collections::HashMap<String, usize> = parent_columns
+            .iter()
+            .enumerate()
+            .map(|(idx, name)| (normalize_column_name(name), idx))
+            .collect();
+        
+        if child_row_index == 0 {
+            info!("======================================");
+            info!("FIRST ROW PROCESSING - Column mapping:");
+            info!("  Structure expects {} columns to copy", columns_to_copy.len());
+            for (i, col) in columns_to_copy.iter().enumerate() {
+                let normalized = normalize_column_name(&col.header);
+                let found = parent_col_map.contains_key(&normalized);
+                info!("    [{}] '{}' (normalized: '{}') -> found in parent: {}", 
+                    i, col.header, normalized, found);
+            }
+            info!("======================================");
+        }
+        
+        // Only log every 1000th row to reduce spam
+        if child_row_index % 1000 == 0 {
+            info!(
+                "Processing parent row {}: parent_key='{}', parent has {} columns",
+                child_row_index,
+                parent_key,
+                parent_columns.len()
+            );
+        }
+        
+        // Collect columns in order from structure_columns: grand_N_parent, parent_key, then data columns
+        let mut insert_columns: Vec<String> = Vec::new();
+        let mut insert_values: Vec<String> = Vec::new();
+        
+        // Process all columns from structure_columns (excluding row_index which is already filtered)
+        for col in columns_to_copy.iter() {
+            let col_header = &col.header;
+            
+            // Handle grand_N_parent columns
+            if col_header.starts_with("grand_") && col_header.ends_with("_parent") {
+                let n_str = col_header.trim_start_matches("grand_").trim_end_matches("_parent");
+                if let Ok(n) = n_str.parse::<usize>() {
+            
+            // Extract N from "grand_N_parent"
+            let n_str = field_header.trim_start_matches("grand_").trim_end_matches("_parent");
+            if let Ok(n) = n_str.parse::<usize>() {
+                let value = if n == 1 {
+                    // grand_1_parent = parent's parent_key
+                    let parent_key_normalized = normalize_column_name("parent_key");
+                    if let Some(&parent_key_idx) = parent_col_map.get(&parent_key_normalized) {
+                        let val = parent_row.get(parent_key_idx).cloned().unwrap_or_default();
+                        // Only log every 1000th row or first row
+                        if child_row_index % 1000 == 0 || child_row_index == 0 {
+                            info!("  grand_1_parent <- parent's parent_key (col {}) = '{}'", parent_key_idx, val);
+                        }
+                        val
+                    } else {
+                        // Only log once at first row
+                        if child_row_index == 0 {
+                            info!("  grand_1_parent: parent has no parent_key (root table), using empty");
+                        }
+                        String::new()
+                    }
+                } else {
+                    // grand_N_parent = parent's grand_(N-1)_parent
+                    let source_name = format!("grand_{}_parent", n - 1);
+                    let source_normalized = normalize_column_name(&source_name);
+                    if let Some(&source_idx) = parent_col_map.get(&source_normalized) {
+                        let val = parent_row.get(source_idx).cloned().unwrap_or_default();
+                        // Only log every 1000th row or first row
+                        if child_row_index % 1000 == 0 || child_row_index == 0 {
+                            info!("  {} <- parent's {} (col {}) = '{}'", field_header, source_name, source_idx, val);
+                        }
+                        val
+                    } else {
+                        // Only log once at first row
+                        if child_row_index == 0 {
+                            info!("  {}: parent has no {}, using empty", field_header, source_name);
+                        }
+                        String::new()
+                    }
+                };
+                grandparent_columns.push((field_header.clone(), value));
+            }
+        }
+        
+        // Add grandparent columns to insert
+        for (col_name, col_value) in grandparent_columns {
+            insert_columns.push(col_name);
+            insert_values.push(col_value);
+        }
+        
+        // Third: Process data columns (skip technical columns)
+        for field in schema.iter() {
+            let field_header = &field.header;
+            
+            // Skip technical columns (already handled)
+            if field_header.eq_ignore_ascii_case("row_index") 
+                || field_header.eq_ignore_ascii_case("parent_key")
+                || (field_header.starts_with("grand_") && field_header.ends_with("_parent")) {
+                continue;
+            }
+            
+            // Regular data column - find by normalized name in parent table
+            let field_normalized = normalize_column_name(field_header);
+            if let Some(&parent_col_idx) = parent_col_map.get(&field_normalized) {
+                let value = parent_row.get(parent_col_idx).cloned().unwrap_or_default();
+                // Only log every 1000th row or first row
+                if child_row_index % 1000 == 0 || child_row_index == 0 {
+                    info!("  {} <- parent's {} (col {}) = '{}'", field_header, parent_columns[parent_col_idx], parent_col_idx, value);
+                }
+                insert_columns.push(field_header.clone());
+                insert_values.push(value);
+            } else {
+                warn!("  {} NOT FOUND in parent table, using empty", field_header);
+                insert_columns.push(field_header.clone());
+                insert_values.push(String::new());
+            }
+        }
+        
+        if insert_columns.is_empty() {
+            warn!("No columns to insert for parent_key='{}', skipping", parent_key);
+            continue;
+        }
+        
+        // Build INSERT statement: row_index first, then all insert_columns in order
+        let quoted_columns: Vec<String> = insert_columns.iter().map(|c| format!("\"{}\"", c)).collect();
+        let columns_str = quoted_columns.join(", ");
+        let placeholders = std::iter::repeat("?").take(1 + insert_columns.len()).collect::<Vec<_>>().join(", ");
+        let insert_sql = format!(
+            "INSERT INTO \"{}\" (row_index, {}) VALUES ({})",
+            structure_table_name, columns_str, placeholders
+        );
+        
+        // Only log every 1000th row to reduce spam
+        if child_row_index % 1000 == 0 {
+            info!(
+                "Inserting child row {}: columns=[{}]",
+                child_row_index,
+                insert_columns.join(", ")
+            );
+        }
+        
+        // Prepare parameters: row_index first, then all insert_values
+        let mut params: Vec<rusqlite::types::Value> = Vec::with_capacity(1 + insert_values.len());
+        params.push(rusqlite::types::Value::Integer(child_row_index));
+        for val in insert_values {
+            params.push(rusqlite::types::Value::Text(val));
+        }
+        
+        // Execute insert
+        tx.execute(&insert_sql, rusqlite::params_from_iter(params.iter()))
+            .map_err(|e| format!("Failed to insert child row: {}", e))?;
+        
+        child_row_index += 1;
+    }
+    
+    // Commit transaction
+    tx.commit().map_err(|e| format!("Failed to commit transaction: {}", e))?;
+    
+    info!("Successfully copied {} rows to structure table", child_row_index);
+    Ok(())
+}

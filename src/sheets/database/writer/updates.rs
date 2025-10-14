@@ -14,7 +14,7 @@ pub fn update_cell(
 ) -> DbResult<()> {
     conn.execute(
         &format!(
-            "UPDATE \"{}\" SET \"{}\" = ?, updated_at = CURRENT_TIMESTAMP WHERE row_index = ?",
+            "UPDATE \"{}\" SET \"{}\" = ? WHERE row_index = ?",
             table_name, column_name
         ),
         params![value, row_index as i32],
@@ -32,7 +32,7 @@ pub fn update_structure_cell_by_id(
 ) -> DbResult<()> {
     conn.execute(
         &format!(
-            "UPDATE \"{}\" SET \"{}\" = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            "UPDATE \"{}\" SET \"{}\" = ? WHERE id = ?",
             table_name, column_name
         ),
         params![value, row_id],

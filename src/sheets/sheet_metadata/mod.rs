@@ -282,4 +282,39 @@ impl SheetMetadata {
             metadata_idx // No offset for regular tables
         }
     }
+
+    /// Returns the count of technical columns (row_index, grand_N_parent, parent_key)
+    /// at the start of the columns list for a structure table
+    pub fn count_structure_technical_columns(&self) -> usize {
+        if !self.is_structure_table() {
+            return 0;
+        }
+
+        self.columns
+            .iter()
+            .take_while(|col| {
+                col.header.eq_ignore_ascii_case("row_index")
+                    || col.header.starts_with("grand_")
+                    || col.header.eq_ignore_ascii_case("parent_key")
+            })
+            .count()
+    }
+
+    /// Returns the index of the first real data column (after technical columns)
+    /// For structure tables, this skips row_index, grand_N_parent, and parent_key
+    pub fn first_data_column_index(&self) -> usize {
+        self.count_structure_technical_columns()
+    }
+
+    /// Returns true if the column at the given index is a technical column
+    /// (row_index, grand_N_parent, or parent_key)
+    pub fn is_technical_column(&self, col_index: usize) -> bool {
+        if let Some(col) = self.columns.get(col_index) {
+            col.header.eq_ignore_ascii_case("row_index")
+                || col.header.starts_with("grand_")
+                || col.header.eq_ignore_ascii_case("parent_key")
+        } else {
+            false
+        }
+    }
 }

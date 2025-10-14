@@ -269,9 +269,29 @@ pub fn handle_delete_columns_request(
                                 }
                             }
                             if col_exists {
+                                // Wipe data first
                                 let wipe_sql = format!("UPDATE \"{}\" SET \"{}\" = NULL", table_name, column_name);
                                 match conn.execute(&wipe_sql, []) {
-                                    Ok(wiped) => info!("Wiped {} cell(s) in '{}' column '{}'", wiped, table_name, column_name),
+                                    Ok(wiped) => {
+                                        info!("Wiped {} cell(s) in '{}' column '{}'", wiped, table_name, column_name);
+                                        
+                                        // Try to drop the column (SQLite 3.35.0+)
+                                        let drop_sql = format!("ALTER TABLE \"{}\" DROP COLUMN \"{}\"", table_name, column_name);
+                                        match conn.execute(&drop_sql, []) {
+                                            Ok(_) => {
+                                                info!("Dropped column '{}' from table '{}'", column_name, table_name);
+                                                
+                                                // Run VACUUM to reclaim space
+                                                match conn.execute("VACUUM", []) {
+                                                    Ok(_) => info!("VACUUM completed after dropping column '{}'", column_name),
+                                                    Err(e) => warn!("VACUUM failed after dropping column '{}': {}", column_name, e),
+                                                }
+                                            }
+                                            Err(e) => {
+                                                warn!("Failed to drop column '{}' from '{}': {} (data wiped, column still exists)", column_name, table_name, e);
+                                            }
+                                        }
+                                    }
                                     Err(e) => warn!("Failed to wipe data for column '{}' on '{}': {}", column_name, table_name, e),
                                 }
                             } else {

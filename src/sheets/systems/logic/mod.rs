@@ -52,7 +52,7 @@ pub use migrate_inline_structures::migrate_inline_structure_data;
 pub use migrate_inline_structures::run_inline_structure_migration_once;
 pub use move_sheet::handle_move_sheet_to_category_request;
 pub use rename_sheet::handle_rename_request;
-pub use structure_preview_logic::{generate_structure_preview, generate_structure_preview_from_rows};
+pub use structure_preview_logic::{generate_structure_preview, generate_structure_preview_from_rows, generate_structure_preview_from_rows_with_headers};
 pub use sync_structure::handle_sync_virtual_structure_sheet;
 pub use update_cell::handle_cell_update;
 pub use update_column_name::handle_update_column_name;
