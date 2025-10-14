@@ -2,12 +2,11 @@ use bevy_egui::egui::{self, Layout, RichText};
 use egui_extras::TableRow;
 
 use super::cell_render::{render_original_choice_toggle, render_review_original_cell};
-use super::row_render::RowContext;
+use super::row_render::{RowContext, PARENT_KEY_COLOR};
 use crate::sheets::systems::ai_review::{
     OriginalDataCellPlan, OriginalPreviewCellPlan, OriginalPreviewPlan, RowKind,
 };
 use crate::sheets::systems::ai_review::review_logic::ColumnEntry;
-use crate::ui::elements::editor::state::ReviewChoice;
 
 pub fn render_original_preview_row(
     row: &mut TableRow,
@@ -35,7 +34,7 @@ pub fn render_original_preview_row(
                     }
                 });
             });
-            ctx.render_ancestor_keys(row);
+            ctx.render_ancestor_keys_with_override(row, kind, data_idx);
             render_original_preview_columns(row, kind, data_idx, columns, ctx);
         }
         OriginalPreviewPlan::NewPlain {
@@ -54,7 +53,7 @@ pub fn render_original_preview_row(
                     }
                 });
             });
-            ctx.render_ancestor_keys(row);
+            ctx.render_ancestor_keys_with_override(row, kind, data_idx);
             render_original_preview_columns(row, kind, data_idx, columns, ctx);
         }
         OriginalPreviewPlan::NewDuplicate {
@@ -100,7 +99,7 @@ pub fn render_original_preview_row(
                     ui.label("—");
                 }
             });
-            ctx.render_ancestor_keys(row);
+            ctx.render_ancestor_keys_with_override(row, kind, data_idx);
             render_original_preview_columns(row, kind, data_idx, columns, ctx);
         }
     }
@@ -142,29 +141,25 @@ fn render_original_data_cell(
     plan: &OriginalDataCellPlan,
     ctx: &mut RowContext<'_>,
 ) {
-    // Guard: parent_key (actual_col == 1) should never render as an original preview data cell.
-    if plan.actual_col == 1 {
-        ui.label("");
-        return;
-    }
+    // Check if this is parent_key column (column 1 in structure tables)
+    let is_parent_key = plan.actual_col == 1;
+    
     match kind {
         RowKind::Existing => {
             if let Some(rr) = ctx.state.ai_row_reviews.get_mut(data_idx) {
-                let original_value = rr
-                    .original
-                    .get(plan.position)
-                    .map(|s| s.as_str())
-                    .unwrap_or("");
-                let ai_value = rr.ai.get(plan.position).map(|s| s.as_str());
-                let choice_opt = rr.choices.get_mut(plan.position);
+                // Get override state for key columns or parent_key
+                let override_enabled = (plan.is_key_column || is_parent_key) && 
+                    *rr.key_overrides.get(&plan.position).unwrap_or(&false);
 
-                render_original_data_cell_contents(
+                render_original_data_cell_contents_existing(
                     ui,
-                    original_value,
-                    ai_value,
-                    choice_opt,
+                    plan.position,
                     plan.show_toggle,
                     plan.strike_ai_override,
+                    plan.is_key_column,
+                    is_parent_key,
+                    override_enabled,
+                    rr,
                 );
             } else {
                 ui.label("—");
@@ -172,74 +167,192 @@ fn render_original_data_cell(
         }
         RowKind::NewDuplicate => {
             if let Some(nr) = ctx.state.ai_new_row_reviews.get_mut(data_idx) {
-                let original_value = nr
-                    .original_for_merge
-                    .as_ref()
-                    .and_then(|row| row.get(plan.position))
-                    .map(|s| s.as_str())
-                    .unwrap_or("");
-                let ai_value = nr.ai.get(plan.position).map(|s| s.as_str());
-                let choice_opt = nr
-                    .choices
-                    .as_mut()
-                    .and_then(|choices| choices.get_mut(plan.position));
+                // Get override state for key columns or parent_key
+                let override_enabled = (plan.is_key_column || is_parent_key) && 
+                    *nr.key_overrides.get(&plan.position).unwrap_or(&false);
 
-                render_original_data_cell_contents(
+                render_original_data_cell_contents_new_duplicate(
                     ui,
-                    original_value,
-                    ai_value,
-                    choice_opt,
+                    plan.position,
                     plan.show_toggle,
                     plan.strike_ai_override,
+                    plan.is_key_column,
+                    is_parent_key,
+                    override_enabled,
+                    nr,
                 );
             } else {
                 ui.label("—");
             }
         }
         RowKind::NewPlain => {
-            ui.label("");
+            // For NewPlain rows, only show override toggle for parent_key
+            if is_parent_key {
+                if let Some(nr) = ctx.state.ai_new_row_reviews.get_mut(data_idx) {
+                    // Only show checkbox in Original sub-row
+                    // The actual value is shown in the AI sub-row
+                    let override_val = nr.key_overrides.entry(plan.position).or_insert(false);
+                    ui.checkbox(override_val, "Override");
+                } else {
+                    ui.label("");
+                }
+            } else {
+                ui.label("");
+            }
         }
     }
 }
 
-fn render_original_data_cell_contents(
+fn render_original_data_cell_contents_existing(
     ui: &mut egui::Ui,
-    original_value: &str,
-    ai_value: Option<&str>,
-    choice_opt: Option<&mut ReviewChoice>,
+    position: usize,
     show_toggle: bool,
     strike_ai_override: bool,
+    is_key_column: bool,
+    is_parent_key: bool,
+    override_enabled: bool,
+    rr: &mut crate::ui::elements::editor::state::RowReview,
 ) {
-    let choice_value = choice_opt.as_ref().map(|choice| **choice);
-    let mut choice_opt = choice_opt;
-
-    ui.horizontal(|ui| {
-        // Orig picker on the leftmost side
-        ui.with_layout(Layout::left_to_right(egui::Align::Center), |ui| {
-            if show_toggle {
-                if render_original_choice_toggle(
-                    ui,
-                    choice_opt.as_deref_mut(),
-                    original_value,
-                    ai_value,
-                ) {
-                    // toggle clicked handled inside toggle function
+    if is_parent_key {
+        // For parent_key: only show checkbox in Original sub-row
+        // The actual value is shown in the AI sub-row
+        let override_val = rr.key_overrides.entry(position).or_insert(false);
+        ui.checkbox(override_val, "Override");
+    } else {
+        // For regular columns: use horizontal layout with optional checkbox
+        ui.horizontal(|ui| {
+            // Override toggle for key columns (leftmost)
+            if is_key_column {
+                let override_val = rr.key_overrides.entry(position).or_insert(false);
+                if ui.checkbox(override_val, "").changed() {
+                    // Override state changed
                 }
-            } else {
-                ui.add_space(0.0);
+                ui.add_space(4.0);
             }
-        });
+            
+            // Orig picker on the left side
+            ui.with_layout(Layout::left_to_right(egui::Align::Center), |ui| {
+                if show_toggle && !override_enabled {
+                    let original_value = rr.original.get(position).map(|s| s.as_str()).unwrap_or("");
+                    let ai_value = rr.ai.get(position).map(|s| s.as_str());
+                    let mut choice_opt = rr.choices.get_mut(position);
+                    if render_original_choice_toggle(
+                        ui,
+                        choice_opt.as_deref_mut(),
+                        original_value,
+                        ai_value,
+                    ) {
+                        // toggle clicked handled inside toggle function
+                    }
+                } else if !is_key_column {
+                    ui.add_space(0.0);
+                }
+            });
 
-        ui.add_space(6.0);
+            ui.add_space(6.0);
 
-        ui.with_layout(Layout::left_to_right(egui::Align::Center), |ui| {
-            render_review_original_cell(
-                ui,
-                original_value,
-                ai_value,
-                choice_value,
-                strike_ai_override,
-            );
+            ui.with_layout(Layout::left_to_right(egui::Align::Center), |ui| {
+                if override_enabled && is_key_column {
+                    // Render editable text box for overridden key columns
+                    if let Some(cell) = rr.original.get_mut(position) {
+                        ui.add(egui::TextEdit::singleline(cell).desired_width(220.0));
+                    }
+                } else {
+                    let original_value = rr.original.get(position).map(|s| s.as_str()).unwrap_or("");
+                    let ai_value = rr.ai.get(position).map(|s| s.as_str());
+                    let choice_value = rr.choices.get(position).copied();
+                    render_review_original_cell(
+                        ui,
+                        original_value,
+                        ai_value,
+                        choice_value,
+                        strike_ai_override,
+                    );
+                }
+            });
         });
-    });
+    }
+}
+
+fn render_original_data_cell_contents_new_duplicate(
+    ui: &mut egui::Ui,
+    position: usize,
+    show_toggle: bool,
+    strike_ai_override: bool,
+    is_key_column: bool,
+    is_parent_key: bool,
+    override_enabled: bool,
+    nr: &mut crate::ui::elements::editor::state::NewRowReview,
+) {
+    if is_parent_key {
+        // For parent_key: only show checkbox in Original sub-row
+        // The actual value is shown in the AI sub-row
+        let override_val = nr.key_overrides.entry(position).or_insert(false);
+        ui.checkbox(override_val, "Override");
+    } else {
+        // For regular columns: use horizontal layout with optional checkbox
+        ui.horizontal(|ui| {
+            // Override toggle for key columns (leftmost)
+            if is_key_column {
+                let override_val = nr.key_overrides.entry(position).or_insert(false);
+                if ui.checkbox(override_val, "").changed() {
+                    // Override state changed
+                }
+                ui.add_space(4.0);
+            }
+            
+            // Orig picker on the left side
+            ui.with_layout(Layout::left_to_right(egui::Align::Center), |ui| {
+                if show_toggle && !override_enabled {
+                    let original_value = nr
+                        .original_for_merge
+                        .as_ref()
+                        .and_then(|row| row.get(position))
+                        .map(|s| s.as_str())
+                        .unwrap_or("");
+                    let ai_value = nr.ai.get(position).map(|s| s.as_str());
+                    let mut choice_opt = nr.choices.as_mut().and_then(|c| c.get_mut(position));
+                    if render_original_choice_toggle(
+                        ui,
+                        choice_opt.as_deref_mut(),
+                        original_value,
+                        ai_value,
+                    ) {
+                        // toggle clicked handled inside toggle function
+                    }
+                } else if !is_key_column {
+                    ui.add_space(0.0);
+                }
+            });
+
+            ui.add_space(6.0);
+
+            ui.with_layout(Layout::left_to_right(egui::Align::Center), |ui| {
+                if override_enabled && is_key_column {
+                    // Render editable text box for overridden key columns
+                    if let Some(original_for_merge) = &mut nr.original_for_merge {
+                        if let Some(cell) = original_for_merge.get_mut(position) {
+                            ui.add(egui::TextEdit::singleline(cell).desired_width(220.0));
+                        }
+                    }
+                } else {
+                    let original_value = nr
+                        .original_for_merge
+                        .as_ref()
+                        .and_then(|row| row.get(position))
+                        .map(|s| s.as_str())
+                        .unwrap_or("");
+                    let ai_value = nr.ai.get(position).map(|s| s.as_str());
+                    let choice_value = nr.choices.as_ref().and_then(|c| c.get(position)).copied();
+                    render_review_original_cell(
+                        ui,
+                        original_value,
+                        ai_value,
+                        choice_value,
+                        strike_ai_override,
+                    );
+                }
+            });
+        });
+    }
 }

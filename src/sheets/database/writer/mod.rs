@@ -6,6 +6,7 @@ mod updates;
 mod deletions;
 mod renames;
 mod metadata;
+mod cascades;
 
 use super::error::DbResult;
 use crate::sheets::definitions::{ColumnDataType, ColumnValidator, SheetMetadata};
@@ -183,6 +184,22 @@ impl DbWriter {
         new_column_name: &str,
     ) -> DbResult<()> {
         renames::rename_structure_table(conn, parent_table, old_column_name, new_column_name)
+    }
+
+    // ============================================================================
+    // CASCADES - See cascades.rs
+    // ============================================================================
+    
+    /// Cascade column rename to child structure tables
+    /// Updates parent_key and grand_N_parent values in all descendant tables
+    /// to maintain referential integrity after a parent column is renamed
+    pub fn cascade_column_rename_to_children(
+        conn: &Connection,
+        parent_table: &str,
+        old_column_name: &str,
+        new_column_name: &str,
+    ) -> DbResult<()> {
+        cascades::cascade_column_rename_to_children(conn, parent_table, old_column_name, new_column_name)
     }
 
     // ============================================================================

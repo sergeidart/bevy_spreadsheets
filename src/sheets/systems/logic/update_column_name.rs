@@ -179,6 +179,19 @@ pub fn handle_update_column_name(
                                                 }
                                             }
                                         }
+                                        
+                                        // Cascade column rename to child tables (update parent_key and grand_N_parent values)
+                                        // This ensures filtering continues to work after column rename
+                                        debug!("Cascading column rename to child structure tables");
+                                        match crate::sheets::database::writer::DbWriter::cascade_column_rename_to_children(
+                                            &conn,
+                                            sheet_name,
+                                            &old_name,
+                                            new_name,
+                                        ) {
+                                            Ok(_) => info!("Successfully cascaded column rename to children"),
+                                            Err(e) => error!("Failed to cascade column rename: {}", e),
+                                        }
                                     }
                                     Err(e) => {
                                         error!("Failed to open DB connection for column rename: {}", e);

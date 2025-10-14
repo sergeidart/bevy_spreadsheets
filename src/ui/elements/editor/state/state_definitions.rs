@@ -152,23 +152,26 @@ pub struct RowReview {
     pub ai: Vec<String>,
     pub choices: Vec<ReviewChoice>, // length == editable (non-structure) columns shown order
     pub non_structure_columns: Vec<usize>, // mapping for editable subset
+    /// Track which key columns (by position) have override enabled (default false)
+    pub key_overrides: std::collections::HashMap<usize, bool>,
+    /// Editable ancestor key values (indexed by ancestor key position)
+    pub ancestor_key_values: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct NewRowReview {
     pub ai: Vec<String>,
     pub non_structure_columns: Vec<usize>,
-    // If Some(row_index) then this new row's first column matches an existing row's first column
-    // allowing user to choose between merging into that row or adding a separate row.
     pub duplicate_match_row: Option<usize>,
-    // Per-column review choices (only meaningful when merging). Mirrors RowReview. Length == non_structure_columns.len()
     pub choices: Option<Vec<ReviewChoice>>,
-    // Whether the user currently has the Merge option selected (pre-decision). Defaults true if duplicate_match_row present.
     pub merge_selected: bool,
-    // Whether the user clicked Decide (once decided Accept/Cancel replace Decide and toggle is hidden)
     pub merge_decided: bool,
     // Original row data for the matched duplicate row (used for merge comparison)
     pub original_for_merge: Option<Vec<String>>,
+    /// Track which key columns (by position) have override enabled (default false)
+    pub key_overrides: std::collections::HashMap<usize, bool>,
+    /// Editable ancestor key values (indexed by ancestor key position)
+    pub ancestor_key_values: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -469,14 +472,9 @@ pub struct EditorWindowState {
     pub toybox_mode: ToyboxMode,
     // App-wide FPS setting controlled from Settings popup
     pub fps_setting: FpsSetting,
-    // UI preference: show hidden sheets (persisted via AppSettings)
     pub show_hidden_sheets: bool,
-
-    // Throttled apply queue for Accept All (row_index, col_index, new_value)
     pub ai_throttled_apply_queue: VecDeque<ThrottledAiAction>,
-    // Batch add queue for AI new rows - stores (category, sheet_name, Vec<row_initial_values>)
     pub ai_throttled_batch_add_queue: VecDeque<(Option<String>, String, Vec<Vec<(usize, String)>>)>,
-    // Cached flag: true if there are duplicate new rows needing a Merge/Separate decision
     pub ai_batch_has_undecided_merge: bool,
     // NEW: Prompt popup for zero-row AI request
     pub show_ai_prompt_popup: bool,
@@ -489,8 +487,6 @@ pub struct EditorWindowState {
     pub ai_cached_included_columns_path: Vec<usize>,
     pub ai_cached_included_columns_dirty: bool,
     pub ai_cached_included_columns_valid: bool,
-    /// Cache for structure row counts in hover previews to avoid per-frame recomputation
-    /// Key: (category, structure_sheet_name, parent_row_index_in_root, structure_col_index, structure_path_len)
     pub ui_structure_row_count_cache:
         std::collections::HashMap<(Option<String>, String, usize, usize, usize), usize>,
     // Tracks the right edge of the last rendered header in content coordinates for Add Column placement

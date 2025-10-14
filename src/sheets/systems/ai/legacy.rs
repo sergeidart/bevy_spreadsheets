@@ -84,6 +84,8 @@ pub fn handle_ai_task_results(
                     ai: ai_snapshot,
                     choices: vec![ReviewChoice::AI; included.len()],
                     non_structure_columns: included,
+                    key_overrides: std::collections::HashMap::new(),
+                    ancestor_key_values: Vec::new(),
                 });
                 state.ai_batch_review_active = true;
             }

@@ -48,6 +48,115 @@ impl<'a> RowContext<'a> {
             });
         }
     }
+    
+    pub fn render_ancestor_keys_with_override(&mut self, row: &mut TableRow, kind: RowKind, data_idx: usize) {
+        for (key_idx, (_header, context_value)) in self.ancestor_key_columns.iter().enumerate() {
+            row.col(|ui| {
+                match kind {
+                    RowKind::Existing => {
+                        if let Some(rr) = self.state.ai_row_reviews.get_mut(data_idx) {
+                            // Ensure ancestor_key_values is populated
+                            while rr.ancestor_key_values.len() <= key_idx {
+                                rr.ancestor_key_values.push(String::new());
+                            }
+                            // Initialize from context if empty
+                            if rr.ancestor_key_values[key_idx].is_empty() {
+                                rr.ancestor_key_values[key_idx] = context_value.clone();
+                            }
+                            
+                            // Get or insert override state for this ancestor key
+                            let override_key = 1000 + key_idx; // Use 1000+ to avoid conflicts with regular columns
+                            let override_enabled = *rr.key_overrides.get(&override_key).unwrap_or(&false);
+                            
+                            ui.horizontal(|ui| {
+                                // Checkbox toggle
+                                let override_val = rr.key_overrides.entry(override_key).or_insert(false);
+                                ui.checkbox(override_val, "");
+                                ui.add_space(4.0);
+                                
+                                // Show value or editable text
+                                if override_enabled {
+                                    // Editable text box without green color
+                                    ui.add(egui::TextEdit::singleline(&mut rr.ancestor_key_values[key_idx]).desired_width(120.0));
+                                } else {
+                                    ui.label(RichText::new(&rr.ancestor_key_values[key_idx]).color(PARENT_KEY_COLOR));
+                                }
+                            });
+                        } else {
+                            ui.label(RichText::new(context_value.clone()).color(PARENT_KEY_COLOR));
+                        }
+                    }
+                    RowKind::NewDuplicate => {
+                        if let Some(nr) = self.state.ai_new_row_reviews.get_mut(data_idx) {
+                            // Ensure ancestor_key_values is populated
+                            while nr.ancestor_key_values.len() <= key_idx {
+                                nr.ancestor_key_values.push(String::new());
+                            }
+                            // Initialize from context if empty
+                            if nr.ancestor_key_values[key_idx].is_empty() {
+                                nr.ancestor_key_values[key_idx] = context_value.clone();
+                            }
+                            
+                            // Get or insert override state for this ancestor key
+                            let override_key = 1000 + key_idx; // Use 1000+ to avoid conflicts with regular columns
+                            let override_enabled = *nr.key_overrides.get(&override_key).unwrap_or(&false);
+                            
+                            ui.horizontal(|ui| {
+                                // Checkbox toggle
+                                let override_val = nr.key_overrides.entry(override_key).or_insert(false);
+                                ui.checkbox(override_val, "");
+                                ui.add_space(4.0);
+                                
+                                // Show value or editable text
+                                if override_enabled {
+                                    // Editable text box without green color
+                                    ui.add(egui::TextEdit::singleline(&mut nr.ancestor_key_values[key_idx]).desired_width(120.0));
+                                } else {
+                                    ui.label(RichText::new(&nr.ancestor_key_values[key_idx]).color(PARENT_KEY_COLOR));
+                                }
+                            });
+                        } else {
+                            ui.label(RichText::new(context_value.clone()).color(PARENT_KEY_COLOR));
+                        }
+                    }
+                    RowKind::NewPlain => {
+                        // New plain rows: allow editing ancestor keys with override toggle
+                        if let Some(nr) = self.state.ai_new_row_reviews.get_mut(data_idx) {
+                            // Ensure ancestor_key_values is populated
+                            while nr.ancestor_key_values.len() <= key_idx {
+                                nr.ancestor_key_values.push(String::new());
+                            }
+                            // Initialize from context if empty
+                            if nr.ancestor_key_values[key_idx].is_empty() {
+                                nr.ancestor_key_values[key_idx] = context_value.clone();
+                            }
+                            
+                            // Get or insert override state for this ancestor key
+                            let override_key = 1000 + key_idx; // Use 1000+ to avoid conflicts with regular columns
+                            let override_enabled = *nr.key_overrides.get(&override_key).unwrap_or(&false);
+                            
+                            ui.horizontal(|ui| {
+                                // Checkbox toggle
+                                let override_val = nr.key_overrides.entry(override_key).or_insert(false);
+                                ui.checkbox(override_val, "");
+                                ui.add_space(4.0);
+                                
+                                // Show value or editable text
+                                if override_enabled {
+                                    // Editable text box without green color
+                                    ui.add(egui::TextEdit::singleline(&mut nr.ancestor_key_values[key_idx]).desired_width(120.0));
+                                } else {
+                                    ui.label(RichText::new(&nr.ancestor_key_values[key_idx]).color(PARENT_KEY_COLOR));
+                                }
+                            });
+                        } else {
+                            ui.label(RichText::new(context_value.clone()).color(PARENT_KEY_COLOR));
+                        }
+                    }
+                }
+            });
+        }
+    }
 }
 
 pub fn render_rows(body: &mut TableBody<'_>, mut ctx: RowContext<'_>) {

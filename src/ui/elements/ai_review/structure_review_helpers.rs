@@ -53,6 +53,8 @@ pub fn convert_structure_to_reviews(
             original: original_row.clone(),
             ai: ai_row.clone(),
             choices,
+            key_overrides: std::collections::HashMap::new(),
+            ancestor_key_values: Vec::new(),
         });
     }
 
@@ -110,6 +112,8 @@ pub fn convert_structure_to_reviews(
             choices,
             merge_selected: duplicate_match_row.is_some(), // Default to merge if duplicate found
             merge_decided: false,
+            key_overrides: std::collections::HashMap::new(),
+            ancestor_key_values: Vec::new(),
         });
     }
 

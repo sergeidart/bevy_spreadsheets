@@ -41,7 +41,7 @@ pub fn render_ai_suggested_row(
                     }
                 });
             });
-            ctx.render_ancestor_keys(row);
+            ctx.render_ancestor_keys_with_override(row, kind, data_idx);
             render_ai_suggested_columns(row, kind, data_idx, columns, ctx, None);
         }
         AiSuggestedPlan::NewPlain { columns } => {
@@ -52,7 +52,7 @@ pub fn render_ai_suggested_row(
                     }
                 });
             });
-            ctx.render_ancestor_keys(row);
+            ctx.render_ancestor_keys_with_override(row, kind, data_idx);
             render_ai_suggested_columns(row, kind, data_idx, columns, ctx, None);
         }
         AiSuggestedPlan::NewDuplicate {
@@ -96,7 +96,7 @@ pub fn render_ai_suggested_row(
                     ui.label("—");
                 }
             });
-            ctx.render_ancestor_keys(row);
+            ctx.render_ancestor_keys_with_override(row, kind, data_idx);
             render_ai_suggested_columns(
                 row,
                 kind,
@@ -190,13 +190,26 @@ fn render_ai_regular_cell(
     match kind {
         RowKind::Existing => {
             if let Some(rr) = ctx.state.ai_row_reviews.get_mut(data_idx) {
+                // Check if this is a key column with override enabled
+                let is_key_column = plan.actual_col == 0;
+                let override_enabled = is_key_column && 
+                    *rr.key_overrides.get(&position).unwrap_or(&false);
+                
                 if plan.is_parent_key {
-                    // Show the parent_key inside AI row as plain, non-interactable text.
-                    // Show ONLY the AI value (do not fall back to the original) so
-                    // the original value doesn't appear in this column.
-                    let value = rr.ai.get(position).map(|s| s.as_str()).unwrap_or("");
-                    let display = if value.trim().is_empty() { "(empty)" } else { value };
-                    ui.label(RichText::new(display.to_string()).color(PARENT_KEY_COLOR));
+                    // Check if override is enabled for parent_key
+                    let parent_key_override = *rr.key_overrides.get(&position).unwrap_or(&false);
+                    
+                    if parent_key_override {
+                        // Show editable textbox when override is checked (full width)
+                        if let Some(cell) = rr.ai.get_mut(position) {
+                            ui.add(egui::TextEdit::singleline(cell).desired_width(ui.available_width()));
+                        }
+                    } else {
+                        // Show the parent_key as plain, non-interactable green text
+                        let value = rr.ai.get(position).map(|s| s.as_str()).unwrap_or("");
+                        let display = if value.trim().is_empty() { "(empty)" } else { value };
+                        ui.label(RichText::new(display.to_string()).color(PARENT_KEY_COLOR));
+                    }
                     return;
                 }
 
@@ -235,11 +248,26 @@ fn render_ai_regular_cell(
         }
         RowKind::NewPlain => {
             if let Some(nr) = ctx.state.ai_new_row_reviews.get_mut(data_idx) {
+                // Check if this is a key column with override enabled
+                let is_key_column = plan.actual_col == 0;
+                let override_enabled = is_key_column && 
+                    *nr.key_overrides.get(&position).unwrap_or(&false);
+                    
                 if plan.is_parent_key {
-                    // For NewPlain rows only show AI value for parent_key (non-interactable)
-                    let value = nr.ai.get(position).map(|s| s.as_str()).unwrap_or("");
-                    let display = if value.trim().is_empty() { "(empty)" } else { value };
-                    ui.label(RichText::new(display.to_string()).color(PARENT_KEY_COLOR));
+                    // Check if override is enabled for parent_key
+                    let parent_key_override = *nr.key_overrides.get(&position).unwrap_or(&false);
+                    
+                    if parent_key_override {
+                        // Show editable textbox when override is checked (full width)
+                        if let Some(cell) = nr.ai.get_mut(position) {
+                            ui.add(egui::TextEdit::singleline(cell).desired_width(ui.available_width()));
+                        }
+                    } else {
+                        // Show the parent_key as plain, non-interactable green text
+                        let value = nr.ai.get(position).map(|s| s.as_str()).unwrap_or("");
+                        let display = if value.trim().is_empty() { "(empty)" } else { value };
+                        ui.label(RichText::new(display.to_string()).color(PARENT_KEY_COLOR));
+                    }
                     return;
                 }
 
@@ -267,11 +295,26 @@ fn render_ai_regular_cell(
             if let Some(nr) = ctx.state.ai_new_row_reviews.get_mut(data_idx) {
                 let (merge_decided, merge_selected) = merge_state.unwrap_or((false, false));
 
+                // Check if this is a key column with override enabled
+                let is_key_column = plan.actual_col == 0;
+                let override_enabled = is_key_column && 
+                    *nr.key_overrides.get(&position).unwrap_or(&false);
+
                 if plan.is_parent_key {
-                    // For duplicate/new rows show ONLY the AI-proposed parent_key value (not original_for_merge)
-                    let value = nr.ai.get(position).map(|s| s.as_str()).unwrap_or("");
-                    let display = if value.trim().is_empty() { "(empty)" } else { value };
-                    ui.label(RichText::new(display.to_string()).color(PARENT_KEY_COLOR));
+                    // Check if override is enabled for parent_key
+                    let parent_key_override = *nr.key_overrides.get(&position).unwrap_or(&false);
+                    
+                    if parent_key_override {
+                        // Show editable textbox when override is checked (full width)
+                        if let Some(cell) = nr.ai.get_mut(position) {
+                            ui.add(egui::TextEdit::singleline(cell).desired_width(ui.available_width()));
+                        }
+                    } else {
+                        // Show the parent_key as plain, non-interactable green text
+                        let value = nr.ai.get(position).map(|s| s.as_str()).unwrap_or("");
+                        let display = if value.trim().is_empty() { "(empty)" } else { value };
+                        ui.label(RichText::new(display.to_string()).color(PARENT_KEY_COLOR));
+                    }
                     return;
                 }
 

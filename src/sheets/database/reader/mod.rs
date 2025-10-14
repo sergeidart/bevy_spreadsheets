@@ -395,15 +395,19 @@ impl DbReader {
             orphaned.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>()
         );
 
-        // Find next available index
-        let next_index = columns
-            .iter()
-            .filter(|c| {
-                c.header != "row_index"
-                    && c.header != "parent_key"
-                    && !(c.header.starts_with("grand_") && c.header.ends_with("_parent"))
-            })
-            .count() as i32;
+        // Find next available index by querying the max column_index from the database
+        let next_index: i32 = conn
+            .query_row(
+                &format!("SELECT COALESCE(MAX(column_index), -1) + 1 FROM \"{}\"", meta_table),
+                [],
+                |row| row.get(0),
+            )
+            .unwrap_or(0);
+
+        bevy::log::debug!(
+            "Orphaned column recovery: next_index={} (from max in DB)",
+            next_index
+        );
 
         // Recover each orphaned column
         for (idx, (col_name, sql_type)) in orphaned.iter().enumerate() {

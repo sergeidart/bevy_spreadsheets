@@ -351,6 +351,8 @@ fn process_original_rows_from_phase2(
             ai: ai_snapshot,
             choices,
             non_structure_columns: included.clone(),
+            key_overrides: std::collections::HashMap::new(),
+            ancestor_key_values: Vec::new(),
         });
 
         // Cache original row
@@ -424,6 +426,8 @@ fn process_duplicate_rows_from_phase2(
             merge_selected,
             merge_decided: false,
             original_for_merge: original_for_merge.clone(),
+            key_overrides: std::collections::HashMap::new(),
+            ancestor_key_values: Vec::new(),
         });
 
         // FIX: Cache original for duplicate using the new_row_index
@@ -469,6 +473,8 @@ fn process_new_rows_from_phase2(
             merge_selected: false,
             merge_decided: false,
             original_for_merge: None,
+            key_overrides: std::collections::HashMap::new(),
+            ancestor_key_values: Vec::new(),
         });
 
         // Cache empty original for new rows

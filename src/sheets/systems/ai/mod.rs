@@ -3,7 +3,7 @@
 
 // Result handlers
 pub mod legacy;
-pub mod results; // Single-row result handler (potentially deprecated)
+pub mod results; // Batch result handlers (split into submodules)
 
 // Helper modules
 pub mod phase2_helpers;

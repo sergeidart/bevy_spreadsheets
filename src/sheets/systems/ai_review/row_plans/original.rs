@@ -131,6 +131,7 @@ pub struct OriginalDataCellPlan {
     pub position: usize,
     pub show_toggle: bool,
     pub strike_ai_override: bool,
+    pub is_key_column: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -220,18 +221,15 @@ pub fn prepare_original_preview_plan(
                         ));
                     }
                     ColumnEntry::Regular(actual_col) => {
-                        // Hide parent_key in original/preview rows: parent_key should only be
-                        // shown inside AI rows (non-interactable). For original preview rows
-                        // we emit Empty so the column isn't rendered here.
+                        // Allow parent_key in original/preview rows with override toggle
                         let is_parent_key = is_parent_key_column(detail_ctx, *actual_col);
-                        if is_parent_key {
-                            // Don't show parent_key in original preview rows
-                            columns.push((*entry, OriginalPreviewCellPlan::Empty));
-                        } else if let Some(pos) = rr
+                        if let Some(pos) = rr
                             .non_structure_columns
                             .iter()
                             .position(|c| c == actual_col)
                         {
+                            // Check if this is a key column (first column in the row)
+                            let is_key = *actual_col == 0;
                             columns.push((
                                 *entry,
                                 OriginalPreviewCellPlan::Data(OriginalDataCellPlan {
@@ -239,6 +237,7 @@ pub fn prepare_original_preview_plan(
                                     position: pos,
                                     show_toggle: true,
                                     strike_ai_override: false,
+                                    is_key_column: is_key,
                                 }),
                             ));
                         } else {
@@ -255,7 +254,7 @@ pub fn prepare_original_preview_plan(
             })
         }
         RowKind::NewPlain => {
-            let _nr = state.ai_new_row_reviews.get(idx)?;
+            let nr = state.ai_new_row_reviews.get(idx)?;
             let has_undecided = has_undecided_structures_in_context(
                 ai_structure_reviews,
                 detail_ctx,
@@ -276,23 +275,38 @@ pub fn prepare_original_preview_plan(
                             }),
                         ));
                     }
-                            ColumnEntry::Regular(actual_col) => {
-                                // Place the "AI Added" label in the first regular column that is
-                                // NOT the parent_key (col 1). This ensures parent_key remains
-                                // reserved for AI-rows only and isn't used as the label carrier.
-                                let is_parent_key = is_parent_key_column(detail_ctx, *actual_col);
-                                if !label_drawn && !is_parent_key {
-                                    columns.push((
-                                        *entry,
-                                        OriginalPreviewCellPlan::Label {
-                                            text: "AI Added".to_string(),
-                                            color: Color32::LIGHT_BLUE,
-                                        },
-                                    ));
-                                    label_drawn = true;
-                                } else {
-                                    columns.push((*entry, OriginalPreviewCellPlan::Empty));
-                                }
+                    ColumnEntry::Regular(actual_col) => {
+                        let is_parent_key = is_parent_key_column(detail_ctx, *actual_col);
+                        
+                        if is_parent_key {
+                            // For parent_key column, create a Data plan so checkbox can render
+                            if let Some(pos) = nr.non_structure_columns.iter().position(|c| c == actual_col) {
+                                columns.push((
+                                    *entry,
+                                    OriginalPreviewCellPlan::Data(OriginalDataCellPlan {
+                                        actual_col: *actual_col,
+                                        position: pos,
+                                        show_toggle: false,
+                                        strike_ai_override: false,
+                                        is_key_column: false,
+                                    }),
+                                ));
+                            } else {
+                                columns.push((*entry, OriginalPreviewCellPlan::Empty));
+                            }
+                        } else if !label_drawn {
+                            // Place the "AI Added" label in the first regular column that is not parent_key
+                            columns.push((
+                                *entry,
+                                OriginalPreviewCellPlan::Label {
+                                    text: "AI Added".to_string(),
+                                    color: Color32::LIGHT_BLUE,
+                                },
+                            ));
+                            label_drawn = true;
+                        } else {
+                            columns.push((*entry, OriginalPreviewCellPlan::Empty));
+                        }
                     }
                 }
             }
@@ -360,6 +374,8 @@ pub fn prepare_original_preview_plan(
                                                 .copied(),
                                             Some(ReviewChoice::AI)
                                         );
+                                    // Check if this is a key column (first column in the row)
+                                    let is_key = *actual_col == 0;
                                     columns.push((
                                         *entry,
                                         OriginalPreviewCellPlan::Data(OriginalDataCellPlan {
@@ -367,6 +383,7 @@ pub fn prepare_original_preview_plan(
                                             position: pos,
                                             show_toggle: nr.merge_decided && nr.merge_selected,
                                             strike_ai_override: strike,
+                                            is_key_column: is_key,
                                         }),
                                     ));
                                 }
