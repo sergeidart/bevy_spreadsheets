@@ -131,13 +131,16 @@ pub fn create_structure_technical_columns(depth: usize) -> Vec<ColumnDefinition>
     // Add grandparent keys from deepest to shallowest (grand_2_parent, grand_1_parent, parent_key)
     // This matches the requirement: row_index, grand_2_parent, grand_1_parent, parent_key, data...
     if depth > 2 {
-        for level in (2..depth).rev() {
+        // For depth=3: create grand_2_parent (level=2), grand_1_parent (level=1)
+        // For depth=4: create grand_3_parent (level=3), grand_2_parent (level=2), grand_1_parent (level=1)
+        // Formula: iterate from (depth-1) down to 1
+        for level in (1..=(depth-1)).rev() {
             columns.push(ColumnDefinition {
-                header: format!("grand_{}_parent", level - 1),
+                header: format!("grand_{}_parent", level),
                 data_type: ColumnDataType::String,
                 validator: None,
                 filter: None,
-                ai_context: Some(format!("Level {} parent identifier for hierarchical filtering", level - 1)),
+                ai_context: Some(format!("Level {} parent identifier for hierarchical filtering", level)),
                 ai_enable_row_generation: None,
                 ai_include_in_send: Some(true), // Send all parent keys to AI
                 deleted: false,
@@ -149,10 +152,8 @@ pub fn create_structure_technical_columns(depth: usize) -> Vec<ColumnDefinition>
                 structure_ancestor_key_parent_column_indices: None,
             });
         }
-    }
-
-    // Add grand_1_parent if depth > 1
-    if depth > 1 {
+    } else if depth == 2 {
+        // Add grand_1_parent for depth == 2 only
         columns.push(ColumnDefinition {
             header: "grand_1_parent".to_string(),
             data_type: ColumnDataType::String,

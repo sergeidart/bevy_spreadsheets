@@ -33,7 +33,7 @@ pub fn cascade_key_value_change_to_children(
         parent_table, parent_column_name, old_value, new_value
     );
 
-    // Get all structure tables in database
+    // Get all structure tables in database (for recursive descent lookups)
     let mut stmt = conn.prepare(
         "SELECT table_name FROM _Metadata WHERE table_type = 'structure'"
     )?;
@@ -42,23 +42,16 @@ pub fn cascade_key_value_change_to_children(
         .query_map([], |row| row.get(0))?
         .collect::<Result<Vec<_>, _>>()?;
     
-    // Filter to ALL direct children of parent_table (format: {parent_table}_{any_column})
-    // Because when a key value changes, ALL structure children reference it via parent_key
-    let prefix = format!("{}_", parent_table);
-    let child_tables: Vec<String> = all_structure_tables
-        .iter()
-        .filter(|table| {
-            // Must start with "{parent_table}_" and not be a grandchild (no second underscore after parent)
-            if !table.starts_with(&prefix) {
-                return false;
-            }
-            // Extract the part after "{parent_table}_"
-            let remaining = &table[prefix.len()..];
-            // It's a direct child if there's no more underscore (no grandchild)
-            !remaining.contains('_')
-        })
-        .cloned()
-        .collect();
+    // Get all structure tables that are direct children of parent_table
+    // Query _Metadata.parent_table to find direct children reliably
+    // This is more accurate than string matching because table/column names can contain underscores
+    let mut child_stmt = conn.prepare(
+        "SELECT table_name FROM _Metadata WHERE table_type = 'structure' AND parent_table = ?"
+    )?;
+    
+    let child_tables: Vec<String> = child_stmt
+        .query_map([parent_table], |row| row.get(0))?
+        .collect::<Result<Vec<_>, _>>()?;
     
     if child_tables.is_empty() {
         bevy::log::debug!(

@@ -29,13 +29,22 @@ pub(super) fn invalidate_sheet_cache(
     }
 }
 
-/// Extracts structure context from editor state (parent_key for structure sheets)
+/// Structure context for new row creation (parent_key + ancestor keys)
+#[derive(Debug, Clone)]
+pub(super) struct StructureContext {
+    pub parent_key: String,
+    /// Ancestor keys ordered from deepest to shallowest (matches grand_N_parent order)
+    /// Example: [grand_2_parent_value, grand_1_parent_value]
+    pub ancestor_keys: Vec<String>,
+}
+
+/// Extracts structure context from editor state (parent_key + ancestor_keys for structure sheets)
 pub(super) fn get_structure_context(
     editor_state: &Option<bevy::prelude::ResMut<EditorWindowState>>,
     sheet_name: &str,
     category: &Option<String>,
     registry: &crate::sheets::resources::SheetRegistry,
-) -> Option<String> {
+) -> Option<StructureContext> {
     let state = editor_state.as_ref()?;
     
     // First check virtual_structure_stack (for AI operations in virtual sheets)
@@ -50,7 +59,12 @@ pub(super) fn get_structure_context(
                         if let Some(struct_col) = meta.columns.get(vctx.parent.parent_col) {
                             if let Some(key_col_idx) = struct_col.structure_key_parent_column_index {
                                 if let Some(key_value) = parent_row.get(key_col_idx) {
-                                    return Some(key_value.clone());
+                                    // For virtual sheets, ancestor_keys would need to be extracted from parent row
+                                    // TODO: Extract ancestor keys from parent row's grand_N_parent columns
+                                    return Some(StructureContext {
+                                        parent_key: key_value.clone(),
+                                        ancestor_keys: Vec::new(), // TODO: populate from parent row
+                                    });
                                 }
                             }
                         }
@@ -64,7 +78,10 @@ pub(super) fn get_structure_context(
     let nav_ctx = state.structure_navigation_stack.last()?;
     
     if &nav_ctx.structure_sheet_name == sheet_name && &nav_ctx.parent_category == category {
-        Some(nav_ctx.parent_row_key.clone())
+        Some(StructureContext {
+            parent_key: nav_ctx.parent_row_key.clone(),
+            ancestor_keys: nav_ctx.ancestor_keys.clone(),
+        })
     } else {
         None
     }

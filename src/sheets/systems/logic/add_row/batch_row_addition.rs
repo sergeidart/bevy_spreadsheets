@@ -44,7 +44,8 @@ pub fn handle_add_rows_batch_request(
             if let Some(metadata) = &sheet_data.metadata {
                 let num_cols = metadata.columns.len();
                 
-                // Detect if this is a structure sheet
+                // Detect if this is a structure sheet by checking if it has 'row_index' (at index 0) 
+                // and 'parent_key' columns (anywhere in the columns)
                 let is_structure_sheet = num_cols >= 2
                     && metadata
                         .columns
@@ -53,9 +54,8 @@ pub fn handle_add_rows_batch_request(
                         .unwrap_or(false)
                     && metadata
                         .columns
-                        .get(1)
-                        .map(|c| c.header.eq_ignore_ascii_case("parent_key"))
-                        .unwrap_or(false);
+                        .iter()
+                        .any(|c| c.header.eq_ignore_ascii_case("parent_key"));
 
                 // Insert all rows at top (index 0, 1, 2, etc.)
                 for (row_idx, initial_values) in event.rows_initial_values.iter().enumerate() {
@@ -68,10 +68,33 @@ pub fn handle_add_rows_batch_request(
                             if row.len() > 0 && row[0].is_empty() {
                                 row[0] = row_idx.to_string();
                             }
-                            // Auto-fill parent_key column (index 1)
-                            if row.len() > 1 && row[1].is_empty() {
-                                if let Some(parent_key) = &structure_context {
-                                    row[1] = parent_key.clone();
+                            
+                            // Auto-fill parent_key and ancestor columns if we have structure context
+                            if let Some(ctx) = &structure_context {
+                                // Unified ancestor logic: ancestor_keys contains ALL parent values
+                                // ordered from deepest to shallowest: [grand_N, ..., grand_1, parent_key_value]
+                                // We iterate through ALL columns and match by name (grand_N_parent, parent_key)
+                                
+                                let mut ancestor_idx = 0;
+                                
+                                // Iterate through all columns (skip row_index at index 0)
+                                for col_idx in 1..metadata.columns.len() {
+                                    if ancestor_idx >= ctx.ancestor_keys.len() {
+                                        break; // No more ancestor values to assign
+                                    }
+                                    
+                                    if let Some(col) = metadata.columns.get(col_idx) {
+                                        // Check if this is a grand_N_parent column
+                                        if col.header.starts_with("grand_") && col.header.ends_with("_parent") {
+                                            row[col_idx] = ctx.ancestor_keys[ancestor_idx].clone();
+                                            ancestor_idx += 1;
+                                        }
+                                        // Check if this is the parent_key column
+                                        else if col.header.eq_ignore_ascii_case("parent_key") {
+                                            row[col_idx] = ctx.ancestor_keys[ancestor_idx].clone();
+                                            ancestor_idx += 1;
+                                        }
+                                    }
                                 }
                             }
                         }
