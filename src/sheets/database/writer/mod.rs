@@ -190,16 +190,23 @@ impl DbWriter {
     // CASCADES - See cascades.rs
     // ============================================================================
     
-    /// Cascade column rename to child structure tables
+    /// Cascade key value change to child structure tables
     /// Updates parent_key and grand_N_parent values in all descendant tables
-    /// to maintain referential integrity after a parent column is renamed
-    pub fn cascade_column_rename_to_children(
+    /// to maintain referential integrity after a parent key value is changed
+    pub fn cascade_key_value_change_to_children(
         conn: &Connection,
         parent_table: &str,
-        old_column_name: &str,
-        new_column_name: &str,
+        parent_column_name: &str,
+        old_value: &str,
+        new_value: &str,
     ) -> DbResult<()> {
-        cascades::cascade_column_rename_to_children(conn, parent_table, old_column_name, new_column_name)
+        cascades::cascade_key_value_change_to_children(
+            conn,
+            parent_table,
+            parent_column_name,
+            old_value,
+            new_value,
+        )
     }
 
     // ============================================================================
@@ -388,7 +395,6 @@ mod tests {
             ("C".to_string(), 3),
         ];
         DbWriter::update_column_indices(&conn, table, &pairs).unwrap();
-
         // Verify ordering by selecting ordered by column_index
         let meta = format!("{}_Metadata", table);
         let mut stmt = conn
@@ -404,7 +410,6 @@ mod tests {
             .unwrap();
         assert_eq!(cols, vec!["D", "B", "A", "C"]);
     }
-
     #[test]
     fn test_update_cell_updates_value() {
         let conn = Connection::open_in_memory().unwrap();
@@ -423,7 +428,6 @@ mod tests {
 
         // Update via DbWriter
         DbWriter::update_cell(&conn, table, 0usize, "Name", "Bob").unwrap();
-
         // Verify
         let name: String = conn
             .query_row(
@@ -434,13 +438,11 @@ mod tests {
             .unwrap();
         assert_eq!(name, "Bob");
     }
-
     #[test]
     fn test_prepend_row_shifts_and_inserts() {
         let conn = Connection::open_in_memory().unwrap();
         let table = "Main";
         setup_simple_table(&conn, table);
-
         // Seed two rows: indices 0 => "A0", 1 => "A1"
         conn.execute(
             &format!(
@@ -458,12 +460,10 @@ mod tests {
             params![1i32, "A1"],
         )
         .unwrap();
-
         // Add new row "New" (appends at max_index + 1)
         let cols = vec!["Name".to_string()];
         let data = vec!["New".to_string()];
         DbWriter::prepend_row(&conn, table, &data, &cols).unwrap();
-
         // Expect three rows with indices 0,1,2 and values in storage: A0, A1, New
         // With DESC sort, display order is: New (2), A1 (1), A0 (0)
         let mut stmt = conn
