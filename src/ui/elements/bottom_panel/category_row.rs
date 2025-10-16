@@ -29,24 +29,6 @@ pub fn show_category_picker<'a, 'w>(
             &mut drop_consumed,
         );
 
-        // Rename Category button
-        let has_selected_category = state.selected_category.is_some();
-        if row
-            .add_enabled(has_selected_category, egui::Button::new("✏"))
-            .on_hover_text("Rename category")
-            .clicked()
-        {
-            category_handlers::handle_rename_category_request(state);
-        }
-
-        // Delete Category button
-        if row
-            .add_enabled(has_selected_category, egui::Button::new("🗑"))
-            .on_hover_text("Delete current category and all its sheets (double confirmation)")
-            .clicked()
-        {
-            category_handlers::handle_delete_category_request(state);
-        }
 
         // Hide / Extend button
         row.add_space(6.0);
@@ -177,6 +159,17 @@ fn render_category_tabs(
                         let is_sel = state.selected_category.as_deref() == Some(cat.as_str());
                         let disp: String = cat.chars().take(32).collect();
                         let resp = ui_th.selectable_label(is_sel, disp).on_hover_text(cat);
+                        // Right-click context menu on category tab
+                        resp.context_menu(|menu_ui| {
+                            if menu_ui.button("✏ Rename Category").clicked() {
+                                crate::sheets::systems::ui_handlers::category_handlers::handle_rename_category_request(state);
+                                menu_ui.close_menu();
+                            }
+                            if menu_ui.button("🗑 Delete Category").clicked() {
+                                crate::sheets::systems::ui_handlers::category_handlers::handle_delete_category_request(state);
+                                menu_ui.close_menu();
+                            }
+                        });
                         
                         super::drop_visuals::render_drop_target_highlight(
                             ui_th,

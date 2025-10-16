@@ -48,21 +48,7 @@ pub fn show_sheet_controls<'a, 'w>(
 fn render_sheet_controls(ui: &mut egui::Ui, state: &mut EditorWindowState) {
     let can_manage = sheet_handlers::can_manage_sheet(state);
 
-    if ui
-        .add_enabled(can_manage, egui::Button::new("✏"))
-        .on_hover_text("Rename sheet")
-        .clicked()
-    {
-        sheet_handlers::handle_rename_sheet_request(state);
-    }
-    
-    if ui
-        .add_enabled(can_manage, egui::Button::new("🗑"))
-        .on_hover_text("Delete sheet")
-        .clicked()
-    {
-        sheet_handlers::handle_delete_sheet_request(state);
-    }
+    // Removed inline rename and delete; use context menu on sheet dropdown for these actions
 
     ui.add_space(6.0);
     let s_expanded = state.sheet_picker_expanded;
@@ -109,10 +95,23 @@ fn render_sheet_tab(
 ) {
     let is_sel = state.selected_sheet_name.as_deref() == Some(name);
     let resp = ui_th.selectable_label(is_sel, name).on_hover_text(name);
-    
-    // Context menu for hidden toggle
-    resp.context_menu(|ctx_menu| {
-        super::popups::handle_sheet_context_menu(ctx_menu, state, registry, name);
+    // Right-click context menu on sheet tab: rename/delete and hidden toggle
+    resp.context_menu(|menu_ui| {
+        // Rename Sheet
+        if menu_ui.button("✏ Rename Sheet").clicked() {
+            crate::sheets::systems::ui_handlers::sheet_handlers::handle_rename_sheet_request(state);
+            menu_ui.close_menu();
+            return;
+        }
+        // Delete Sheet
+        if menu_ui.button("🗑 Delete Sheet").clicked() {
+            crate::sheets::systems::ui_handlers::sheet_handlers::handle_delete_sheet_request(state);
+            menu_ui.close_menu();
+            return;
+        }
+        menu_ui.separator();
+        // Hidden toggle from existing context menu
+        super::popups::handle_sheet_context_menu(menu_ui, state, registry, name);
     });
     
     // Drag-and-drop
