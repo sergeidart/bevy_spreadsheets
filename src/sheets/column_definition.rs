@@ -7,7 +7,12 @@ use super::structure_field::StructureFieldDefinition;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ColumnDefinition {
+    /// Logical column name used for DB and structure sheet naming
     pub header: String,
+    /// Optional UI/Display name shown in the editor. When present, this is
+    /// used for rendering labels but does not affect DB physical names.
+    #[serde(default)]
+    pub display_header: Option<String>,
     #[serde(default)]
     pub validator: Option<ColumnValidator>,
     #[serde(default)]
@@ -43,7 +48,12 @@ pub struct ColumnDefinition {
 impl From<&ColumnDefinition> for StructureFieldDefinition {
     fn from(c: &ColumnDefinition) -> Self {
         StructureFieldDefinition {
-            header: c.header.clone(),
+            // Prefer UI/display label when deriving structure field headers
+            header: c
+                .display_header
+                .as_ref()
+                .cloned()
+                .unwrap_or_else(|| c.header.clone()),
             validator: c.validator.clone(),
             data_type: c.data_type,
             filter: c.filter.clone(),
@@ -65,6 +75,7 @@ impl ColumnDefinition {
     pub fn new_basic(header: String, data_type: ColumnDataType) -> Self {
         ColumnDefinition {
             header,
+            display_header: None,
             validator: Some(ColumnValidator::Basic(data_type)),
             data_type,
             filter: None,

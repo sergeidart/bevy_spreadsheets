@@ -206,6 +206,7 @@ mod tests {
         };
         let root_col = ColumnDefinition {
             header: "root".to_string(),
+            display_header: Some("root".to_string()),
             validator: Some(ColumnValidator::Structure),
             data_type: ColumnDataType::String,
             filter: None,

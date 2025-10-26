@@ -62,6 +62,7 @@ pub(super) fn deserialize_legacy_format<E: de::Error>(value: Value) -> Result<Sh
         let final_validator = validator_val.or(Some(ColumnValidator::Basic(data_type)));
         columns.push(ColumnDefinition {
             header,
+            display_header: None,
             validator: final_validator,
             data_type,
             filter: filter_val,

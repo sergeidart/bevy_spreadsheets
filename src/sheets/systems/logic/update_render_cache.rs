@@ -29,6 +29,7 @@ pub fn handle_sheet_render_cache_update(
     mut ev_data_modified: EventReader<SheetDataModifiedInRegistryEvent>,
     mut ev_sheet_deleted: EventReader<RequestDeleteSheet>, // To clear cache
     mut ev_sheet_renamed: EventReader<RequestRenameSheet>, // To rename cache entry
+    mut ev_cache_renamed: EventReader<crate::sheets::events::RequestRenameCacheEntry>, // Internal cache rename
     // Consider adding readers for AddSheetRowRequest, RequestDeleteRows,
     // RequestUpdateColumnName, RequestUpdateColumnValidator if they
     // don't already fire SheetDataModifiedInRegistryEvent or RequestSheetRevalidation appropriately.
@@ -75,6 +76,18 @@ pub fn handle_sheet_render_cache_update(
         }
         debug!(
             "Renamed render cache entry: '{:?}/{}' -> '{:?}/{}'",
+            event.category, event.old_name, event.category, event.new_name
+        );
+    }
+
+    // Handle internal cache rename requests (do not trigger full rename logic)
+    for event in ev_cache_renamed.read() {
+        render_cache.rename_sheet_render_data(&event.category, &event.old_name, &event.new_name);
+        if sheets_to_rebuild.remove(&(event.category.clone(), event.old_name.clone())) {
+            sheets_to_rebuild.insert((event.category.clone(), event.new_name.clone()));
+        }
+        debug!(
+            "Renamed render cache entry (internal): '{:?}/{}' -> '{:?}/{}'",
             event.category, event.old_name, event.category, event.new_name
         );
     }

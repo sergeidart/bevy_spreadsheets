@@ -93,8 +93,8 @@ pub fn create_main_data_table(conn: &Connection, table_name: &str, column_defs: 
     );
     conn.execute(&create_sql, [])?;
 
-    // Create index
-    let index_name = table_name.replace(" ", "_");
+    // Create index (use sanitized name to avoid quoting issues)
+    let index_name = super::sanitize_identifier(table_name);
     conn.execute(
         &format!(
             "CREATE INDEX IF NOT EXISTS idx_{}_row_index ON \"{}\"(row_index)",
@@ -114,6 +114,7 @@ pub fn create_sheet_metadata_table(conn: &Connection, meta_table: &str) -> DbRes
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 column_index INTEGER UNIQUE NOT NULL,
                 column_name TEXT NOT NULL UNIQUE,
+                display_name TEXT,
                 data_type TEXT NOT NULL,
                 validator_type TEXT,
                 validator_config TEXT,
@@ -239,8 +240,8 @@ pub fn create_structure_data_table(
     bevy::log::info!("Creating structure table with SQL: {}", create_sql);
     conn.execute(&create_sql, [])?;
 
-    // Create indexes
-    let index_name = structure_table.replace(" ", "_");
+    // Create indexes (use sanitized name to avoid quoting issues)
+    let index_name = super::sanitize_identifier(structure_table);
     conn.execute(
         &format!(
             "CREATE INDEX IF NOT EXISTS idx_{}_parent_key ON \"{}\"(parent_key)",

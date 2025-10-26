@@ -112,6 +112,7 @@ pub fn create_structure_technical_columns(depth: usize) -> Vec<ColumnDefinition>
     let mut columns = vec![
         ColumnDefinition {
             header: "row_index".to_string(),
+                display_header: None,
             data_type: ColumnDataType::String,
             validator: None,
             filter: None,
@@ -137,6 +138,7 @@ pub fn create_structure_technical_columns(depth: usize) -> Vec<ColumnDefinition>
         for level in (1..=(depth-1)).rev() {
             columns.push(ColumnDefinition {
                 header: format!("grand_{}_parent", level),
+                display_header: None,
                 data_type: ColumnDataType::String,
                 validator: None,
                 filter: None,
@@ -156,6 +158,7 @@ pub fn create_structure_technical_columns(depth: usize) -> Vec<ColumnDefinition>
         // Add grand_1_parent for depth == 2 only
         columns.push(ColumnDefinition {
             header: "grand_1_parent".to_string(),
+                display_header: None,
             data_type: ColumnDataType::String,
             validator: None,
             filter: None,
@@ -175,6 +178,7 @@ pub fn create_structure_technical_columns(depth: usize) -> Vec<ColumnDefinition>
     // Always add parent_key last (as it's the immediate parent)
     columns.push(ColumnDefinition {
         header: "parent_key".to_string(),
+                display_header: None,
         data_type: ColumnDataType::String,
         validator: None,
         filter: None,
@@ -192,3 +196,6 @@ pub fn create_structure_technical_columns(depth: usize) -> Vec<ColumnDefinition>
 
     columns
 }
+
+
+

@@ -31,6 +31,7 @@ use super::events::{
     RequestProcessUpload,
     RequestRenameAiSchemaGroup,
     RequestRenameCategory,
+    RequestRenameCacheEntry,
     RequestRenameSheet,
     RequestRenameSheetFile,
     RequestReorderColumn,
@@ -98,6 +99,7 @@ impl Plugin for SheetsPlugin {
             .add_event::<RequestCreateNewSheet>()
             .add_event::<JsonSheetUploaded>()
             .add_event::<RequestRenameSheet>()
+            .add_event::<RequestRenameCacheEntry>()
             .add_event::<RequestDeleteSheet>()
             .add_event::<RequestDeleteSheetFile>()
             .add_event::<RequestRenameSheetFile>()
@@ -195,8 +197,9 @@ impl Plugin for SheetsPlugin {
         let apply_changes_stage_three = (
             systems::logic::handle_move_sheet_to_category_request,
             systems::logic::handle_delete_columns_request,
-            systems::logic::handle_update_column_name,
+            // Ensure validator changes (which can create structure tables) run before renames
             systems::logic::handle_update_column_validator,
+            systems::logic::handle_update_column_name,
             systems::logic::handle_cell_update,
             // Clipboard operations
             systems::logic::handle_copy_cell,

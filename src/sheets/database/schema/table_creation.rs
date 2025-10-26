@@ -174,6 +174,7 @@ pub fn ensure_table_metadata_schema(
 
 /// Add missing columns to metadata table
 fn add_missing_metadata_columns(conn: &Connection, meta_table: &str) -> DbResult<()> {
+    queries::add_column_if_missing(conn, meta_table, "display_name", "TEXT")?;
     queries::add_column_if_missing(conn, meta_table, "validator_type", "TEXT")?;
     queries::add_column_if_missing(conn, meta_table, "validator_config", "TEXT")?;
     queries::add_column_if_missing(conn, meta_table, "ai_context", "TEXT")?;

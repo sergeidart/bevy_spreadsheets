@@ -156,6 +156,24 @@ pub fn handle_create_new_sheet_request(
                         desired_name,
                         db_path.display()
                     );
+
+                    // Immediately reload runtime metadata from DB so technical columns
+                    // (e.g., row_index) are present in-memory before any render cache builds.
+                    match crate::sheets::database::reader::DbReader::read_sheet(&conn, desired_name) {
+                        Ok(loaded) => {
+                            registry.add_or_replace_sheet(category.clone(), desired_name.to_string(), loaded);
+                            info!(
+                                "Reloaded new sheet '{:?}/{}' from DB to include technical columns before caching.",
+                                category, desired_name
+                            );
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Failed to reload sheet '{:?}/{}' from DB after creation: {:?}",
+                                category, desired_name, e
+                            );
+                        }
+                    }
                 }
                 Err(e) => {
                     error!(

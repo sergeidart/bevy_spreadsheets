@@ -48,6 +48,7 @@ pub fn infer_schema_and_load_table(
 
             ColumnDefinition {
                 header: name.clone(),
+                display_header: None,
                 validator: Some(ColumnValidator::Basic(data_type)),
                 data_type,
                 filter: None,
@@ -120,3 +121,9 @@ pub fn infer_schema_and_load_table(
 
     Ok((metadata, rows))
 }
+
+
+
+
+
+

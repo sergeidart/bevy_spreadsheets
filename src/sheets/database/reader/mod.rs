@@ -21,8 +21,9 @@ impl DbReader {
             Self::create_metadata_from_physical_table(conn, table_name)?;
         }
 
-        // Ensure 'deleted' column exists in metadata table
+        // Ensure 'deleted' and 'display_name' columns exist in metadata table
         queries::add_column_if_missing(conn, &meta_table, "deleted", "INTEGER", "0")?;
+        queries::add_column_if_missing(conn, &meta_table, "display_name", "TEXT", "NULL")?;
 
         let table_type = queries::get_table_type(conn, table_name);
         let is_structure = matches!(table_type.as_deref(), Some("structure"));
@@ -154,6 +155,7 @@ impl DbReader {
 
             columns.push(ColumnDefinition {
                 header: name,
+                display_header: None,
                 validator: None,
                 data_type,
                 filter: None,
@@ -244,6 +246,7 @@ impl DbReader {
 
             columns.push(ColumnDefinition {
                 header: row.column_name,
+                display_header: row.display_name,
                 validator,
                 data_type,
                 filter: row.filter_expr,
@@ -336,6 +339,7 @@ impl DbReader {
     ) -> ColumnDefinition {
         ColumnDefinition {
             header: name.to_string(),
+            display_header: None,
             validator: Some(ColumnValidator::Basic(data_type)),
             data_type,
             filter: None,
@@ -436,6 +440,7 @@ impl DbReader {
 
                     columns.push(ColumnDefinition {
                         header: col_name.clone(),
+                        display_header: None,
                         validator: Some(ColumnValidator::Basic(data_type)),
                         data_type,
                         filter: None,

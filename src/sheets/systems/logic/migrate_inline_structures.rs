@@ -345,6 +345,7 @@ fn create_structure_sheet_metadata(
     let mut columns = vec![
         ColumnDefinition {
             header: "id".to_string(),
+                display_header: None,
             validator: None,
             data_type: ColumnDataType::String,
             filter: None,
@@ -361,6 +362,7 @@ fn create_structure_sheet_metadata(
         },
         ColumnDefinition {
             header: "parent_key".to_string(),
+                display_header: None,
             validator: None,
             data_type: ColumnDataType::String,
             filter: None,
@@ -382,6 +384,7 @@ fn create_structure_sheet_metadata(
         for field in schema_fields {
             columns.push(ColumnDefinition {
                 header: field.header.clone(),
+                display_header: None,
                 validator: None,
                 data_type: field.data_type.clone(),
                 filter: None,
@@ -411,3 +414,6 @@ fn create_structure_sheet_metadata(
     meta.hidden = true;
     meta
 }
+
+
+

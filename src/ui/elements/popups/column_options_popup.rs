@@ -55,8 +55,13 @@ pub fn show_column_options_popup(
                 .and_then(|s| s.metadata.as_ref())
                 .and_then(|m| m.columns.get(col_index));
             if let Some(col_def) = maybe_col_def {
+                let ui_name = col_def
+                    .display_header
+                    .as_ref()
+                    .cloned()
+                    .unwrap_or_else(|| col_def.header.clone());
                 (
-                    Some(col_def.header.clone()),
+                    Some(ui_name),
                     col_def.filter.clone(),
                     col_def.ai_context.clone(),
                     col_def.validator.clone(),
@@ -87,7 +92,12 @@ pub fn show_column_options_popup(
                         .and_then(|s| s.metadata.as_ref())
                         .map_or(false, |m| {
                             m.columns.iter().enumerate().any(|(i, c)| {
-                                i != col_index && !c.deleted && c.header.eq_ignore_ascii_case(new_name_trimmed)
+                                let comp = c
+                                    .display_header
+                                    .as_ref()
+                                    .map(|s| s.as_str())
+                                    .unwrap_or(c.header.as_str());
+                                i != col_index && !c.deleted && comp.eq_ignore_ascii_case(new_name_trimmed)
                             })
                         });
                     debug!("Duplicate check result: is_duplicate={}", is_duplicate);
@@ -375,6 +385,7 @@ fn initialize_popup_state(state: &mut EditorWindowState, registry: &SheetRegistr
             .as_ref()
         .map(|f| crate::sheets::definitions::ColumnDefinition {
                 header: f.header.clone(),
+                display_header: None,
                 validator: f.validator.clone(),
                 data_type: f.data_type,
                 filter: f.filter.clone(),
@@ -403,7 +414,11 @@ fn initialize_popup_state(state: &mut EditorWindowState, registry: &SheetRegistr
         };
     if let Some(_guard) = Some(()) {
         let col_def = col_def_ref;
-        state.options_column_rename_input = col_def.header.clone();
+        state.options_column_rename_input = col_def
+            .display_header
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| col_def.header.clone());
         state.options_column_filter_input = col_def.filter.clone().unwrap_or_default();
         // Initialize multi-term filter vector from stored filter (split by '|')
         state.options_column_filter_terms = if state.options_column_filter_input.is_empty() {
@@ -496,3 +511,6 @@ fn initialize_popup_state(state: &mut EditorWindowState, registry: &SheetRegistr
         state.options_structure_key_parent_column_temp = None;
     }
 }
+
+
+

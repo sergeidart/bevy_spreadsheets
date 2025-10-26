@@ -331,6 +331,7 @@ pub fn handle_open_structure_view(
                                     if let Some(def) = schema.get(i) {
                                         return ColumnDefinition {
                                             header: def.header.clone(),
+                                            display_header: None,
                                             data_type: def.data_type,
                                             validator: def.validator.clone(),
                                             filter: def.filter.clone(),
@@ -360,6 +361,7 @@ pub fn handle_open_structure_view(
                                     .and_then(|c| c.ai_context.clone());
                                 ColumnDefinition {
                                     header: h.clone(),
+                                    display_header: None,
                                     data_type: ColumnDataType::String,
                                     validator: None,
                                     filter: None,
@@ -479,3 +481,6 @@ pub fn handle_close_structure_view(
         }
     }
 }
+
+
+

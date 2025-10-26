@@ -84,7 +84,7 @@ pub fn read_metadata_columns(
     meta_table: &str,
 ) -> DbResult<Vec<MetadataColumnRow>> {
     let mut stmt = conn.prepare(&format!(
-        "SELECT column_index, column_name, data_type, validator_type, validator_config, 
+        "SELECT column_index, column_name, display_name, data_type, validator_type, validator_config, 
                 ai_context, filter_expr, ai_enable_row_generation, ai_include_in_send, deleted
          FROM \"{}\" ORDER BY column_index",
         meta_table
@@ -95,14 +95,15 @@ pub fn read_metadata_columns(
             Ok(MetadataColumnRow {
                 column_index: row.get(0)?,
                 column_name: row.get(1)?,
-                data_type: row.get(2)?,
-                validator_type: row.get(3)?,
-                validator_config: row.get(4)?,
-                ai_context: row.get(5)?,
-                filter_expr: row.get(6)?,
-                ai_enable_row_generation: row.get(7)?,
-                ai_include_in_send: row.get(8)?,
-                deleted: row.get(9)?,
+                display_name: row.get(2)?,
+                data_type: row.get(3)?,
+                validator_type: row.get(4)?,
+                validator_config: row.get(5)?,
+                ai_context: row.get(6)?,
+                filter_expr: row.get(7)?,
+                ai_enable_row_generation: row.get(8)?,
+                ai_include_in_send: row.get(9)?,
+                deleted: row.get(10)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -271,6 +272,7 @@ pub fn list_all_tables(conn: &Connection) -> DbResult<Vec<String>> {
 pub struct MetadataColumnRow {
     pub column_index: i32,
     pub column_name: String,
+    pub display_name: Option<String>,
     pub data_type: String,
     pub validator_type: Option<String>,
     pub validator_config: Option<String>,

@@ -340,6 +340,11 @@ fn show_key_column_selector(
                                     continue;
                                 }
                             }
+                            // Skip technical columns: row_index, parent_key, grand_*_parent
+                            let hl = h.to_lowercase();
+                            if hl == "row_index" || hl == "parent_key" || (hl.starts_with("grand_") && hl.ends_with("_parent")) {
+                                continue;
+                            }
                             if !current_filter.is_empty()
                                 && !h.to_lowercase().contains(&current_filter)
                             {
@@ -429,6 +434,11 @@ fn show_structure_source_column_list(
                                 list_ui.memory_mut(|mem| mem.close_popup());
                             }
                             for (idx, header) in headers.iter().enumerate() {
+                                // Skip technical columns: row_index, parent_key, grand_*_parent
+                                let hl = header.to_lowercase();
+                                if hl == "row_index" || hl == "parent_key" || (hl.starts_with("grand_") && hl.ends_with("_parent")) {
+                                    continue;
+                                }
                                 if !current_filter.is_empty()
                                     && !header.to_lowercase().contains(&current_filter)
                                 {

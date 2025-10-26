@@ -62,6 +62,15 @@ pub struct RequestRenameSheet {
     pub new_name: String,
 }
 
+/// Internal event to request a cache rename without borrowing conflicts.
+/// Forwarded into RequestRenameSheet by a dedicated system in UpdateCaches set.
+#[derive(Event, Debug, Clone)]
+pub struct RequestRenameCacheEntry {
+    pub category: Option<String>,
+    pub old_name: String,
+    pub new_name: String,
+}
+
 #[derive(Event, Debug, Clone)]
 pub struct RequestDeleteSheet {
     pub category: Option<String>,

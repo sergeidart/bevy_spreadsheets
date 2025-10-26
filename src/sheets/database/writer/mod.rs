@@ -186,6 +186,73 @@ impl DbWriter {
         renames::rename_structure_table(conn, parent_table, old_column_name, new_column_name)
     }
 
+    /// Atomically rename a structure table and update the parent table's metadata column name.
+    /// Both operations succeed or fail together to avoid partial updates.
+    pub fn rename_structure_and_parent_metadata_atomic(
+        conn: &Connection,
+        parent_table: &str,
+        old_column_name: &str,
+        new_column_name: &str,
+        parent_column_index: usize,
+    ) -> DbResult<()> {
+        // Begin immediate transaction to avoid race conditions
+        conn.execute("BEGIN IMMEDIATE", [])?;
+        let result = (|| -> DbResult<()> {
+            // Will no-op if physical structure tables are missing
+            renames::rename_structure_table(conn, parent_table, old_column_name, new_column_name)?;
+            // Update the parent table's metadata column name
+            renames::update_metadata_column_name(
+                conn,
+                parent_table,
+                parent_column_index,
+                new_column_name,
+            )?;
+            // Clean up: if a physical column with the old structure name exists on the parent table, drop it
+            // This prevents orphaned physical columns being "recovered" back into metadata on next load.
+            let _ = renames::drop_physical_column_if_exists(conn, parent_table, old_column_name);
+            Ok(())
+        })();
+
+        match result {
+            Ok(_) => {
+                conn.execute("COMMIT", [])?;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = conn.execute("ROLLBACK", []);
+                Err(e)
+            }
+        }
+    }
+
+    /// Rename a main table and all descendant structure tables to preserve links after a sheet rename.
+    pub fn rename_table_and_descendants(
+        conn: &Connection,
+        old_table: &str,
+        new_table: &str,
+    ) -> DbResult<()> {
+        renames::rename_table_and_descendants(conn, old_table, new_table)
+    }
+
+    /// Best-effort: drop a physical column from a table if it exists (SQLite 3.35+).
+    pub fn drop_physical_column_if_exists(
+        conn: &Connection,
+        table_name: &str,
+        column_name: &str,
+    ) -> DbResult<()> {
+        renames::drop_physical_column_if_exists(conn, table_name, column_name)
+    }
+
+    /// Update parent table's metadata column_name by matching the old column name.
+    pub fn update_metadata_column_name_by_name(
+        conn: &Connection,
+        table_name: &str,
+        old_name: &str,
+        new_name: &str,
+    ) -> DbResult<()> {
+        renames::update_metadata_column_name_by_name(conn, table_name, old_name, new_name)
+    }
+
     // ============================================================================
     // CASCADES - See cascades.rs
     // ============================================================================
@@ -254,6 +321,16 @@ impl DbWriter {
             ai_context,
             ai_include_in_send,
         )
+    }
+
+    /// Update a column's display name (UI-only) in metadata
+    pub fn update_column_display_name(
+        conn: &Connection,
+        table_name: &str,
+        column_index: usize,
+        display_name: &str,
+    ) -> DbResult<()> {
+        metadata::update_column_display_name(conn, table_name, column_index, display_name)
     }
 
     /// Update AI include flag for a column

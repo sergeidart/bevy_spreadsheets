@@ -38,11 +38,95 @@ pub fn handle_update_column_name(
             });
             continue; // Skip to next event
         }
-        // Basic filename character check (optional, but good practice)
-        if new_name.contains(['/', '\\', ':', '*', '?', '"', '<', '>', '|']) {
+        // Note: We allow any characters in display name. Physical/DB-safe
+        // sanitization applies only to logical headers enforced by DB path.
+
+        // --- Resolve current metadata snapshot immutably (to avoid borrow conflicts) ---
+        let (meta_snapshot, old_header, old_ui, is_structure, header_conflict, is_reserved, display_duplicate, db_backed) =
+            if let Some(sheet_ro) = registry.get_sheet(category, sheet_name) {
+                if let Some(meta_ro) = &sheet_ro.metadata {
+                    if col_index >= meta_ro.columns.len() {
+                        feedback_writer.write(SheetOperationFeedback {
+                            message: format!(
+                                "Failed column rename in '{:?}/{}': Index {} out of bounds ({} columns).",
+                                category,
+                                sheet_name,
+                                col_index,
+                                meta_ro.columns.len()
+                            ),
+                            is_error: true,
+                        });
+                        continue;
+                    }
+                    let col_ro = &meta_ro.columns[col_index];
+                    let old_header = col_ro.header.clone();
+                    let old_ui = col_ro
+                        .display_header
+                        .clone()
+                        .unwrap_or_else(|| col_ro.header.clone());
+                    let is_structure = matches!(
+                        col_ro.validator,
+                        Some(crate::sheets::definitions::ColumnValidator::Structure)
+                    );
+                    let header_conflict = meta_ro
+                        .columns
+                        .iter()
+                        .enumerate()
+                        .any(|(idx, c)| idx != col_index && !c.deleted && c.header.eq_ignore_ascii_case(new_name));
+                    let is_reserved = new_name.eq_ignore_ascii_case("row_index")
+                        || new_name.eq_ignore_ascii_case("parent_key")
+                        || (new_name.starts_with("grand_") && new_name.ends_with("_parent"));
+                    let display_duplicate = meta_ro
+                        .columns
+                        .iter()
+                        .enumerate()
+                        .any(|(idx, c)| {
+                            if idx == col_index || c.deleted {
+                                return false;
+                            }
+                            let comp = c
+                                .display_header
+                                .as_ref()
+                                .map(|s| s.as_str())
+                                .unwrap_or(c.header.as_str());
+                            comp.eq_ignore_ascii_case(new_name)
+                        });
+                    (
+                        Some(meta_ro.clone()),
+                        old_header,
+                        old_ui,
+                        is_structure,
+                        header_conflict,
+                        is_reserved,
+                        display_duplicate,
+                        meta_ro.category.is_some(),
+                    )
+                } else {
+                    feedback_writer.write(SheetOperationFeedback {
+                        message: format!(
+                            "Failed column rename in '{:?}/{}': Metadata missing.",
+                            category, sheet_name
+                        ),
+                        is_error: true,
+                    });
+                    continue;
+                }
+            } else {
+                feedback_writer.write(SheetOperationFeedback {
+                    message: format!(
+                        "Failed column rename: Sheet '{:?}/{}' not found.",
+                        category, sheet_name
+                    ),
+                    is_error: true,
+                });
+                continue;
+            };
+
+        // Block duplicate display names within the sheet
+        if display_duplicate {
             feedback_writer.write(SheetOperationFeedback {
                 message: format!(
-                    "Failed column rename in '{:?}/{}': New name '{}' contains invalid characters.",
+                    "Failed column rename in '{:?}/{}': Name '{}' already exists.",
                     category, sheet_name, new_name
                 ),
                 is_error: true,
@@ -50,182 +134,211 @@ pub fn handle_update_column_name(
             continue;
         }
 
-        // --- Apply Update (Mutable Borrow) ---
-        // Get sheet using category
-        // Precompute context flags without holding immutable borrows during mutation
-        let (was_structure_before, is_real_structure_sheet_now) = {
-            let was_structure = registry
-                .get_sheet(category, sheet_name)
-                .and_then(|s| s.metadata.as_ref())
-                .and_then(|m| m.columns.get(col_index))
-                .map(|c| {
-                    matches!(
-                        c.validator,
-                        Some(crate::sheets::definitions::ColumnValidator::Structure)
-                    )
-                })
-                .unwrap_or(false);
-            let is_structure_sheet = registry.is_structure_table(category, sheet_name);
-            (was_structure, is_structure_sheet)
-        };
+        // Determine whether a real header rename is intended (vs display-only)
+        let header_change_intended = !old_header.eq_ignore_ascii_case(new_name) && !header_conflict && !is_reserved;
 
-        if let Some(sheet_data) = registry.get_sheet_mut(category, sheet_name) {
-            if let Some(metadata) = &mut sheet_data.metadata {
-                // --- CORRECTED: Check bounds using columns.len() ---
-                if col_index < metadata.columns.len() {
-                    // --- CORRECTED: Check duplicates using columns[idx].header ---
-                    let is_duplicate = metadata
-                        .columns // Iterate over columns
-                        .iter()
-                        .enumerate()
-                        .any(|(idx, c)| {
-                            // c is &ColumnDefinition
-                            // Exclude deleted columns from duplicate check
-                            idx != col_index && !c.deleted && c.header.eq_ignore_ascii_case(new_name)
-                            // Access header field
-                        });
-                    
-                    debug!("Column rename '{}' -> '{}': duplicate check = {}", 
-                        metadata.columns.get(col_index).map(|c| c.header.as_str()).unwrap_or("?"),
-                        new_name, is_duplicate);
-                    
-                    if is_duplicate {
-                        feedback_writer.write(SheetOperationFeedback {
-                            message: format!(
-                                "Failed column rename in '{:?}/{}': Name '{}' already exists.",
-                                category, sheet_name, new_name
-                            ),
-                            is_error: true,
-                        });
-                        // continue; // Decide if duplicate check should stop processing
-                    } else {
-                        // --- CORRECTED: Perform rename on columns[idx].header ---
-                        let old_name = std::mem::replace(
-                            &mut metadata.columns[col_index].header, // Access header field
-                            new_name.to_string(),
-                        );
-                        let msg = format!(
-                            "Renamed column {} in sheet '{:?}/{}' from '{}' to '{}'.",
-                            col_index + 1, // User-facing index
-                            category,
-                            sheet_name,
-                            old_name,
-                            new_name
-                        );
-                        info!("{}", msg);
-                        feedback_writer.write(SheetOperationFeedback {
-                            message: msg,
-                            is_error: false,
-                        });
-                        // Persist rename to DB when DB-backed
-                        if let Some(cat) = &metadata.category {
-                            debug!("Persisting column rename to DB: category={}, sheet={}, old={}, new={}", 
-                                cat, sheet_name, old_name, new_name);
-                            let base = crate::sheets::systems::io::get_default_data_base_path();
-                            let db_path = base.join(format!("{}.db", cat));
-                            if db_path.exists() {
-                                match rusqlite::Connection::open(&db_path) {
-                                    Ok(conn) => {
-                                        if is_real_structure_sheet_now {
-                                            // Rename actual column in structure table data + metadata
-                                            debug!("Renaming data column in structure table");
-                                            match crate::sheets::database::writer::DbWriter::rename_data_column(
-                                                &conn,
-                                                sheet_name,
-                                                &old_name,
-                                                new_name,
-                                            ) {
-                                                Ok(_) => info!("Successfully renamed column in DB"),
-                                                Err(e) => error!("Failed to rename column in DB: {}", e),
-                                            }
-                                        } else {
-                                            // Parent main table column rename
-                                            // If it's a Structure validator column being renamed, rename the underlying structure table as well
-                                            if was_structure_before {
-                                                debug!("Renaming structure table");
-                                                match crate::sheets::database::writer::DbWriter::rename_structure_table(
-                                                    &conn,
-                                                    sheet_name,
-                                                    &old_name,
-                                                    new_name,
-                                                ) {
-                                                    Ok(_) => info!("Successfully renamed structure table in DB"),
-                                                    Err(e) => error!("Failed to rename structure table in DB: {}", e),
-                                                }
-                                            }
-                                            // Rename data column if it exists physically (non-structure)
-                                            if !was_structure_before {
-                                                debug!("Renaming data column in main table");
-                                                match crate::sheets::database::writer::DbWriter::rename_data_column(
-                                                    &conn,
-                                                    sheet_name,
-                                                    &old_name,
-                                                    new_name,
-                                                ) {
-                                                    Ok(_) => info!("Successfully renamed column in DB"),
-                                                    Err(e) => error!("Failed to rename column in DB: {}", e),
-                                                }
-                                            } else {
-                                                // Update metadata column_name for the parent (structure columns still have metadata)
-                                                debug!("Updating metadata column name");
-                                                match crate::sheets::database::writer::DbWriter::update_metadata_column_name(
-                                                    &conn,
-                                                    sheet_name,
-                                                    col_index,
-                                                    new_name,
-                                                ) {
-                                                    Ok(_) => info!("Successfully updated metadata column name in DB"),
-                                                    Err(e) => error!("Failed to update metadata column name in DB: {}", e),
-                                                }
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        error!("Failed to open DB connection for column rename: {}", e);
-                                    }
-                                }
-                            } else {
-                                warn!("DB file not found for column rename: {:?}", db_path);
-                            }
-                        }
-                        success = true;
-                        // Emit data modified event so virtual structure sheets trigger parent schema sync
-                        data_modified_writer.write(SheetDataModifiedInRegistryEvent {
-                            category: category.clone(),
-                            sheet_name: sheet_name.clone(),
-                        });
-                        metadata_cache = Some(metadata.clone()); // Cache metadata for saving
-                    }
-                } else {
-                    // --- CORRECTED: Use columns.len() in error message ---
+        // --- DB-first path (when DB-backed) ---
+        if db_backed {
+            // Open the DB
+            let cat = meta_snapshot.and_then(|m| m.category.clone()).unwrap();
+            let base = crate::sheets::systems::io::get_default_data_base_path();
+            let db_path = base.join(format!("{}.db", &cat));
+            let conn = match rusqlite::Connection::open(&db_path) {
+                Ok(c) => c,
+                Err(e) => {
                     feedback_writer.write(SheetOperationFeedback {
                         message: format!(
-                            "Failed column rename in '{:?}/{}': Index {} out of bounds ({} columns).",
-                            category,
-                            sheet_name,
-                            col_index,
-                            metadata.columns.len() // Use columns.len()
+                            "Cannot open database for category '{}': {}",
+                            cat, e
                         ),
                         is_error: true,
                     });
+                    continue;
+                }
+            };
+
+            // If changing real header, attempt DB rename first; else update display name in DB first
+            let db_result = if header_change_intended {
+                if is_structure {
+                    crate::sheets::database::writer::DbWriter::rename_structure_and_parent_metadata_atomic(
+                        &conn,
+                        sheet_name,
+                        &old_header,
+                        new_name,
+                        col_index,
+                    )
+                } else {
+                    crate::sheets::database::writer::DbWriter::rename_data_column(
+                        &conn,
+                        sheet_name,
+                        &old_header,
+                        new_name,
+                    )
                 }
             } else {
+                crate::sheets::database::writer::DbWriter::update_column_display_name(
+                    &conn,
+                    sheet_name,
+                    col_index,
+                    new_name,
+                )
+            };
+
+            if let Err(e) = db_result {
                 feedback_writer.write(SheetOperationFeedback {
                     message: format!(
-                        "Failed column rename in '{:?}/{}': Metadata missing.",
-                        category, sheet_name
+                        "Rename failed in DB for '{}' -> '{}': {}. No changes applied in memory.",
+                        old_header, new_name, e
                     ),
                     is_error: true,
                 });
+                continue;
             }
-        } else {
-            feedback_writer.write(SheetOperationFeedback {
-                message: format!(
-                    "Failed column rename: Sheet '{:?}/{}' not found.",
-                    category, sheet_name
-                ),
-                is_error: true,
-            });
+
+            // If a real rename was done, also update display_name in DB to match new_name (best-effort)
+            if header_change_intended {
+                let _ = crate::sheets::database::writer::DbWriter::update_column_display_name(
+                    &conn,
+                    sheet_name,
+                    col_index,
+                    new_name,
+                );
+            }
+        }
+
+        // --- In-memory mutation after DB success (or JSON mode) ---
+        // Plan follow-up child registry fixes; fill only if we actually perform header change
+        let mut planned_child_op: Option<(String, String, Option<usize>)> = None;
+
+        if let Some(sheet_mut) = registry.get_sheet_mut(category, sheet_name) {
+            if let Some(metadata) = &mut sheet_mut.metadata {
+                // Update display name in memory
+                metadata.columns[col_index].display_header = Some(new_name.to_string());
+
+                if header_change_intended {
+                    // Update real header in memory
+                    metadata.columns[col_index].header = new_name.to_string();
+
+                    // If Structure: plan registry child rename (old -> new)
+                    if is_structure {
+                        let old_struct = format!("{}_{}", sheet_name, old_header);
+                        let new_struct = format!("{}_{}", sheet_name, new_name);
+                        planned_child_op = Some((
+                            old_struct,
+                            new_struct,
+                            metadata.columns[col_index].structure_key_parent_column_index,
+                        ));
+                    }
+                }
+
+                // Feedback and events
+                let msg = if header_change_intended {
+                    format!(
+                        "Renamed column {} in '{:?}/{}' from '{}' to '{}' in DB and memory.",
+                        col_index + 1,
+                        category,
+                        sheet_name,
+                        old_header,
+                        new_name
+                    )
+                } else {
+                    format!(
+                        "Updated display name for column {} in '{:?}/{}' from '{}' to '{}'.",
+                        col_index + 1,
+                        category,
+                        sheet_name,
+                        old_ui,
+                        new_name
+                    )
+                };
+                info!("{}", msg);
+                feedback_writer.write(SheetOperationFeedback {
+                    message: msg,
+                    is_error: false,
+                });
+
+                success = true;
+                data_modified_writer.write(SheetDataModifiedInRegistryEvent {
+                    category: category.clone(),
+                    sheet_name: sheet_name.clone(),
+                });
+                metadata_cache = Some(metadata.clone());
+            }
+        }
+
+        // After potential borrows end, apply planned child registry adjustments (only when header changed)
+        if success {
+            if let Some((child_old, child_new, parent_key_idx)) = planned_child_op.take() {
+                // Prefer in-place rename when old exists and new does not
+                let old_exists = registry.get_sheet(category, &child_old).is_some();
+                let new_exists = registry.get_sheet(category, &child_new).is_some();
+                if old_exists && !new_exists {
+                    if let Err(e) = registry.rename_sheet(category, &child_old, child_new.clone()) {
+                        warn!(
+                            "Failed to rename child structure sheet in registry: {} -> {}: {}",
+                            child_old, child_new, e
+                        );
+                    } else {
+                        info!(
+                            "Renamed child structure sheet in registry: {} -> {}",
+                            child_old, child_new
+                        );
+                    }
+                } else if old_exists && new_exists {
+                    // Remove stale old entry to avoid duplicates
+                    if let Err(e) = registry.delete_sheet(category, &child_old) {
+                        warn!(
+                            "Failed to delete stale child sheet '{}' after rename: {}",
+                            child_old, e
+                        );
+                    } else {
+                        info!("Deleted stale child sheet '{}' after rename", child_old);
+                    }
+                } else if !old_exists && !new_exists {
+                    // Neither present in registry; try to read from DB and register the child
+                    if let Some(cat_name) = category {
+                        let base = crate::sheets::systems::io::get_default_data_base_path();
+                        let db_path = base.join(format!("{}.db", cat_name));
+                        if db_path.exists() {
+                            match rusqlite::Connection::open(&db_path) {
+                                Ok(conn2) => match crate::sheets::database::reader::DbReader::read_sheet(&conn2, &child_new) {
+                                    Ok(child_data) => {
+                                        registry.add_or_replace_sheet(category.clone(), child_new.clone(), child_data);
+                                        info!(
+                                            "Loaded child structure sheet '{}' from DB into registry after rename",
+                                            child_new
+                                        );
+                                    }
+                                    Err(e) => warn!(
+                                        "Failed to load child sheet '{}' from DB after rename: {:?}",
+                                        child_new, e
+                                    ),
+                                },
+                                Err(e) => warn!("Failed to open DB to load child sheet '{}': {}", child_new, e),
+                            }
+                        }
+                    }
+                }
+
+                // Propagate parent's configured key mapping into child's parent_key metadata if available
+                if let Some(child_sheet) = registry.get_sheet_mut(category, &child_new) {
+                    if let Some(child_meta) = &mut child_sheet.metadata {
+                        if let Some(pk_col) = child_meta
+                            .columns
+                            .iter_mut()
+                            .find(|c| c.header.eq_ignore_ascii_case("parent_key"))
+                        {
+                            pk_col.structure_key_parent_column_index = parent_key_idx;
+                        }
+                    }
+                }
+
+                // Trigger cache update for the child sheet after registry changes
+                data_modified_writer.write(SheetDataModifiedInRegistryEvent {
+                    category: category.clone(),
+                    sheet_name: child_new,
+                });
+            }
         }
 
         // If successful, mark sheet for saving
@@ -249,3 +362,6 @@ pub fn handle_update_column_name(
         }
     }
 }
+
+
+

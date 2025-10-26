@@ -18,7 +18,11 @@ pub fn get_existing_structure_key_info(
         let headers = meta
             .columns
             .iter()
-            .map(|c| c.header.clone())
+            .map(|c| c
+                .display_header
+                .as_ref()
+                .cloned()
+                .unwrap_or_else(|| c.header.clone()))
             .collect::<Vec<_>>();
         let current_key = if let Some(parent_sheet) = registry_immut
             .get_sheet(
@@ -50,7 +54,11 @@ pub fn get_existing_structure_key_info(
         let headers = meta
             .columns
             .iter()
-            .map(|c| c.header.clone())
+            .map(|c| c
+                .display_header
+                .as_ref()
+                .cloned()
+                .unwrap_or_else(|| c.header.clone()))
             .collect::<Vec<_>>();
         let current_key = meta
             .columns
@@ -68,10 +76,14 @@ pub fn get_existing_structure_key_info(
 pub fn get_new_structure_headers(
     meta: &crate::sheets::definitions::SheetMetadata,
 ) -> Vec<String> {
+    // Preserve indices: return a label per column using display_header when present.
     meta.columns
         .iter()
-        .filter(|c| !c.deleted) // Filter out deleted columns
-        .map(|c| c.header.clone())
+        .map(|c| c
+            .display_header
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| c.header.clone()))
         .collect()
 }
 
@@ -81,7 +93,11 @@ pub fn get_all_headers(
 ) -> Vec<String> {
     meta.columns
         .iter()
-        .map(|c| c.header.clone())
+        .map(|c| c
+            .display_header
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| c.header.clone()))
         .collect()
 }
 
@@ -95,3 +111,4 @@ pub fn get_headers_with_indices(
         .enumerate()
         .collect()
 }
+

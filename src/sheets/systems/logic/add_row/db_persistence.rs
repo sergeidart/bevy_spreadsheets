@@ -103,22 +103,52 @@ pub(super) fn persist_row_to_db(
                 .map(|(_, name, _)| name.clone())
                 .ok_or_else(|| format!("Column index {} out of bounds in parent table '{}'", db_column_offset, parent_table))?
         } else {
-            // Fallback: try Key, Name, ID columns
-            warn!("No structure_key_parent_column_index found for parent_key in sheet '{}', trying fallback columns", sheet_name);
-            
-            // Try to find Key, Name, or ID column
-            let key_col_candidates = ["Key", "Name", "ID"];
-            let parent_table_info: Vec<String> = conn.prepare(&format!("PRAGMA table_info(\"{}\")", parent_table))
+            // Fallback: choose the first non-technical parent column (matches UI default)
+            warn!(
+                "No structure_key_parent_column_index found for parent_key in sheet '{}', using first non-technical parent column as fallback",
+                sheet_name
+            );
+
+            // Query parent schema: (cid, name, type)
+            let parent_table_info: Vec<(i64, String, String)> = conn
+                .prepare(&format!("PRAGMA table_info(\"{}\")", parent_table))
                 .and_then(|mut stmt| {
-                    stmt.query_map([], |row| row.get::<_, String>(1))
-                        .and_then(|mapped_rows| mapped_rows.collect::<Result<Vec<_>, _>>())
+                    stmt.query_map([], |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                        ))
+                    })
+                    .and_then(|mapped_rows| mapped_rows.collect::<Result<Vec<_>, _>>())
                 })
                 .map_err(|e| format!("Failed to query parent table schema: {}", e))?;
-            
-            key_col_candidates.iter()
-                .find(|&&candidate| parent_table_info.iter().any(|col| col.eq_ignore_ascii_case(candidate)))
-                .map(|&s| s.to_string())
-                .ok_or_else(|| format!("Cannot find Key, Name, or ID column in parent table '{}'", parent_table))?
+
+            // Filter to first non-technical, preferably TEXT column
+            let mut first_text: Option<String> = None;
+            let mut first_any: Option<String> = None;
+            for (_cid, name, ty) in parent_table_info.iter() {
+                let lname = name.to_lowercase();
+                let is_technical = lname == "id"
+                    || lname == "parent_id"
+                    || lname == "row_index"
+                    || lname == "parent_key"
+                    || lname == "created_at"
+                    || lname == "updated_at"
+                    || (lname.starts_with("grand_") && lname.ends_with("_parent"));
+                if is_technical {
+                    continue;
+                }
+                if first_any.is_none() {
+                    first_any = Some(name.clone());
+                }
+                if ty.eq_ignore_ascii_case("TEXT") && first_text.is_none() {
+                    first_text = Some(name.clone());
+                }
+            }
+            first_text
+                .or(first_any)
+                .ok_or_else(|| format!("Cannot determine a non-technical key column in parent table '{}'", parent_table))?
         };
 
         debug!("Using column '{}' to validate parent_key='{}' exists in table '{}'", key_column_name, parent_key, parent_table);
@@ -151,12 +181,9 @@ pub(super) fn persist_row_to_db(
             row_data.push(row0.get(i).cloned().unwrap_or_default());
         }
         
-        // Add parent_key and parent_id to the insert
+        // Add parent_key to the insert (structure tables do not have a parent_id column)
         column_names.push("parent_key".to_string());
         row_data.push(parent_key.clone());
-        
-        column_names.push("parent_id".to_string());
-        row_data.push(parent_id.to_string());
 
         crate::sheets::database::writer::DbWriter::prepend_row(
             &conn,
@@ -277,21 +304,50 @@ pub(super) fn persist_rows_batch_to_db(
                 .map(|(_, name, _)| name.clone())
                 .ok_or_else(|| format!("Column index {} out of bounds in parent table '{}'", db_column_offset, parent_table))?
         } else {
-            // Fallback: try Key, Name, ID columns
-            warn!("No structure_key_parent_column_index found for parent_key in sheet '{}' (batch), trying fallback columns", sheet_name);
-            
-            let key_col_candidates = ["Key", "Name", "ID"];
-            let parent_table_info: Vec<String> = conn.prepare(&format!("PRAGMA table_info(\"{}\")", parent_table))
+            // Fallback: choose the first non-technical parent column (matches UI default)
+            warn!(
+                "No structure_key_parent_column_index found for parent_key in sheet '{}' (batch), using first non-technical parent column as fallback",
+                sheet_name
+            );
+
+            let parent_table_info: Vec<(i64, String, String)> = conn
+                .prepare(&format!("PRAGMA table_info(\"{}\")", parent_table))
                 .and_then(|mut stmt| {
-                    stmt.query_map([], |row| row.get::<_, String>(1))
-                        .and_then(|mapped_rows| mapped_rows.collect::<Result<Vec<_>, _>>())
+                    stmt.query_map([], |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, String>(2)?,
+                        ))
+                    })
+                    .and_then(|mapped_rows| mapped_rows.collect::<Result<Vec<_>, _>>())
                 })
                 .map_err(|e| format!("Failed to query parent table schema: {}", e))?;
-            
-            key_col_candidates.iter()
-                .find(|&&candidate| parent_table_info.iter().any(|col| col.eq_ignore_ascii_case(candidate)))
-                .map(|&s| s.to_string())
-                .ok_or_else(|| format!("Cannot find Key, Name, or ID column in parent table '{}'", parent_table))?
+
+            let mut first_text: Option<String> = None;
+            let mut first_any: Option<String> = None;
+            for (_cid, name, ty) in parent_table_info.iter() {
+                let lname = name.to_lowercase();
+                let is_technical = lname == "id"
+                    || lname == "parent_id"
+                    || lname == "row_index"
+                    || lname == "parent_key"
+                    || lname == "created_at"
+                    || lname == "updated_at"
+                    || (lname.starts_with("grand_") && lname.ends_with("_parent"));
+                if is_technical {
+                    continue;
+                }
+                if first_any.is_none() {
+                    first_any = Some(name.clone());
+                }
+                if ty.eq_ignore_ascii_case("TEXT") && first_text.is_none() {
+                    first_text = Some(name.clone());
+                }
+            }
+            first_text
+                .or(first_any)
+                .ok_or_else(|| format!("Cannot determine a non-technical key column in parent table '{}'", parent_table))?
         };
 
         // Lookup parent_id using the determined key column
@@ -306,14 +362,14 @@ pub(super) fn persist_rows_batch_to_db(
 
         debug!("Batch insert: Found parent row: parent_key='{}' -> parent_id={} in table '{}'", parent_key, parent_id, parent_table);
 
-        // Build column names and batch data
-        let mut column_names: Vec<String> = vec!["parent_id".to_string()];
+        // Build column names and batch data (structure tables do not have a parent_id column)
+        let mut column_names: Vec<String> = Vec::new();
         let mut batch_rows: Vec<Vec<String>> = Vec::with_capacity(num_rows);
         
         // Process each row in grid
         for row_idx in 0..num_rows {
             if let Some(row) = grid_data.get(row_idx) {
-                let mut row_data: Vec<String> = vec![parent_id.to_string()];
+                let mut row_data: Vec<String> = Vec::new();
                 
                 // Skip row_index (0) and parent_key (1), add other columns
                 for (i, col_def) in metadata.columns.iter().enumerate() {

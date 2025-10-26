@@ -10,6 +10,24 @@ use crate::sheets::{
 
 use super::hierarchy::create_structure_technical_columns;
 
+fn sanitize_column_header(name: &str) -> String {
+    let mut out = String::new();
+    for ch in name.chars() {
+        if ch.is_ascii_alphanumeric() {
+            out.push(ch);
+        } else {
+            out.push('_');
+        }
+    }
+    while out.starts_with('_') { out.remove(0); }
+    while out.ends_with('_') { out.pop(); }
+    if out.is_empty() { out.push_str("new_column"); }
+    if out.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+        out.insert_str(0, "c_");
+    }
+    out
+}
+
 /// Handle conversion TO Structure validator
 /// Returns (collected_defs, value_sources, structure_columns) for sheet creation
 /// 
@@ -122,9 +140,16 @@ pub fn handle_structure_conversion_to(
     }
 
     // Add columns from the structure schema (user-defined data columns)
-    for field_def in &collected_defs {
+    for (j, field_def) in collected_defs.iter().enumerate() {
+        let (src_idx, _is_self) = value_sources[j];
+        let ui_label = columns_snapshot
+            .get(src_idx)
+            .and_then(|c| c.display_header.as_ref().cloned())
+            .unwrap_or_else(|| columns_snapshot.get(src_idx).map(|c| c.header.clone()).unwrap_or_else(|| field_def.header.clone()));
+        let sanitized = sanitize_column_header(&ui_label);
         structure_columns.push(ColumnDefinition {
-            header: field_def.header.clone(),
+            header: sanitized,
+            display_header: Some(ui_label),
             data_type: field_def.data_type,
             validator: field_def.validator.clone(),
             filter: None,
@@ -143,3 +168,6 @@ pub fn handle_structure_conversion_to(
 
     Some((collected_defs, value_sources, structure_columns))
 }
+
+
+

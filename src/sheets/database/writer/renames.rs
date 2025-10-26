@@ -441,25 +441,425 @@ pub fn rename_structure_table(
 ) -> DbResult<()> {
     let old_struct = format!("{}_{}", parent_table, old_column_name);
     let new_struct = format!("{}_{}", parent_table, new_column_name);
-    // Rename data table
-    conn.execute(
-        &format!(
-            "ALTER TABLE \"{}\" RENAME TO \"{}\"",
-            old_struct, new_struct
-        ),
-        [],
-    )?;
-    // Rename metadata table
+
+    // Check existence of the structure data and metadata tables first
+    let data_exists: bool = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            params![&old_struct],
+            |row| row.get::<_, i32>(0),
+        )
+        .optional()?
+        .is_some();
+
     let old_meta = format!("{}_Metadata", old_struct);
     let new_meta = format!("{}_Metadata", new_struct);
-    conn.execute(
-        &format!("ALTER TABLE \"{}\" RENAME TO \"{}\"", old_meta, new_meta),
-        [],
-    )?;
-    // Update global _Metadata entry for the structure table
-    conn.execute(
+    let meta_exists: bool = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            params![&old_meta],
+            |row| row.get::<_, i32>(0),
+        )
+        .optional()?
+        .is_some();
+
+    if !data_exists && !meta_exists {
+        bevy::log::info!(
+            "rename_structure_table: No physical tables found for '{}' (old structure for parent '{}'). Treating as no-op.",
+            old_struct,
+            parent_table
+        );
+        return Ok(());
+    }
+
+    if data_exists {
+        bevy::log::info!(
+            "rename_structure_table: Renaming data table '{}' -> '{}'",
+            old_struct, new_struct
+        );
+        conn.execute(
+            &format!(
+                "ALTER TABLE \"{}\" RENAME TO \"{}\"",
+                old_struct, new_struct
+            ),
+            [],
+        )?;
+    } else {
+        bevy::log::warn!(
+            "rename_structure_table: Data table '{}' not found; skipping data table rename.",
+            old_struct
+        );
+    }
+
+    if meta_exists {
+        bevy::log::info!(
+            "rename_structure_table: Renaming metadata table '{}' -> '{}'",
+            old_meta, new_meta
+        );
+        conn.execute(
+            &format!("ALTER TABLE \"{}\" RENAME TO \"{}\"", old_meta, new_meta),
+            [],
+        )?;
+    } else {
+        bevy::log::warn!(
+            "rename_structure_table: Metadata table '{}' not found; skipping metadata table rename.",
+            old_meta
+        );
+    }
+
+    // Update global _Metadata entry for the structure table (safe if no matching row)
+    let updated = conn.execute(
         "UPDATE _Metadata SET table_name = ?, parent_column = ?, updated_at = CURRENT_TIMESTAMP WHERE table_name = ?",
         params![&new_struct, new_column_name, &old_struct],
     )?;
+    if updated == 0 {
+        bevy::log::info!(
+            "rename_structure_table: No _Metadata row for '{}' to update; structure may be newly created without registration yet.",
+            old_struct
+        );
+    }
+
     Ok(())
+}
+
+/// Update parent table's metadata column_name by matching the old column name.
+/// Performs conflict checks similar to index-based update and supports deleted-row cleanup.
+pub fn update_metadata_column_name_by_name(
+    conn: &Connection,
+    table_name: &str,
+    old_name: &str,
+    new_name: &str,
+) -> DbResult<()> {
+    let meta_table = format!("{}_Metadata", table_name);
+
+    // Get the source column index for old_name
+    let source_column_index: Option<i32> = conn
+        .query_row(
+            &format!(
+                "SELECT column_index FROM \"{}\" WHERE column_name = ?",
+                meta_table
+            ),
+            params![old_name],
+            |row| row.get(0),
+        )
+        .optional()?;
+
+    let source_idx = match source_column_index {
+        Some(idx) => idx,
+        None => {
+            bevy::log::warn!(
+                "update_metadata_column_name_by_name: old column '{}' not found in '{}'",
+                old_name, meta_table
+            );
+            return Ok(());
+        }
+    };
+
+    // Check conflict for new_name at a different index
+    let conflicting_row: Option<(i32, i32)> = conn
+        .query_row(
+            &format!(
+                "SELECT column_index, deleted FROM \"{}\" WHERE column_name = ?",
+                meta_table
+            ),
+            params![new_name],
+            |row| Ok((row.get::<_, i32>(0)?, row.get::<_, i32>(1)?)),
+        )
+        .optional()?;
+
+    if let Some((existing_idx, is_deleted)) = conflicting_row {
+        if existing_idx != source_idx {
+            if is_deleted == 1 {
+                bevy::log::warn!(
+                    "update_metadata_column_name_by_name: deleting conflicting deleted row '{}' at index {} in '{}'",
+                    new_name, existing_idx, meta_table
+                );
+                conn.execute(
+                    &format!(
+                        "DELETE FROM \"{}\" WHERE column_name = ? AND deleted = 1",
+                        meta_table
+                    ),
+                    params![new_name],
+                )?;
+            } else {
+                return Err(super::super::error::DbError::Other(format!(
+                    "Column '{}' already exists at a different index in table '{}'",
+                    new_name, table_name
+                )));
+            }
+        }
+    }
+
+    // Update the row's name
+    let updated = conn.execute(
+        &format!(
+            "UPDATE \"{}\" SET column_name = ? WHERE column_index = ?",
+            meta_table
+        ),
+        params![new_name, source_idx],
+    )?;
+    bevy::log::info!(
+        "update_metadata_column_name_by_name: updated {} row(s) for '{}.{}' -> '{}.{}'",
+        updated, table_name, old_name, table_name, new_name
+    );
+    Ok(())
+}
+
+/// Best-effort: drop a physical column from a main table if it exists.
+/// Used to clean up leftover physical columns when converting to Structure or after renames.
+pub fn drop_physical_column_if_exists(
+    conn: &Connection,
+    table_name: &str,
+    column_name: &str,
+) -> DbResult<()> {
+    // Check existence via PRAGMA table_info
+    let mut exists = false;
+    if let Ok(mut stmt) = conn.prepare(&format!("PRAGMA table_info(\"{}\")", table_name)) {
+        let rows = stmt.query_map([], |row| row.get::<_, String>(1));
+        if let Ok(iter) = rows {
+            for r in iter.flatten() {
+                if r.eq_ignore_ascii_case(column_name) {
+                    exists = true;
+                    break;
+                }
+            }
+        }
+    }
+    if !exists {
+        return Ok(());
+    }
+
+    bevy::log::info!(
+        "drop_physical_column_if_exists: attempting to drop '{}.{}'",
+        table_name, column_name
+    );
+
+    // Try to wipe values first (safe even if DROP fails)
+    let _ = conn.execute(
+        &format!("UPDATE \"{}\" SET \"{}\" = NULL", table_name, column_name),
+        [],
+    );
+
+    // Attempt DROP COLUMN (SQLite 3.35.0+)
+    match conn.execute(
+        &format!(
+            "ALTER TABLE \"{}\" DROP COLUMN \"{}\"",
+            table_name, column_name
+        ),
+        [],
+    ) {
+        Ok(_) => {
+            bevy::log::info!(
+                "drop_physical_column_if_exists: dropped column '{}.{}'",
+                table_name, column_name
+            );
+        }
+        Err(e) => {
+            bevy::log::warn!(
+                "drop_physical_column_if_exists: failed to drop column '{}.{}': {} (column may persist)",
+                table_name, column_name, e
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Rename a main table and all of its descendant structure tables by prefix replacement.
+/// This keeps DB names aligned with in-memory sheet rename and preserves parent_table links.
+pub fn rename_table_and_descendants(
+    conn: &Connection,
+    old_table: &str,
+    new_table: &str,
+) -> DbResult<()> {
+    // Wrap the full cascade in a transaction
+    conn.execute("BEGIN IMMEDIATE", [])?;
+    let result = (|| -> DbResult<()> {
+        // Helper to rename a data table + its metadata and AI groups tables (if present)
+        fn rename_table_triplet(
+            conn: &Connection,
+            old_name: &str,
+            new_name: &str,
+        ) -> DbResult<()> {
+            // If target metadata (or groups) already exists without a real data table, clean it up first
+            let new_data_exists: bool = conn
+                .query_row(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                    [new_name],
+                    |row| row.get::<_, i32>(0),
+                )
+                .optional()?
+                .is_some();
+
+            let new_meta = format!("{}_Metadata", new_name);
+            let new_meta_exists: bool = conn
+                .query_row(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                    [&new_meta],
+                    |row| row.get::<_, i32>(0),
+                )
+                .optional()?
+                .is_some();
+            if new_meta_exists && !new_data_exists {
+                bevy::log::warn!(
+                    "Found orphan metadata table '{}' without data table '{}'; dropping before rename.",
+                    new_meta,
+                    new_name
+                );
+                conn.execute(&format!("DROP TABLE IF EXISTS \"{}\"", new_meta), [])?;
+            }
+
+            let new_groups = format!("{}_AIGroups", new_name);
+            let new_groups_exists: bool = conn
+                .query_row(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                    [&new_groups],
+                    |row| row.get::<_, i32>(0),
+                )
+                .optional()?
+                .is_some();
+            if new_groups_exists && !new_data_exists {
+                bevy::log::warn!(
+                    "Found orphan AI groups table '{}' without data table '{}'; dropping before rename.",
+                    new_groups,
+                    new_name
+                );
+                conn.execute(&format!("DROP TABLE IF EXISTS \"{}\"", new_groups), [])?;
+            }
+
+            // Data table
+            let data_exists: bool = conn
+                .query_row(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                    [old_name],
+                    |row| row.get::<_, i32>(0),
+                )
+                .optional()?
+                .is_some();
+
+            if data_exists {
+                conn.execute(
+                    &format!("ALTER TABLE \"{}\" RENAME TO \"{}\"", old_name, new_name),
+                    [],
+                )?;
+            } else {
+                bevy::log::warn!(
+                    "rename_table_and_descendants: Data table '{}' not found; skipping data rename.",
+                    old_name
+                );
+            }
+
+            // Metadata table
+            let old_meta = format!("{}_Metadata", old_name);
+            let new_meta = format!("{}_Metadata", new_name);
+            let meta_exists: bool = conn
+                .query_row(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                    [&old_meta],
+                    |row| row.get::<_, i32>(0),
+                )
+                .optional()?
+                .is_some();
+            if meta_exists {
+                conn.execute(
+                    &format!("ALTER TABLE \"{}\" RENAME TO \"{}\"", old_meta, new_meta),
+                    [],
+                )?;
+            } else {
+                bevy::log::warn!(
+                    "rename_table_and_descendants: Metadata table '{}' not found; skipping metadata rename.",
+                    old_meta
+                );
+            }
+
+            // AI Groups table (optional)
+            let old_groups = format!("{}_AIGroups", old_name);
+            let new_groups = format!("{}_AIGroups", new_name);
+            let groups_exists: bool = conn
+                .query_row(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                    [&old_groups],
+                    |row| row.get::<_, i32>(0),
+                )
+                .optional()?
+                .is_some();
+            if groups_exists {
+                conn.execute(
+                    &format!("ALTER TABLE \"{}\" RENAME TO \"{}\"", old_groups, new_groups),
+                    [],
+                )?;
+            }
+
+            // Update global metadata table row for the renamed table, if present
+            // Remove any orphaned row for the target name first to avoid UNIQUE constraint violations
+            conn.execute(
+                "DELETE FROM _Metadata WHERE table_name = ?",
+                params![new_name],
+            )?;
+            conn.execute(
+                "UPDATE _Metadata SET table_name = ?, updated_at = CURRENT_TIMESTAMP WHERE table_name = ?",
+                params![new_name, old_name],
+            )?;
+
+            Ok(())
+        }
+
+        bevy::log::info!(
+            "DB cascade rename: '{}' -> '{}' (including descendants)",
+            old_table, new_table
+        );
+
+        // 1) Rename the main table first
+        rename_table_triplet(conn, old_table, new_table)?;
+
+        // 2) Collect descendant structure tables using prefix match on _Metadata
+        let prefix = format!("{}_", old_table);
+        let like = format!("{}%", prefix);
+        let mut stmt = conn.prepare(
+            "SELECT table_name FROM _Metadata WHERE table_type = 'structure' AND table_name LIKE ?1",
+        )?;
+        let mut pairs: Vec<(String, String)> = stmt
+            .query_map([like.as_str()], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .map(|old_name| {
+                let suffix = &old_name[prefix.len()..];
+                let new_name = format!("{}_{}", new_table, suffix);
+                (old_name, new_name)
+            })
+            .collect();
+
+        // Rename deepest-first to reduce transient name conflicts
+        pairs.sort_by_key(|(o, _)| std::cmp::Reverse(o.len()));
+
+        for (old_name, new_name) in &pairs {
+            rename_table_triplet(conn, old_name, new_name)?;
+        }
+
+        // 3) Fix parent_table references in _Metadata for all renamed tables
+        // Main parent: direct children referencing old_table
+        conn.execute(
+            "UPDATE _Metadata SET parent_table = ?1 WHERE parent_table = ?2",
+            params![new_table, old_table],
+        )?;
+        // Descendants: update any row whose parent_table equals a renamed table
+        for (old_name, new_name) in &pairs {
+            conn.execute(
+                "UPDATE _Metadata SET parent_table = ?1 WHERE parent_table = ?2",
+                params![new_name, old_name],
+            )?;
+        }
+
+        Ok(())
+    })();
+
+    match result {
+        Ok(_) => {
+            conn.execute("COMMIT", [])?;
+            Ok(())
+        }
+        Err(e) => {
+            let _ = conn.execute("ROLLBACK", []);
+            Err(e)
+        }
+    }
 }

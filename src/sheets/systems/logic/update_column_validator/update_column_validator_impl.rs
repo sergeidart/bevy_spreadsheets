@@ -411,6 +411,27 @@ pub fn handle_update_column_validator(
                                 error!("Failed to create structure table '{}': {}", struct_sheet_name, e);
                             } else {
                                 info!("Successfully created DB structure table: {}", struct_sheet_name);
+                                // Ensure per-table metadata exists for the structure sheet so later renames find it
+                                if let Err(e) = crate::sheets::database::schema::create_metadata_table(
+                                    &conn,
+                                    &struct_sheet_name,
+                                    &structure_metadata,
+                                ) {
+                                    warn!(
+                                        "Failed to create metadata table for structure '{}': {} (will continue)",
+                                        struct_sheet_name,
+                                        e
+                                    );
+                                }
+
+                                // Best-effort cleanup: drop the parent table's physical column if it existed.
+                                // Structure columns should not remain as physical columns on the parent table,
+                                // otherwise orphan recovery will resurrect them on reload.
+                                let _ = crate::sheets::database::writer::DbWriter::drop_physical_column_if_exists(
+                                    &conn,
+                                    &parent_sheet_name,
+                                    &parent_col_def.header,
+                                );
                                 
                                 // Copy content from parent table to structure table
                                 if let Err(e) = copy_parent_content_to_structure_table(

@@ -116,7 +116,11 @@ impl SheetMetadata {
     }
 
     pub fn get_headers(&self) -> Vec<String> {
-        self.columns.iter().map(|c| c.header.clone()).collect()
+        self
+            .columns
+            .iter()
+            .map(|c| c.display_header.as_ref().cloned().unwrap_or_else(|| c.header.clone()))
+            .collect()
     }
 
     pub fn get_filters(&self) -> Vec<Option<String>> {

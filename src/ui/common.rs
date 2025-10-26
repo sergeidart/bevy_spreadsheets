@@ -212,8 +212,13 @@ pub fn edit_cell_widget(
                                             key_col_idx.and_then(|idx| row.get(idx)).map(|s| s.clone())
                                         })
                                         .unwrap_or_else(|| row_index.to_string());
+                                    let ui_header = col_def
+                                        .display_header
+                                        .as_ref()
+                                        .cloned()
+                                        .unwrap_or_else(|| col_def.header.clone());
                                     let button_text = if current_display_text.trim().is_empty() {
-                                        col_def.header.clone()
+                                        ui_header.clone()
                                     } else {
                                         current_display_text.to_string()
                                     };
@@ -269,7 +274,7 @@ pub fn edit_cell_widget(
                                                 parent_sheet_name: sheet_name.to_string(),
                                                 parent_row_key: display_value,
                                                 ancestor_keys,
-                                                parent_column_name: col_def.header.clone(),
+                                                parent_column_name: ui_header,
                                             };
                                             state.structure_navigation_stack.push(nav_context);
                                             state.selected_category = category.clone();

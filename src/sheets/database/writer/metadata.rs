@@ -369,6 +369,38 @@ pub fn update_column_validator(
     Ok(())
 }
 
+/// Update a column's display name (UI-only) in the table's metadata table
+/// Note: column_index is the RUNTIME index (includes technical columns like row_index)
+pub fn update_column_display_name(
+    conn: &Connection,
+    table_name: &str,
+    column_index: usize,
+    display_name: &str,
+) -> DbResult<()> {
+    // Convert runtime column index to persisted index
+    let persisted_index = match runtime_to_persisted_column_index(conn, table_name, column_index)? {
+        Some(idx) => idx,
+        None => {
+            // Technical column, ignore
+            return Ok(());
+        }
+    };
+
+    let meta_table = format!("{}_Metadata", table_name);
+    bevy::log::info!(
+        "SQL update_column_display_name: table='{}' runtime_idx={} -> persisted_idx={} display_name='{}'",
+        table_name, column_index, persisted_index, display_name
+    );
+    conn.execute(
+        &format!(
+            "UPDATE \"{}\" SET display_name = ? WHERE column_index = ?",
+            meta_table
+        ),
+        params![display_name, persisted_index as i32],
+    )?;
+    Ok(())
+}
+
 /// Add a new column to a table (main or structure) and insert its metadata row with given index.
 /// Note: column_index is the RUNTIME index (includes technical columns like row_index)
 pub fn add_column_with_metadata(
