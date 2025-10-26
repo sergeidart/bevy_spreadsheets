@@ -31,16 +31,6 @@ pub fn matches_filter(item_name: &str, filter_text: &str) -> bool {
         || normalize_for_link_cmp(item_name).contains(&normalize_for_link_cmp(filter_text))
 }
 
-/// Check if root category matches filter
-pub fn root_matches_filter(filter_text: &str) -> bool {
-    if filter_text.is_empty() {
-        return true;
-    }
-    let root_match = "--root--".to_string();
-    normalize_for_link_cmp(&root_match).contains(&normalize_for_link_cmp(filter_text))
-        || normalize_for_link_cmp("root (uncategorized)").contains(&normalize_for_link_cmp(filter_text))
-}
-
 /// Generate a unique combo box ID for category selector
 pub fn get_category_combo_id(selected_category: &str) -> String {
     format!("category_selector_top_panel_refactored_{}", selected_category)

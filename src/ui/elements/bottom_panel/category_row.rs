@@ -120,39 +120,6 @@ fn render_category_tabs(
             let pointer_pos_tabs = tabs_ui.ctx().input(|i| i.pointer.hover_pos());
             
             tabs_ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui_th| {
-                // Root tab
-                let is_root = state.selected_category.is_none();
-                let root_resp = ui_th.selectable_label(is_root, "--Root--");
-                
-                super::drop_visuals::render_drop_target_highlight(
-                    ui_th,
-                    &root_resp,
-                    state,
-                    registry,
-                    &None,
-                    pointer_pos_tabs,
-                );
-                
-                if let Some(pos) = pointer_pos_tabs {
-                    if root_resp.rect.contains(pos) {
-                        if category_handlers::handle_drop_on_target(
-                            state,
-                            registry,
-                            None,
-                            event_writers.move_sheet_to_category,
-                            true,
-                            primary_released_tabs,
-                        ) {
-                            *drop_consumed = true;
-                            ui_th.ctx().set_dragged_id(egui::Id::NULL);
-                        }
-                    }
-                }
-                
-                if root_resp.clicked() && !is_root {
-                    category_handlers::handle_category_selection(state, None);
-                }
-                
                 // Category tabs
                 for cat_opt in categories.iter() {
                     if let Some(cat) = cat_opt {

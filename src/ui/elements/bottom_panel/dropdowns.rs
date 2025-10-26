@@ -81,7 +81,7 @@ pub fn render_category_selector(
     let selected_category_full: String = state
         .selected_category
         .clone()
-        .unwrap_or_else(|| "--Root--".to_string());
+        .unwrap_or_else(|| "(no database)".to_string());
     let selected_category_text_owned: String = selected_category_full
         .chars()
         .take(MAX_LABEL_CHARS)

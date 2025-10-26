@@ -45,41 +45,7 @@ pub fn render_category_popup(
         }
     });
 
-    let is_selected_root = state.selected_category.is_none();
     let pointer_pos_popup = popup_ui.ctx().input(|i| i.pointer.hover_pos());
-
-    // Root entry
-    if ui_cache::root_matches_filter(&filter_text) {
-        let root_resp = popup_ui.selectable_label(is_selected_root, "--Root--");
-        
-        super::drop_visuals::render_drop_target_highlight(
-            popup_ui,
-            &root_resp,
-            state,
-            registry,
-            &None,
-            pointer_pos_popup,
-        );
-        
-        if handle_category_drop(
-            popup_ui,
-            &root_resp,
-            state,
-            registry,
-            None,
-            event_writers,
-            primary_released_popup,
-            pointer_pos_popup,
-            drop_consumed,
-        ) {
-            return;
-        }
-        
-        if root_resp.clicked() && !is_selected_root {
-            category_handlers::handle_category_selection(state, None);
-            popup_ui.memory_mut(|mem| mem.close_popup());
-        }
-    }
 
     // Category entries
     for cat_opt in categories.iter() {
