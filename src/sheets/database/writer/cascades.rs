@@ -5,6 +5,12 @@ use super::super::error::DbResult;
 use rusqlite::{params, Connection};
 
 /// Cascade parent key value change to child and descendant structure tables.
+///
+/// **After migration to row_index-based references (2025-10-27):**
+/// This function is primarily used for cascading row_index changes, which are rare.
+/// Regular display column renames (e.g., "Portal" → "Portal 2") do NOT trigger cascades
+/// because children store the parent's row_index, which remains stable.
+///
 /// When a cell value changes in a parent table's key column, ALL child structure tables
 /// that reference this parent via parent_key must have their parent_key values updated.
 /// Similarly, grandchildren and deeper descendants with parent_key or grand_N_parent columns must be updated.
@@ -13,14 +19,20 @@ use rusqlite::{params, Connection};
 /// * `conn` - Database connection
 /// * `parent_table` - Name of the parent table whose key value changed
 /// * `parent_column_name` - The column name in parent table that serves as the key (for logging only)
-/// * `old_value` - Old key value
-/// * `new_value` - New key value
+/// * `old_value` - Old key value (typically a row_index value like "4123")
+/// * `new_value` - New key value (typically a new row_index value)
 ///
-/// # Example
+/// # Legacy Example (Pre-Migration)
 /// If you change a value in the "Name" column of table "Games" from "Portal" to "Portal 2":
-/// - ALL child tables like `Games_Platforms`, `Games_Items` have rows with `parent_key = "Portal"` 
+/// - ALL child tables like `Games_Platforms`, `Games_Items` have rows with `parent_key = "Portal"`
 /// - After cascade: those rows have `parent_key = "Portal 2"`
-/// - Grandchild tables like `Games_Platforms_Stores` update their `parent_key` and `grand_1_parent` values similarly
+///
+/// # Current Behavior (Post-Migration)
+/// Changes to display columns (e.g., "Name") don't affect children - no cascade needed.
+/// Only row_index changes (rare) would cascade:
+/// - If Games.row_index changes from "4123" to "5000" (extremely rare)
+/// - Child tables update their parent_key from "4123" to "5000"
+/// - Grandchild tables update their parent_key and grand_1_parent values similarly
 pub fn cascade_key_value_change_to_children(
     conn: &Connection,
     parent_table: &str,

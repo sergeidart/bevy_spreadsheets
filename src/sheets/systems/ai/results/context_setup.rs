@@ -13,9 +13,11 @@ pub fn setup_context_prefixes(
     ev: &AiBatchTaskResult,
 ) {
     state.ai_context_only_prefix_count = ev.key_prefix_count;
-    state.ai_context_prefix_by_row.clear();
+    // Do NOT clear existing prefixes here. For non-virtual reviews, prefixes were
+    // stored at send time and should remain available for rendering.
 
     if state.virtual_structure_stack.is_empty() {
+        // No virtual context to rebuild; keep any existing prefixes intact.
         return;
     }
 
@@ -61,9 +63,67 @@ pub fn setup_context_prefixes(
                     .and_then(|r| r.get(*key_col_index))
                     .cloned()
                     .unwrap_or_default();
-                pairs.push((header, val));
+
+                // After migration, ancestor key values are row_index (numeric)
+                // Resolve to display text for human-readable AI context
+                let display_val = resolve_row_index_to_display_text(&val, anc_cat, anc_sheet, registry)
+                    .unwrap_or(val);
+
+                pairs.push((header, display_val));
             }
             state.ai_context_prefix_by_row.insert(row_index, pairs);
         }
+    }
+}
+
+/// Resolves a row_index value to human-readable display text from the parent row
+///
+/// After migration, ancestor key columns store numeric row_index values.
+/// This function looks up the row by row_index and returns the display value
+/// from the first data column for AI context.
+///
+/// Returns Some(display_text) if successful, None if value is not numeric or row not found.
+fn resolve_row_index_to_display_text(
+    value: &str,
+    parent_category: &Option<String>,
+    parent_sheet: &str,
+    registry: &SheetRegistry,
+) -> Option<String> {
+    // Try to parse as row_index (numeric)
+    let row_index_value = value.parse::<i64>().ok()?;
+
+    // Get parent sheet from registry
+    let sheet = registry.get_sheet(parent_category, parent_sheet)?;
+
+    // Find the row with matching row_index
+    // row_index is stored in column 0 for all tables
+    let row = sheet.grid.iter().find(|row| {
+        row.get(0)
+            .and_then(|idx_str| idx_str.parse::<i64>().ok())
+            .map(|idx| idx == row_index_value)
+            .unwrap_or(false)
+    })?;
+
+    // Get the display value from the first data column
+    let metadata = sheet.metadata.as_ref()?;
+
+    // Find first non-technical column
+    let first_data_col_idx = metadata.columns.iter().position(|col| {
+        let lower = col.header.to_lowercase();
+        lower != "row_index"
+            && lower != "parent_key"
+            && !lower.starts_with("grand_")
+            && lower != "id"
+            && lower != "created_at"
+            && lower != "updated_at"
+    })?;
+
+    // Get display text from that column
+    let display_text = row.get(first_data_col_idx)?.clone();
+
+    if display_text.is_empty() {
+        None
+    } else {
+        Some(display_text)
     }
 }

@@ -6,6 +6,9 @@ pub mod json_extractor;
 pub mod json_migration;
 pub mod occasional_fixes;
 pub mod fix_row_index_duplicates;
+pub mod parent_key_to_row_index;
+pub mod cleanup_temp_new_row_index;
+pub mod hide_temp_new_row_index_in_metadata;
 
 // Re-export main types and functions for backward compatibility
 pub use dependency_handler::DependencyHandler;

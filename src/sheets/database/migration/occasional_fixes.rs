@@ -80,22 +80,30 @@ impl OccasionalFixManager {
     pub fn apply_all_fixes(&self, conn: &mut Connection) -> DbResult<Vec<String>> {
         let mut applied = Vec::new();
 
+        info!("Checking {} registered migrations...", self.fixes.len());
+
         for fix in &self.fixes {
             if !fix.is_applied(conn)? {
-                info!("Applying migration fix: {} - {}", fix.id(), fix.description());
-                
+                info!("Migration '{}' not yet applied, running: {}", fix.id(), fix.description());
+
                 match fix.apply(conn) {
                     Ok(_) => {
                         fix.mark_applied(conn)?;
                         applied.push(fix.id().to_string());
-                        info!("Successfully applied fix: {}", fix.id());
+                        info!("✓ Successfully applied migration: {}", fix.id());
                     }
                     Err(e) => {
-                        error!("Failed to apply fix {}: {}", fix.id(), e);
+                        error!("✗ Failed to apply migration {}: {}", fix.id(), e);
                         return Err(e);
                     }
                 }
+            } else {
+                info!("Migration '{}' already applied, skipping", fix.id());
             }
+        }
+
+        if applied.is_empty() {
+            info!("All migrations already applied, no action needed");
         }
 
         Ok(applied)

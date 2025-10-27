@@ -72,7 +72,7 @@ fn load_database_tables(
         db_path.display()
     );
 
-    let conn = match rusqlite::Connection::open(db_path) {
+    let mut conn = match rusqlite::Connection::open(db_path) {
         Ok(conn) => conn,
         Err(e) => {
             error!(
@@ -103,6 +103,33 @@ fn load_database_tables(
                 "Startup DB Scan: Failed to ensure _Metadata schema in '{}': {}",
                 db_name, e
             );
+        }
+
+        // Apply migration fixes to ensure data integrity
+        info!("Startup DB Scan: Applying migration fixes to '{}'...", db_name);
+        let mut fix_manager = crate::sheets::database::migration::OccasionalFixManager::new();
+        fix_manager.register_fix(Box::new(
+            crate::sheets::database::migration::fix_row_index_duplicates::FixRowIndexDuplicates
+        ));
+        fix_manager.register_fix(Box::new(
+            crate::sheets::database::migration::parent_key_to_row_index::MigrateParentKeyToRowIndex
+        ));
+        fix_manager.register_fix(Box::new(
+            crate::sheets::database::migration::cleanup_temp_new_row_index::CleanupTempNewRowIndex
+        ));
+        fix_manager.register_fix(Box::new(
+            crate::sheets::database::migration::hide_temp_new_row_index_in_metadata::HideTempNewRowIndexInMetadata
+        ));
+
+        match fix_manager.apply_all_fixes(&mut conn) {
+            Ok(applied) => {
+                if !applied.is_empty() {
+                    info!("Startup DB Scan: Applied migration fixes to '{}': {:?}", db_name, applied);
+                }
+            }
+            Err(e) => {
+                error!("Startup DB Scan: Failed to apply migration fixes to '{}': {}", db_name, e);
+            }
         }
     }
 

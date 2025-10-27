@@ -60,8 +60,11 @@ pub fn send_selected_rows(
     // when in a structure sheet: exclude the technical columns (row_index, id), keep 'parent_key'.
     let mut included_indices: Vec<usize> = Vec::new();
     let mut column_contexts: Vec<Option<String>> = Vec::new();
-    // Check if we're in a real structure sheet (not virtual)
-    let in_structure_sheet = !state.structure_navigation_stack.is_empty();
+    // Treat as structure context when either:
+    // - Navigated into a virtual structure view (virtual_structure_stack), or
+    // - The selected sheet's metadata marks it as a structure table
+    let in_structure_sheet = !state.virtual_structure_stack.is_empty()
+        || meta.is_structure_table();
     for (idx, col) in meta.columns.iter().enumerate() {
         if col.deleted {
             continue; // Filter out deleted columns
@@ -75,13 +78,23 @@ pub fn send_selected_rows(
         if matches!(col.ai_include_in_send, Some(false)) {
             continue;
         }
-        // Omit technical columns (row_index, id) from structure sheets payloads
-        // row_index is at index 0 and is a hidden technical column that should never be sent to AI
-        // parent_key at index 1 is kept as it provides important context
-        if in_structure_sheet && (col.header.eq_ignore_ascii_case("row_index") || col.header.eq_ignore_ascii_case("id")) {
+        // Omit technical columns from payload to AI ALWAYS
+        // Skip: row_index, id, parent_key, and all grand_*_parent
+        if col.header.eq_ignore_ascii_case("row_index")
+            || col.header.eq_ignore_ascii_case("id")
+            || col.header.eq_ignore_ascii_case("parent_key")
+            || (col.header.starts_with("grand_") && col.header.ends_with("_parent"))
+        {
             continue;
         }
-        included_indices.push(idx);
+        // Store actual grid column index expected by downstream processors
+        // Grid indexing offset applies when the underlying table is a structure table
+        let actual_grid_idx = if meta.is_structure_table() {
+            meta.metadata_index_to_grid_index(idx)
+        } else {
+            idx
+        };
+        included_indices.push(actual_grid_idx);
         column_contexts.push(decorate_context_with_type(
             col.ai_context.as_ref(),
             col.data_type,
@@ -170,13 +183,148 @@ pub fn send_selected_rows(
         }
     }
 
-    // Note: Key prefix logic is no longer used here. When inside a structure, we send
-    // data as parent_groups with ParentKeyInfo. When not in structure, rows_data is sent as-is.
-    let key_prefix_count = 0usize; // For spawn_batch_task compatibility
+    // Helper to get first non-technical column index in metadata
+    fn first_data_col_idx(meta: &crate::sheets::definitions::SheetMetadata) -> Option<usize> {
+        meta.columns.iter().position(|col| {
+            let lower = col.header.to_lowercase();
+            lower != "row_index"
+                && lower != "parent_key"
+                && !lower.starts_with("grand_")
+                && lower != "id"
+                && lower != "created_at"
+                && lower != "updated_at"
+        })
+    }
+
+    // Build human-readable ancestor prefixes (grand_N..parent), then prepend to rows_data and contexts.
+    // Prefer virtual structure context; fall back to legacy structure navigation if present.
+    let mut key_prefix_count = 0usize;
+    let mut key_prefix_headers: Option<Vec<String>> = None;
+    if !state.virtual_structure_stack.is_empty() {
+        let mut headers: Vec<String> = Vec::new();
+        let mut values: Vec<String> = Vec::new();
+        let mut prefix_contexts: Vec<Option<String>> = Vec::new();
+
+        // Iterate ancestors from oldest to nearest parent using virtual structure stack order
+        for vctx in &state.virtual_structure_stack {
+            if let Some(parent_sheet) = registry.get_sheet(&vctx.parent.parent_category, &vctx.parent.parent_sheet) {
+                if let (Some(parent_meta), Some(parent_row)) = (&parent_sheet.metadata, parent_sheet.grid.get(vctx.parent.parent_row)) {
+                    if let Some(di) = first_data_col_idx(parent_meta) {
+                        let header = parent_meta.columns.get(di).map(|c| c.header.clone()).unwrap_or_else(|| "Key".to_string());
+                        let display = parent_row.get(di).cloned().unwrap_or_default();
+                        if !display.is_empty() {
+                            headers.push(header.clone());
+                            values.push(display);
+                            let col_def = &parent_meta.columns[di];
+                            prefix_contexts.push(decorate_context_with_type(col_def.ai_context.as_ref(), col_def.data_type));
+                        }
+                    }
+                }
+            }
+        }
+
+        if !values.is_empty() {
+            // Prepend prefixes to column_contexts in the same order
+            key_prefix_count = values.len();
+            key_prefix_headers = Some(headers.clone());
+            let mut new_contexts: Vec<Option<String>> =
+                Vec::with_capacity(key_prefix_count + column_contexts.len());
+            new_contexts.extend(prefix_contexts.into_iter());
+            new_contexts.extend(column_contexts.into_iter());
+            column_contexts = new_contexts;
+            // Prepend values to each selected row
+            for row in rows_data.iter_mut() {
+                for (i, v) in values.iter().enumerate() {
+                    row.insert(i, v.clone());
+                }
+            }
+            // Also store these pairs for review UI fallback (keyed by row_index)
+            let pairs: Vec<(String, String)> = headers
+                .iter()
+                .cloned()
+                .zip(values.iter().cloned())
+                .collect();
+            for &row_index in &selection {
+                state.ai_context_prefix_by_row.insert(row_index, pairs.clone());
+            }
+        }
+    } else if !state.structure_navigation_stack.is_empty() {
+        // Legacy real-structure navigation fallback
+        if let Some(nav_ctx) = state.structure_navigation_stack.last() {
+            let mut headers: Vec<String> = Vec::new();
+            let mut values: Vec<String> = Vec::new();
+            let mut prefix_contexts: Vec<Option<String>> = Vec::new();
+
+            // keys_all: [grand_N, ..., grand_1, parent]
+            let mut keys_all = nav_ctx.ancestor_keys.clone();
+            keys_all.push(nav_ctx.parent_row_key.clone());
+
+            // Build table chain T1..Tk where T1 is immediate parent of current structure sheet
+            let mut table_chain: Vec<String> = Vec::new();
+            let mut tname = nav_ctx.structure_sheet_name.clone();
+            while let Some((parent_tbl, _)) = tname.rsplit_once('_') {
+                table_chain.push(parent_tbl.to_string());
+                tname = parent_tbl.to_string();
+                if table_chain.len() >= keys_all.len() { break; }
+            }
+
+            for (i, key_val) in keys_all.into_iter().enumerate() {
+                if i >= table_chain.len() { break; }
+                // Map key position (0=deepest) to corresponding ancestor table from end of chain
+                let chain_len = table_chain.len();
+                let tbl_idx_opt = chain_len.checked_sub(1 + i);
+                let Some(tbl_idx) = tbl_idx_opt else { break; };
+                let parent_table = &table_chain[tbl_idx];
+                if let Some(parent_sheet) = registry.get_sheet(&nav_ctx.parent_category, parent_table) {
+                    if let Some(parent_meta) = &parent_sheet.metadata {
+                        if let Some(di) = first_data_col_idx(parent_meta) {
+                            let header = parent_meta.columns.get(di).map(|c| c.header.clone()).unwrap_or_else(|| "Key".to_string());
+                            let display = parent_sheet.grid.iter().find_map(|r| {
+                                let ridx = r.get(0).and_then(|s| s.parse::<i64>().ok())?;
+                                if ridx.to_string() == key_val { r.get(di).cloned() } else { None }
+                            }).unwrap_or_default();
+                            if !display.is_empty() {
+                                headers.push(header.clone());
+                                values.push(display);
+                                let col_def = &parent_meta.columns[di];
+                                prefix_contexts.push(decorate_context_with_type(col_def.ai_context.as_ref(), col_def.data_type));
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !values.is_empty() {
+                key_prefix_count = values.len();
+                key_prefix_headers = Some(headers.clone());
+                // Prepend prefixes to column_contexts in the same order
+                let mut new_contexts: Vec<Option<String>> =
+                    Vec::with_capacity(key_prefix_count + column_contexts.len());
+                new_contexts.extend(prefix_contexts.into_iter());
+                new_contexts.extend(column_contexts.into_iter());
+                column_contexts = new_contexts;
+                // Prepend values to each selected row
+                for row in rows_data.iter_mut() {
+                    for (i, v) in values.iter().enumerate() {
+                        row.insert(i, v.clone());
+                    }
+                }
+                // Also store these pairs for review UI fallback
+                let pairs: Vec<(String, String)> = headers
+                    .iter()
+                    .cloned()
+                    .zip(values.iter().cloned())
+                    .collect();
+                for &row_index in &selection {
+                    state.ai_context_prefix_by_row.insert(row_index, pairs.clone());
+                }
+            }
+        }
+    }
 
     // Build payload differently based on whether we're in a structure context
     let payload = if in_structure_sheet {
-        // Inside structure - send FLAT rows (no parent_groups). Rows already include parent_key column.
+        // Inside structure - send FLAT rows (no parent_groups). Rows already include prefixed human-readable context
         BatchPayload {
             ai_model_id: model_id,
             general_sheet_rule: rule,
@@ -184,6 +332,7 @@ pub fn send_selected_rows(
             rows_data: rows_data.clone(),
             requested_grounding_with_google_search: grounding,
             allow_row_additions: allow_additions_flag,
+            // Do not include key_prefix_* metadata in payload
             key_prefix_count: None,
             key_prefix_headers: None,
             parent_groups: None,
@@ -198,6 +347,7 @@ pub fn send_selected_rows(
             rows_data: rows_data.clone(),
             requested_grounding_with_google_search: grounding,
             allow_row_additions: allow_additions_flag,
+            // Do not include key_prefix_* metadata in payload
             key_prefix_count: None,
             key_prefix_headers: None,
             // parent_groups is only used for structure requests
@@ -218,7 +368,7 @@ pub fn send_selected_rows(
     state.ai_raw_output_display.clear();
     state.ai_row_reviews.clear();
     state.ai_new_row_reviews.clear();
-    state.ai_context_prefix_by_row.clear();
+    // Preserve ai_context_prefix_by_row so green ancestor columns can render during review
     // Set last_ai_prompt_only flag if prompt was provided without rows
     state.last_ai_prompt_only = selection.is_empty() && user_prompt.is_some();
     state.ai_last_send_root_rows = selection.clone();

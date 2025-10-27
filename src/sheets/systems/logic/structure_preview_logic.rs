@@ -25,6 +25,19 @@ pub fn generate_structure_preview(raw: &str) -> (String, bool) {
         }
     }
 
+    fn is_technical_key(key: &str) -> bool {
+        let lower = key.to_ascii_lowercase();
+        lower == "row_index"
+            || lower == "parent_key"
+            || lower == "temp_new_row_index"
+            || lower == "_obsolete_temp_new_row_index"
+            || lower == "id"
+            || lower == "created_at"
+            || lower == "updated_at"
+            || (lower.starts_with("grand_") && lower.ends_with("_parent"))
+            || lower == "__parentdescriptor"
+    }
+
     match serde_json::from_str::<serde_json::Value>(trimmed) {
         Ok(val) => match val {
             serde_json::Value::Array(arr) => {
@@ -51,10 +64,7 @@ pub fn generate_structure_preview(raw: &str) -> (String, bool) {
                         let mut entries: Vec<(String, String)> = first
                             .iter()
                             .map(|(k, v)| (k.clone(), stringify_json_value(v)))
-                            .filter(|(k, v)| {
-                                !v.trim().is_empty()
-                                    && !k.eq_ignore_ascii_case("__parentdescriptor")
-                            })
+                            .filter(|(k, v)| !v.trim().is_empty() && !is_technical_key(k))
                             .collect();
                         entries.sort_by(|a, b| a.0.cmp(&b.0));
                         out = entries
@@ -77,9 +87,7 @@ pub fn generate_structure_preview(raw: &str) -> (String, bool) {
                 let mut entries: Vec<(String, String)> = map
                     .iter()
                     .map(|(k, v)| (k.clone(), stringify_json_value(v)))
-                    .filter(|(k, v)| {
-                        !v.trim().is_empty() && !k.eq_ignore_ascii_case("__parentdescriptor")
-                    })
+                    .filter(|(k, v)| !v.trim().is_empty() && !is_technical_key(k))
                     .collect();
                 entries.sort_by(|a, b| a.0.cmp(&b.0));
                 out = entries

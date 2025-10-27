@@ -76,8 +76,40 @@ impl<'a> RowContext<'a> {
                                 
                                 // Show value or editable text
                                 if override_enabled {
-                                    // Editable text box without green color
-                                    ui.add(egui::TextEdit::singleline(&mut rr.ancestor_key_values[key_idx]).desired_width(120.0));
+                                    // Dropdown with options from ancestor sheet first data column
+                                    let mut current = rr.ancestor_key_values[key_idx].clone();
+                                    egui::ComboBox::from_id_source(format!("ancestor_override_{}_existing_{}", data_idx, key_idx))
+                                        .width(140.0)
+                                        .selected_text(current.clone())
+                                        .show_ui(ui, |ui| {
+                                            // Build options on the fly from registry using virtual structure stack
+                                            if let Some(vs) = self.state.virtual_structure_stack.get(key_idx) {
+                                                if let Some(parent_sheet) = self.registry.get_sheet(&vs.parent.parent_category, &vs.parent.parent_sheet) {
+                                                    if let Some(meta) = &parent_sheet.metadata {
+                                                        let di = meta
+                                                            .columns
+                                                            .iter()
+                                                            .position(|c| {
+                                                                let h = c.header.to_lowercase();
+                                                                h != "row_index"
+                                                                    && h != "parent_key"
+                                                                    && !h.starts_with("grand_")
+                                                                    && h != "id"
+                                                                    && h != "created_at"
+                                                                    && h != "updated_at"
+                                                            });
+                                                        if let Some(di) = di {
+                                                            for row in &parent_sheet.grid {
+                                                                if let Some(val) = row.get(di) {
+                                                                    ui.selectable_value(&mut current, val.clone(), val);
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        });
+                                    rr.ancestor_key_values[key_idx] = current;
                                 } else {
                                     ui.label(RichText::new(&rr.ancestor_key_values[key_idx]).color(PARENT_KEY_COLOR));
                                 }
@@ -109,8 +141,38 @@ impl<'a> RowContext<'a> {
                                 
                                 // Show value or editable text
                                 if override_enabled {
-                                    // Editable text box without green color
-                                    ui.add(egui::TextEdit::singleline(&mut nr.ancestor_key_values[key_idx]).desired_width(120.0));
+                                    let mut current = nr.ancestor_key_values[key_idx].clone();
+                                    egui::ComboBox::from_id_source(format!("ancestor_override_{}_new_{}", data_idx, key_idx))
+                                        .width(140.0)
+                                        .selected_text(current.clone())
+                                        .show_ui(ui, |ui| {
+                                            if let Some(vs) = self.state.virtual_structure_stack.get(key_idx) {
+                                                if let Some(parent_sheet) = self.registry.get_sheet(&vs.parent.parent_category, &vs.parent.parent_sheet) {
+                                                    if let Some(meta) = &parent_sheet.metadata {
+                                                        let di = meta
+                                                            .columns
+                                                            .iter()
+                                                            .position(|c| {
+                                                                let h = c.header.to_lowercase();
+                                                                h != "row_index"
+                                                                    && h != "parent_key"
+                                                                    && !h.starts_with("grand_")
+                                                                    && h != "id"
+                                                                    && h != "created_at"
+                                                                    && h != "updated_at"
+                                                            });
+                                                        if let Some(di) = di {
+                                                            for row in &parent_sheet.grid {
+                                                                if let Some(val) = row.get(di) {
+                                                                    ui.selectable_value(&mut current, val.clone(), val);
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        });
+                                    nr.ancestor_key_values[key_idx] = current;
                                 } else {
                                     ui.label(RichText::new(&nr.ancestor_key_values[key_idx]).color(PARENT_KEY_COLOR));
                                 }

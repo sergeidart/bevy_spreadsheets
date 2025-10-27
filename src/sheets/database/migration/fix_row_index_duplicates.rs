@@ -29,7 +29,7 @@ impl MigrationFix for FixRowIndexDuplicates {
         
         // Get all table names from global metadata
         let tables: Vec<String> = conn
-            .prepare("SELECT table_name FROM GlobalMetadata ORDER BY display_order")?
+            .prepare("SELECT table_name FROM _Metadata ORDER BY display_order")?
             .query_map([], |row| row.get::<_, String>(0))?
             .collect::<Result<Vec<_>, _>>()?;
 

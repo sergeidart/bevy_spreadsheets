@@ -74,6 +74,7 @@ pub(crate) fn draw_ai_batch_review_panel(
                 &display_ctx.active_sheet_name,
                 cell_update_writer,
                 add_row_writer,
+                registry,
             );
             return;
         }
@@ -474,6 +475,7 @@ pub(crate) fn draw_ai_batch_review_panel(
                                 selected_category_clone,
                                 &display_ctx.active_sheet_name,
                                 cell_update_writer,
+                                registry,
                             );
                         }
 
@@ -489,6 +491,7 @@ pub(crate) fn draw_ai_batch_review_panel(
                                 &display_ctx.active_sheet_name,
                                 cell_update_writer,
                                 add_row_writer,
+                                registry,
                             );
                         }
 

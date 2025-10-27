@@ -277,6 +277,8 @@ impl DbReader {
             c.header != "id"
                 && c.header != "parent_key"
                 && c.header != "row_index"
+                && c.header != "temp_new_row_index"
+                && c.header != "_obsolete_temp_new_row_index"
                 && !(c.header.starts_with("grand_") && c.header.ends_with("_parent"))
         });
 
@@ -373,6 +375,8 @@ impl DbReader {
                     || phys_col == "parent_id"
                     || phys_col == "row_index"
                     || phys_col == "parent_key"
+                    || phys_col == "temp_new_row_index"
+                    || phys_col == "_obsolete_temp_new_row_index"
                     || phys_col == "created_at"
                     || phys_col == "updated_at"
                     || (phys_col.starts_with("grand_") && phys_col.ends_with("_parent"))
@@ -464,7 +468,6 @@ impl DbReader {
 
         Ok(columns)
     }
-
     fn build_sheet_metadata(
         table_name: &str,
         columns: Vec<ColumnDefinition>,

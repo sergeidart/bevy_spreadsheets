@@ -1,5 +1,6 @@
 // Handlers for accepting/cancelling AI row suggestions (moved out of monolithic file)
 use crate::sheets::events::{AddSheetRowRequest, UpdateCellEvent};
+use crate::sheets::resources::SheetRegistry;
 use crate::ui::elements::editor::state::{
     EditorWindowState, NewRowReview, ReviewChoice, StructureReviewEntry,
 };
@@ -146,6 +147,7 @@ pub fn process_existing_accept(
     selected_category: &Option<String>,
     active_sheet_name: &str,
     cell_update_writer: &mut EventWriter<UpdateCellEvent>,
+    registry: &SheetRegistry,
 ) {
     let mut sorted = indices.to_vec();
     if sorted.is_empty() {
@@ -176,6 +178,77 @@ pub fn process_existing_accept(
                             col_index: *actual_col,
                             new_value: ai_val,
                         });
+                    }
+                }
+            }
+
+            // Apply ancestor overrides: map human-readable values to numeric row_index for the full chain
+            if !state.virtual_structure_stack.is_empty() {
+                let chain_len = state.virtual_structure_stack.len();
+                if let Some(child_meta) = registry
+                    .get_sheet(selected_category, active_sheet_name)
+                    .and_then(|s| s.metadata.as_ref())
+                {
+                    for key_idx in 0..chain_len {
+                        let override_flag = *rr.key_overrides.get(&(1000 + key_idx)).unwrap_or(&false);
+                        if !override_flag { continue; }
+                        let desired_text = rr.ancestor_key_values.get(key_idx).cloned().unwrap_or_default();
+                        if desired_text.trim().is_empty() { continue; }
+
+                        if let Some(vctx) = state.virtual_structure_stack.get(key_idx) {
+                            if let Some(parent_sheet) = registry.get_sheet(&vctx.parent.parent_category, &vctx.parent.parent_sheet) {
+                                if let Some(parent_meta) = &parent_sheet.metadata {
+                                    // Find first data col for display
+                                    let di = parent_meta
+                                        .columns
+                                        .iter()
+                                        .position(|c| {
+                                            let h = c.header.to_lowercase();
+                                            h != "row_index"
+                                                && h != "parent_key"
+                                                && !h.starts_with("grand_")
+                                                && h != "id"
+                                                && h != "created_at"
+                                                && h != "updated_at"
+                                        });
+                                    if let Some(di) = di {
+                                        // Find the matching parent's row_index by display text
+                                        let numeric = parent_sheet.grid.iter().find_map(|r| {
+                                            if r.get(di).map(|s| s == &desired_text).unwrap_or(false) {
+                                                r.get(0).cloned()
+                                            } else { None }
+                                        });
+                                        if let Some(row_index_numeric) = numeric {
+                                            // Determine target child column by chain position
+                                            let target_col_idx = if key_idx + 1 == chain_len {
+                                                // immediate parent
+                                                child_meta
+                                                    .columns
+                                                    .iter()
+                                                    .position(|c| c.header.eq_ignore_ascii_case("parent_key"))
+                                            } else {
+                                                let n = chain_len - 1 - key_idx; // 1..N
+                                                let header = format!("grand_{}_parent", n);
+                                                child_meta
+                                                    .columns
+                                                    .iter()
+                                                    .position(|c| c.header.eq_ignore_ascii_case(&header))
+                                            };
+
+                                            if let Some(tcol) = target_col_idx {
+                                                cell_update_writer.write(UpdateCellEvent {
+                                                    category: selected_category.clone(),
+                                                    sheet_name: active_sheet_name.to_string(),
+                                                    row_index: rr.row_index,
+                                                    col_index: tcol,
+                                                    new_value: row_index_numeric,
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -280,6 +353,7 @@ pub fn process_new_accept(
     active_sheet_name: &str,
     cell_update_writer: &mut EventWriter<UpdateCellEvent>,
     _add_row_writer: &mut EventWriter<AddSheetRowRequest>, // Kept for compatibility, but now using batch queue
+    registry: &SheetRegistry,
 ) {
     let mut sorted = indices.to_vec();
     if sorted.is_empty() {
@@ -381,11 +455,186 @@ pub fn process_new_accept(
                     }
                 } else {
                     // Creating separate new row with structure data - collect for batch
-                    batch_rows.push(build_row_initial_values(&nr, structure_entries));
+                    let mut init_vals: Vec<(usize, String)> = Vec::new();
+                    // Non-structure
+                    for (pos, actual_col) in nr.non_structure_columns.iter().enumerate() {
+                        if let Some(val) = nr.ai.get(pos).cloned() {
+                            init_vals.push((*actual_col, val));
+                        }
+                    }
+                    // Ancestor overrides → technical columns
+                    if !state.virtual_structure_stack.is_empty() {
+                        if let Some(child_meta) = registry
+                            .get_sheet(selected_category, active_sheet_name)
+                            .and_then(|s| s.metadata.as_ref())
+                        {
+                            let chain_len = state.virtual_structure_stack.len();
+                            for key_idx in 0..chain_len {
+                                let override_flag = *nr.key_overrides.get(&(1000 + key_idx)).unwrap_or(&false);
+                                if !override_flag { continue; }
+                                let desired_text = nr.ancestor_key_values.get(key_idx).cloned().unwrap_or_default();
+                                if desired_text.trim().is_empty() { continue; }
+                                if let Some(vctx) = state.virtual_structure_stack.get(key_idx) {
+                                    if let Some(parent_sheet) = registry.get_sheet(&vctx.parent.parent_category, &vctx.parent.parent_sheet) {
+                                        if let Some(parent_meta) = &parent_sheet.metadata {
+                                            let di = parent_meta
+                                                .columns
+                                                .iter()
+                                                .position(|c| {
+                                                    let h = c.header.to_lowercase();
+                                                    h != "row_index"
+                                                        && h != "parent_key"
+                                                        && !h.starts_with("grand_")
+                                                        && h != "id"
+                                                        && h != "created_at"
+                                                        && h != "updated_at"
+                                                });
+                                            if let Some(di) = di {
+                                                let numeric = parent_sheet.grid.iter().find_map(|r| {
+                                                    if r.get(di).map(|s| s == &desired_text).unwrap_or(false) {
+                                                        r.get(0).cloned()
+                                                    } else { None }
+                                                });
+                                                if let Some(row_index_numeric) = numeric {
+                                                    let target_col_idx = if key_idx + 1 == chain_len {
+                                                        child_meta
+                                                            .columns
+                                                            .iter()
+                                                            .position(|c| c.header.eq_ignore_ascii_case("parent_key"))
+                                                    } else {
+                                                        let n = chain_len - 1 - key_idx;
+                                                        let header = format!("grand_{}_parent", n);
+                                                        child_meta
+                                                            .columns
+                                                            .iter()
+                                                            .position(|c| c.header.eq_ignore_ascii_case(&header))
+                                                    };
+                                                    if let Some(tcol) = target_col_idx {
+                                                        init_vals.push((tcol, row_index_numeric));
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // Structures
+                    for entry in structure_entries {
+                        if entry.rejected { continue; }
+                        let rows_to_serialize = if entry.decided { &entry.merged_rows } else { &entry.ai_rows };
+                        let array_of_objects: Vec<serde_json::Map<String, serde_json::Value>> = rows_to_serialize
+                            .iter()
+                            .map(|row| {
+                                let mut obj = serde_json::Map::new();
+                                for (i, value) in row.iter().enumerate() {
+                                    let field_name = entry
+                                        .schema_headers
+                                        .get(i)
+                                        .cloned()
+                                        .unwrap_or_else(|| format!("field_{}", i));
+                                    obj.insert(field_name, serde_json::Value::String(value.clone()));
+                                }
+                                obj
+                            })
+                            .collect();
+                        let json_value = serde_json::json!(array_of_objects);
+                        let json_string = serde_json::to_string(&json_value).unwrap_or_else(|_| "[]".to_string());
+                        let col_index = *entry.structure_path.first().unwrap_or(&0);
+                        init_vals.push((col_index, json_string));
+                    }
+                    batch_rows.push(init_vals);
                 }
             } else {
                 // Creating new row with structure data - collect for batch
-                batch_rows.push(build_row_initial_values(&nr, structure_entries));
+                let mut init_vals: Vec<(usize, String)> = Vec::new();
+                for (pos, actual_col) in nr.non_structure_columns.iter().enumerate() {
+                    if let Some(val) = nr.ai.get(pos).cloned() {
+                        init_vals.push((*actual_col, val));
+                    }
+                }
+                if !state.virtual_structure_stack.is_empty() {
+                    if let Some(child_meta) = registry
+                        .get_sheet(selected_category, active_sheet_name)
+                        .and_then(|s| s.metadata.as_ref())
+                    {
+                        let chain_len = state.virtual_structure_stack.len();
+                        for key_idx in 0..chain_len {
+                            let override_flag = *nr.key_overrides.get(&(1000 + key_idx)).unwrap_or(&false);
+                            if !override_flag { continue; }
+                            let desired_text = nr.ancestor_key_values.get(key_idx).cloned().unwrap_or_default();
+                            if desired_text.trim().is_empty() { continue; }
+                            if let Some(vctx) = state.virtual_structure_stack.get(key_idx) {
+                                if let Some(parent_sheet) = registry.get_sheet(&vctx.parent.parent_category, &vctx.parent.parent_sheet) {
+                                    if let Some(parent_meta) = &parent_sheet.metadata {
+                                        let di = parent_meta
+                                            .columns
+                                            .iter()
+                                            .position(|c| {
+                                                let h = c.header.to_lowercase();
+                                                h != "row_index"
+                                                    && h != "parent_key"
+                                                    && !h.starts_with("grand_")
+                                                    && h != "id"
+                                                    && h != "created_at"
+                                                    && h != "updated_at"
+                                            });
+                                        if let Some(di) = di {
+                                            let numeric = parent_sheet.grid.iter().find_map(|r| {
+                                                if r.get(di).map(|s| s == &desired_text).unwrap_or(false) {
+                                                    r.get(0).cloned()
+                                                } else { None }
+                                            });
+                                            if let Some(row_index_numeric) = numeric {
+                                                let target_col_idx = if key_idx + 1 == chain_len {
+                                                    child_meta
+                                                        .columns
+                                                        .iter()
+                                                        .position(|c| c.header.eq_ignore_ascii_case("parent_key"))
+                                                } else {
+                                                    let n = chain_len - 1 - key_idx;
+                                                    let header = format!("grand_{}_parent", n);
+                                                    child_meta
+                                                        .columns
+                                                        .iter()
+                                                        .position(|c| c.header.eq_ignore_ascii_case(&header))
+                                                };
+                                                if let Some(tcol) = target_col_idx {
+                                                    init_vals.push((tcol, row_index_numeric));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                for entry in structure_entries {
+                    if entry.rejected { continue; }
+                    let rows_to_serialize = if entry.decided { &entry.merged_rows } else { &entry.ai_rows };
+                    let array_of_objects: Vec<serde_json::Map<String, serde_json::Value>> = rows_to_serialize
+                        .iter()
+                        .map(|row| {
+                            let mut obj = serde_json::Map::new();
+                            for (i, value) in row.iter().enumerate() {
+                                let field_name = entry
+                                    .schema_headers
+                                    .get(i)
+                                    .cloned()
+                                    .unwrap_or_else(|| format!("field_{}", i));
+                                obj.insert(field_name, serde_json::Value::String(value.clone()));
+                            }
+                            obj
+                        })
+                        .collect();
+                    let json_value = serde_json::json!(array_of_objects);
+                    let json_string = serde_json::to_string(&json_value).unwrap_or_else(|_| "[]".to_string());
+                    let col_index = *entry.structure_path.first().unwrap_or(&0);
+                    init_vals.push((col_index, json_string));
+                }
+                batch_rows.push(init_vals);
             }
 
             // CRITICAL: Update all structure entries with higher parent_new_row_index

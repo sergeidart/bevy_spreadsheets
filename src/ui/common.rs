@@ -69,6 +69,8 @@ pub fn edit_cell_widget(
             .map(|col_def| {
                 col_def.header.eq_ignore_ascii_case("row_index")
                     || col_def.header.eq_ignore_ascii_case("parent_key")
+                    || col_def.header.eq_ignore_ascii_case("temp_new_row_index")
+                    || col_def.header.eq_ignore_ascii_case("_obsolete_temp_new_row_index")
                     || (col_def.header.starts_with("grand_") && col_def.header.ends_with("_parent"))
             })
             .unwrap_or(false)
@@ -190,26 +192,31 @@ pub fn edit_cell_widget(
                                     .and_then(|meta| meta.columns.get(col_index));
                                 if let Some(col_def) = column_def {
                                     let structure_sheet_name = format!("{}_{}", sheet_name, col_def.header);
-                                    // Get parent key: use structure_key_parent_column_index if available, 
-                                    // otherwise use first real data column (index 1 for regular, 2 for structure)
-                                    let parent_key = registry
+                                    // Get parent's row_index to use for filtering children
+                                    // After migration, children store parent's row_index in their parent_key column
+                                    let parent_row_index = registry
+                                        .get_sheet(category, sheet_name)
+                                        .and_then(|sd| sd.grid.get(row_index))
+                                        .and_then(|row| row.get(0)) // row_index is always at column 0
+                                        .map(|s| s.clone())
+                                        .unwrap_or_else(|| row_index.to_string());
+
+                                    // For display purposes, also get the human-readable key
+                                    let parent_display_key = registry
                                         .get_sheet(category, sheet_name)
                                         .and_then(|sd| {
                                             let row = sd.grid.get(row_index)?;
-                                            let key_col_idx = col_def.structure_key_parent_column_index
-                                                .or_else(|| {
-                                                    // Fallback: first data column
-                                                    if let Some(meta) = &sd.metadata {
-                                                        if meta.is_structure_table() {
-                                                            Some(2) // Skip row_index (0) and parent_key (1)
-                                                        } else {
-                                                            Some(1) // Skip row_index (0)
-                                                        }
-                                                    } else {
-                                                        Some(0) // Fallback if no metadata
-                                                    }
-                                                });
-                                            key_col_idx.and_then(|idx| row.get(idx)).map(|s| s.clone())
+                                            let key_idx_dyn = sd.metadata.as_ref().and_then(|meta| {
+                                                meta.columns.iter().position(|c| {
+                                                    let h = c.header.to_ascii_lowercase();
+                                                    h != "row_index"
+                                                        && h != "parent_key"
+                                                        && h != "temp_new_row_index"
+                                                        && h != "_obsolete_temp_new_row_index"
+                                                        && !h.starts_with("grand_")
+                                                })
+                                            }).or(Some(0));
+                                            key_idx_dyn.and_then(|idx| row.get(idx)).cloned()
                                         })
                                         .unwrap_or_else(|| row_index.to_string());
                                     let ui_header = col_def
@@ -237,10 +244,12 @@ pub fn edit_cell_widget(
                                     let mut count_opt = state.ui_structure_row_count_cache.get(&cache_key).copied();
                                     if count_opt.is_none() {
                                         if let Some(struct_sheet) = registry.get_sheet(category, &structure_sheet_name) {
+                                            // Filter by parent_row_index (numeric comparison)
+                                            // Children's parent_key column (index 1) stores the parent's row_index
                                             let c = struct_sheet
                                                 .grid
                                                 .iter()
-                                                .filter(|r| r.get(1).map(|v| v == &parent_key).unwrap_or(false))
+                                                .filter(|r| r.get(1).map(|v| v == &parent_row_index).unwrap_or(false))
                                                 .count();
                                             state.ui_structure_row_count_cache.insert(cache_key.clone(), c);
                                             count_opt = Some(c);
@@ -248,13 +257,13 @@ pub fn edit_cell_widget(
                                     }
                                     let rows_count = count_opt.unwrap_or(0);
                                     resp = resp.on_hover_text(format!(
-                                        "Structure: {}\nParent: {}\nRows: {}\nPreview: {}\n\nClick to open",
-                                        structure_sheet_name, parent_key, rows_count, current_display_text
+                                        "Structure: {}\nParent: {} (row_index: {})\nRows: {}\nPreview: {}\n\nClick to open",
+                                        structure_sheet_name, parent_display_key, parent_row_index, rows_count, current_display_text
                                     ));
                                     if resp.clicked() {
                                         if registry.get_sheet(category, &structure_sheet_name).is_some() {
                                             // Collect ancestor keys and display value from parent row
-                                            let (mut ancestor_keys, display_value) = 
+                                            let (mut ancestor_keys, display_value) =
                                                 crate::ui::elements::editor::structure_navigation::collect_structure_ancestors(
                                                     registry,
                                                     category,
@@ -262,17 +271,28 @@ pub fn edit_cell_widget(
                                                     &structure_sheet_name,
                                                     row_index,
                                                 );
-                                            // Add the display value as the final ancestor (becomes child's parent_key)
-                                            ancestor_keys.push(display_value.clone());
+
+                                            // Get parent row's row_index value to use as parent_key
+                                            // This is the new approach: store row_index instead of text for stable references
+                                            let parent_row_index_value = registry
+                                                .get_sheet(category, sheet_name)
+                                                .and_then(|sd| sd.grid.get(row_index))
+                                                .and_then(|row| row.get(0)) // row_index is always at column 0
+                                                .map(|s| s.clone())
+                                                .unwrap_or_else(|| row_index.to_string());
+
+                                            // Add the row_index value as the final ancestor (becomes child's parent_key)
+                                            ancestor_keys.push(parent_row_index_value.clone());
+
                                             bevy::log::info!(
-                                                "Opening structure: {} -> {} | parent_row_key='{}' | ancestor_keys={:?}",
-                                                sheet_name, structure_sheet_name, display_value, ancestor_keys
+                                                "Opening structure: {} -> {} | parent_row_index='{}' (display: '{}') | ancestor_keys={:?}",
+                                                sheet_name, structure_sheet_name, parent_row_index_value, display_value, ancestor_keys
                                             );
                                             let nav_context = crate::ui::elements::editor::state::StructureNavigationContext {
                                                 structure_sheet_name: structure_sheet_name.clone(),
                                                 parent_category: category.clone(),
                                                 parent_sheet_name: sheet_name.to_string(),
-                                                parent_row_key: display_value,
+                                                parent_row_key: parent_row_index_value,
                                                 ancestor_keys,
                                                 parent_column_name: ui_header,
                                             };

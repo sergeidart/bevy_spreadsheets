@@ -1,10 +1,19 @@
 // src/sheets/systems/logic/update_cell/cascade.rs
 //! Cascade logic for parent key value changes
+//!
+//! **Post-Migration Note (2025-10-27):**
+//! After migrating to row_index-based references, cascades are rarely triggered.
+//! Children store parent's row_index (which doesn't change on rename), so only
+//! manual row_index changes (extremely rare) would trigger cascades.
 
 use bevy::prelude::*;
 use crate::sheets::definitions::ColumnValidator;
 
 /// Checks if a column is used as a structure key by any child tables
+///
+/// After migration, this identifies columns that are referenced by structure_key_parent_column_index.
+/// Note: With row_index references, this typically points to the row_index column (column 0),
+/// so cascades are rarely triggered for user-visible data columns.
 pub fn is_key_column(
     metadata: &crate::sheets::definitions::SheetMetadata,
     col_idx: usize,
@@ -20,6 +29,12 @@ pub fn is_key_column(
 }
 
 /// Triggers cascade update when a key column value changes
+///
+/// **Post-Migration Behavior:**
+/// This is rarely called for display columns since children reference row_index (stable).
+/// Only triggered when:
+/// - Row_index itself changes (extremely rare, manual only)
+/// - Legacy pre-migration data still using text-based keys
 pub fn cascade_key_change_if_needed(
     conn: &rusqlite::Connection,
     metadata: &crate::sheets::definitions::SheetMetadata,

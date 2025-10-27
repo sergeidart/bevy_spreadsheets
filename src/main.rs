@@ -197,39 +197,50 @@ fn set_window_icon(
         return;
     };
 
-    let icon_path = "assets/icon.png";
-    match std::fs::read(icon_path) {
-        Ok(icon_bytes) => {
-            match image::load_from_memory_with_format(&icon_bytes, CrateImageFormat::Png) {
-                Ok(image_data) => {
-                    let image_buffer = image_data.into_rgba8();
-                    let (width, height) = image_buffer.dimensions();
-                    let rgba_data = image_buffer.into_raw();
+    // Prefer embedded icon bytes to avoid path/cwd issues at runtime
+    // Fallback to reading from filesystem if the include fails during dev
+    const ICON_BYTES: &[u8] = include_bytes!("../assets/icon.png");
+    match image::load_from_memory_with_format(ICON_BYTES, CrateImageFormat::Png) {
+        Ok(image_data) => {
+            let image_buffer = image_data.into_rgba8();
+            let (width, height) = image_buffer.dimensions();
+            let rgba_data = image_buffer.into_raw();
 
-                    match WinitIcon::from_rgba(rgba_data, width, height) {
-                        Ok(winit_icon) => {
-                            primary_winit_window.set_window_icon(Some(winit_icon));
-                            info!("Successfully set window icon from: {}", icon_path);
-                            // Request user attention on startup so the app signals the OS (taskbar flash / attention request).
-                            // This doesn't guarantee focus (OS may prevent focus stealing), but it brings attention to the app.
-                            primary_winit_window
-                                .request_user_attention(Some(UserAttentionType::Critical));
-                        }
-                        Err(e) => {
-                            warn!("Failed to create winit::window::Icon: {:?}", e);
-                        }
-                    }
+            match WinitIcon::from_rgba(rgba_data, width, height) {
+                Ok(winit_icon) => {
+                    primary_winit_window.set_window_icon(Some(winit_icon));
+                    info!("Successfully set window icon (embedded bytes)");
+                    primary_winit_window
+                        .request_user_attention(Some(UserAttentionType::Critical));
                 }
                 Err(e) => {
-                    warn!(
-                        "'image' crate: Failed to load image data from '{}': {}",
-                        icon_path, e
-                    );
+                    warn!("Failed to create winit::window::Icon: {:?}", e);
                 }
             }
         }
         Err(e) => {
-            warn!("Failed to read icon file '{}': {}", icon_path, e);
+            warn!("Failed to decode embedded icon.png: {} — will try filesystem path", e);
+            let icon_path = "assets/icon.png";
+            match std::fs::read(icon_path) {
+                Ok(icon_bytes) => match image::load_from_memory_with_format(&icon_bytes, CrateImageFormat::Png) {
+                    Ok(image_data) => {
+                        let image_buffer = image_data.into_rgba8();
+                        let (width, height) = image_buffer.dimensions();
+                        let rgba_data = image_buffer.into_raw();
+                        match WinitIcon::from_rgba(rgba_data, width, height) {
+                            Ok(winit_icon) => {
+                                primary_winit_window.set_window_icon(Some(winit_icon));
+                                info!("Successfully set window icon from: {}", icon_path);
+                                primary_winit_window
+                                    .request_user_attention(Some(UserAttentionType::Critical));
+                            }
+                            Err(e) => warn!("Failed to create winit::window::Icon: {:?}", e),
+                        }
+                    }
+                    Err(e) => warn!("Failed to decode icon file '{}': {}", icon_path, e),
+                },
+                Err(e) => warn!("Failed to read icon file '{}': {}", icon_path, e),
+            }
         }
     }
 }

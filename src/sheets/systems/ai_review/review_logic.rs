@@ -149,6 +149,15 @@ pub fn build_merged_columns(
                         let is_structure =
                             matches!(col_def.validator, Some(ColumnValidator::Structure));
 
+                        // Skip technical columns entirely
+                        let is_technical = col_def.header.eq_ignore_ascii_case("row_index")
+                            || col_def.header.eq_ignore_ascii_case("parent_key")
+                            || (col_def.header.starts_with("grand_")
+                                && col_def.header.ends_with("_parent"));
+                        if is_technical {
+                            continue;
+                        }
+
                         // Only show columns that were actually sent
                         if is_structure {
                             // Structure columns: Check if this structure path was planned for sending
@@ -205,7 +214,7 @@ pub fn gather_ancestor_key_columns(
         if last_ctx.virtual_sheet_name == active_sheet_name {
             for vctx in &state.virtual_structure_stack {
                 if let Some(parent_sheet) =
-                    registry.get_sheet(selected_category_clone, &vctx.parent.parent_sheet)
+                    registry.get_sheet(&vctx.parent.parent_category, &vctx.parent.parent_sheet)
                 {
                     if let (Some(parent_meta), Some(parent_row)) = (
                         &parent_sheet.metadata,
@@ -235,6 +244,13 @@ pub fn gather_ancestor_key_columns(
                         }
                     }
                 }
+            }
+        }
+    } else {
+        // Fallback: if we have stored context prefixes for the current reviews, use them
+        if let Some(rr) = state.ai_row_reviews.first() {
+            if let Some(pairs) = state.ai_context_prefix_by_row.get(&rr.row_index) {
+                ancestor_key_columns = pairs.clone();
             }
         }
     }
@@ -295,6 +311,7 @@ pub fn process_accept_all_normal_mode(
     active_sheet_name: &str,
     cell_update_writer: &mut EventWriter<UpdateCellEvent>,
     add_row_writer: &mut EventWriter<AddSheetRowRequest>,
+    registry: &SheetRegistry,
 ) {
     let existing_indices: Vec<usize> = (0..state.ai_row_reviews.len()).collect();
     let new_indices: Vec<usize> = state
@@ -310,6 +327,7 @@ pub fn process_accept_all_normal_mode(
         selected_category_clone,
         active_sheet_name,
         cell_update_writer,
+        registry,
     );
     process_new_accept(
         &new_indices,
@@ -318,6 +336,7 @@ pub fn process_accept_all_normal_mode(
         active_sheet_name,
         cell_update_writer,
         add_row_writer,
+        registry,
     );
     cancel_batch(state);
 }

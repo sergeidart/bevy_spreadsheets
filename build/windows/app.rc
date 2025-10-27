@@ -1,0 +1,6 @@
+// build/windows/app.rc
+// Resource script to embed an application icon for Windows builds.
+// Ensure assets\icon.ico exists.
+
+1 ICON "..\\..\\assets\\icon.ico"
+

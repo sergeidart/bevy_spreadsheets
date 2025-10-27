@@ -2,6 +2,7 @@
 // Database-specific persistence operations for add_row functionality
 
 use crate::sheets::definitions::{ColumnValidator, SheetMetadata};
+use rusqlite::OptionalExtension;
 use bevy::prelude::*;
 
 /// Prepends a row to the database table
@@ -44,126 +45,23 @@ pub(super) fn persist_row_to_db(
         && metadata.columns.get(1).map(|c| c.header.eq_ignore_ascii_case("parent_key")).unwrap_or(false);
 
     if is_structure_sheet {
-        // For structure sheets, we need to resolve parent_id from parent_key
+        // For structure sheets, parent_key now contains the parent's row_index (numeric value)
+        // No need to resolve - just validate it's present and use it directly
         let parent_key = row0.get(1).cloned().unwrap_or_default();
-        
-        debug!("Adding row to structure table '{}' with parent_key='{}'", sheet_name, parent_key);
-        
+
+        debug!("Adding row to structure table '{}' with parent_key (row_index)='{}'", sheet_name, parent_key);
+
         if parent_key.is_empty() {
             return Err(format!("Cannot insert row into structure table '{}': parent_key is empty", sheet_name));
         }
 
-        // Extract parent table name from structure table name (format: ParentTable_ColumnName)
-        let parent_table = sheet_name.rsplit_once('_')
-            .map(|(parent, _)| parent)
-            .ok_or_else(|| format!("Cannot determine parent table from structure sheet name: {}", sheet_name))?;
-
-        debug!("Resolved parent table: '{}' for structure sheet '{}'", parent_table, sheet_name);
-
-        // Find the parent column definition to get the structure_key_parent_column_index
-        let parent_column_def = metadata.columns.iter()
-            .find(|c| c.header.eq_ignore_ascii_case("parent_key"))
-            .ok_or_else(|| format!("Cannot find parent_key column definition in sheet '{}'", sheet_name))?;
-        
-        let key_column_name = if let Some(key_col_idx) = parent_column_def.structure_key_parent_column_index {
-            // Get the parent table's metadata to find column name at this index
-            // We need access to registry for this, but we don't have it in this function
-            // Workaround: Query the parent table's schema from the database
-            let parent_table_info: Vec<(i64, String, String)> = conn.prepare(&format!("PRAGMA table_info(\"{}\")", parent_table))
-                .and_then(|mut stmt| {
-                    stmt.query_map([], |row| {
-                        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
-                    })
-                    .and_then(|mapped_rows| mapped_rows.collect::<Result<Vec<_>, _>>())
-                })
-                .map_err(|e| format!("Failed to query parent table schema: {}", e))?;
-            
-            debug!("Parent table '{}' schema: {:?}", parent_table, parent_table_info);
-            
-            // DB columns start with 'id', then data columns, so add 1 to skip the 'id' column
-            // The structure_key_parent_column_index refers to the visual column index (0-based in metadata.columns)
-            // But in the DB, we have: id, row_index (if structure), parent_key (if structure), then data columns
-            // So we need to account for technical columns
-            
-            // Check if parent is also a structure table (has row_index and parent_key columns)
-            let is_parent_structure = parent_table_info.iter()
-                .any(|(_, name, _)| name.eq_ignore_ascii_case("row_index") || name.eq_ignore_ascii_case("parent_key"));
-            
-            let db_column_offset = if is_parent_structure {
-                // Skip: id, row_index, parent_key = 3 columns
-                // But key_col_idx is relative to metadata.columns which doesn't include row_index/parent_key
-                // So key_col_idx + 1 (for id) + 2 (for row_index, parent_key) = key_col_idx + 3
-                key_col_idx + 3
-            } else {
-                // Skip: id = 1 column
-                key_col_idx + 1
-            };
-            
-            parent_table_info.get(db_column_offset)
-                .map(|(_, name, _)| name.clone())
-                .ok_or_else(|| format!("Column index {} out of bounds in parent table '{}'", db_column_offset, parent_table))?
-        } else {
-            // Fallback: choose the first non-technical parent column (matches UI default)
+        // Validate that parent_key is numeric (row_index format)
+        if parent_key.parse::<i64>().is_err() {
             warn!(
-                "No structure_key_parent_column_index found for parent_key in sheet '{}', using first non-technical parent column as fallback",
-                sheet_name
+                "Parent_key '{}' is not numeric for structure table '{}'. This may be pre-migration data.",
+                parent_key, sheet_name
             );
-
-            // Query parent schema: (cid, name, type)
-            let parent_table_info: Vec<(i64, String, String)> = conn
-                .prepare(&format!("PRAGMA table_info(\"{}\")", parent_table))
-                .and_then(|mut stmt| {
-                    stmt.query_map([], |row| {
-                        Ok((
-                            row.get::<_, i64>(0)?,
-                            row.get::<_, String>(1)?,
-                            row.get::<_, String>(2)?,
-                        ))
-                    })
-                    .and_then(|mapped_rows| mapped_rows.collect::<Result<Vec<_>, _>>())
-                })
-                .map_err(|e| format!("Failed to query parent table schema: {}", e))?;
-
-            // Filter to first non-technical, preferably TEXT column
-            let mut first_text: Option<String> = None;
-            let mut first_any: Option<String> = None;
-            for (_cid, name, ty) in parent_table_info.iter() {
-                let lname = name.to_lowercase();
-                let is_technical = lname == "id"
-                    || lname == "parent_id"
-                    || lname == "row_index"
-                    || lname == "parent_key"
-                    || lname == "created_at"
-                    || lname == "updated_at"
-                    || (lname.starts_with("grand_") && lname.ends_with("_parent"));
-                if is_technical {
-                    continue;
-                }
-                if first_any.is_none() {
-                    first_any = Some(name.clone());
-                }
-                if ty.eq_ignore_ascii_case("TEXT") && first_text.is_none() {
-                    first_text = Some(name.clone());
-                }
-            }
-            first_text
-                .or(first_any)
-                .ok_or_else(|| format!("Cannot determine a non-technical key column in parent table '{}'", parent_table))?
-        };
-
-        debug!("Using column '{}' to validate parent_key='{}' exists in table '{}'", key_column_name, parent_key, parent_table);
-
-        // Lookup parent_id (the 'id' field from the parent table) using parent_key
-        let parent_id: i64 = conn.query_row(
-            &format!("SELECT id FROM \"{}\" WHERE \"{}\" = ? LIMIT 1", parent_table, key_column_name),
-            [&parent_key],
-            |row| row.get(0)
-        ).map_err(|e| {
-            format!("Cannot find parent row with key '{}' in table '{}' (searched column '{}'). Ensure the parent row exists before adding child rows. Error: {}", 
-                parent_key, parent_table, key_column_name, e)
-        })?;
-
-        debug!("Found parent row: parent_key='{}' -> parent_id={} in table '{}'", parent_key, parent_id, parent_table);
+        }
 
         // Build column names and row_data for structure table insert
         let mut column_names: Vec<String> = Vec::new();
@@ -181,9 +79,42 @@ pub(super) fn persist_row_to_db(
             row_data.push(row0.get(i).cloned().unwrap_or_default());
         }
         
-        // Add parent_key to the insert (structure tables do not have a parent_id column)
+        // Add parent_key to the insert
         column_names.push("parent_key".to_string());
         row_data.push(parent_key.clone());
+
+        // Backward compatibility: some older DBs still have NOT NULL parent_id in structure tables.
+        // If the physical table has parent_id, compute it from the parent table using parent_key (row_index) and include it.
+        let has_parent_id: bool = conn
+            .query_row(
+                &format!("SELECT COUNT(*) FROM pragma_table_info(\"{}\") WHERE name = 'parent_id'", sheet_name),
+                [],
+                |row| row.get::<_, i32>(0).map(|c| c > 0),
+            )
+            .unwrap_or(false);
+        if has_parent_id {
+            // Derive parent table name by stripping the last _segment from the structure sheet name
+            if let Some((parent_table, _)) = sheet_name.rsplit_once('_') {
+                // Look up parent id by row_index
+                let parent_id: Option<i64> = conn
+                    .query_row(
+                        &format!("SELECT id FROM \"{}\" WHERE row_index = ?", parent_table),
+                        [parent_key.as_str()],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .unwrap_or(None);
+                if let Some(pid) = parent_id {
+                    column_names.push("parent_id".to_string());
+                    row_data.push(pid.to_string());
+                } else {
+                    warn!(
+                        "persist_row_to_db: parent_id not found for '{}', parent_key(row_index)='{}' in parent '{}'",
+                        sheet_name, parent_key, parent_table
+                    );
+                }
+            }
+        }
 
         crate::sheets::database::writer::DbWriter::prepend_row(
             &conn,
@@ -261,110 +192,36 @@ pub(super) fn persist_rows_batch_to_db(
         && metadata.columns.get(1).map(|c| c.header.eq_ignore_ascii_case("parent_key")).unwrap_or(false);
 
     if is_structure_sheet {
-        // For structure sheets, batch insert with parent_id resolution
+        // For structure sheets, parent_key now contains the parent's row_index (numeric value)
         let first_row = grid_data.get(0).ok_or("No data to insert")?;
         let parent_key = first_row.get(1).cloned().unwrap_or_default();
-        
+
+        debug!("Batch insert to structure table '{}' with parent_key (row_index)='{}'", sheet_name, parent_key);
+
         if parent_key.is_empty() {
             return Err(format!("Cannot insert rows into structure table '{}': parent_key is empty", sheet_name));
         }
 
-        // Resolve parent_id using the same logic as single insert
-        let parent_table = sheet_name.rsplit_once('_')
-            .map(|(parent, _)| parent)
-            .ok_or_else(|| format!("Cannot determine parent table from structure sheet name: {}", sheet_name))?;
-
-        // Find the parent column definition to get the structure_key_parent_column_index
-        let parent_column_def = metadata.columns.iter()
-            .find(|c| c.header.eq_ignore_ascii_case("parent_key"))
-            .ok_or_else(|| format!("Cannot find parent_key column definition in sheet '{}'", sheet_name))?;
-        
-        let key_column_name = if let Some(key_col_idx) = parent_column_def.structure_key_parent_column_index {
-            // Get the parent table's metadata to find column name at this index
-            let parent_table_info: Vec<(i64, String, String)> = conn.prepare(&format!("PRAGMA table_info(\"{}\")", parent_table))
-                .and_then(|mut stmt| {
-                    stmt.query_map([], |row| {
-                        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
-                    })
-                    .and_then(|mapped_rows| mapped_rows.collect::<Result<Vec<_>, _>>())
-                })
-                .map_err(|e| format!("Failed to query parent table schema: {}", e))?;
-            
-            // Check if parent is also a structure table
-            let is_parent_structure = parent_table_info.iter()
-                .any(|(_, name, _)| name.eq_ignore_ascii_case("row_index") || name.eq_ignore_ascii_case("parent_key"));
-            
-            let db_column_offset = if is_parent_structure {
-                key_col_idx + 3
-            } else {
-                key_col_idx + 1
-            };
-            
-            parent_table_info.get(db_column_offset)
-                .map(|(_, name, _)| name.clone())
-                .ok_or_else(|| format!("Column index {} out of bounds in parent table '{}'", db_column_offset, parent_table))?
-        } else {
-            // Fallback: choose the first non-technical parent column (matches UI default)
+        // Validate that parent_key is numeric (row_index format)
+        if parent_key.parse::<i64>().is_err() {
             warn!(
-                "No structure_key_parent_column_index found for parent_key in sheet '{}' (batch), using first non-technical parent column as fallback",
-                sheet_name
+                "Parent_key '{}' is not numeric for structure table '{}' (batch). This may be pre-migration data.",
+                parent_key, sheet_name
             );
+        }
 
-            let parent_table_info: Vec<(i64, String, String)> = conn
-                .prepare(&format!("PRAGMA table_info(\"{}\")", parent_table))
-                .and_then(|mut stmt| {
-                    stmt.query_map([], |row| {
-                        Ok((
-                            row.get::<_, i64>(0)?,
-                            row.get::<_, String>(1)?,
-                            row.get::<_, String>(2)?,
-                        ))
-                    })
-                    .and_then(|mapped_rows| mapped_rows.collect::<Result<Vec<_>, _>>())
-                })
-                .map_err(|e| format!("Failed to query parent table schema: {}", e))?;
-
-            let mut first_text: Option<String> = None;
-            let mut first_any: Option<String> = None;
-            for (_cid, name, ty) in parent_table_info.iter() {
-                let lname = name.to_lowercase();
-                let is_technical = lname == "id"
-                    || lname == "parent_id"
-                    || lname == "row_index"
-                    || lname == "parent_key"
-                    || lname == "created_at"
-                    || lname == "updated_at"
-                    || (lname.starts_with("grand_") && lname.ends_with("_parent"));
-                if is_technical {
-                    continue;
-                }
-                if first_any.is_none() {
-                    first_any = Some(name.clone());
-                }
-                if ty.eq_ignore_ascii_case("TEXT") && first_text.is_none() {
-                    first_text = Some(name.clone());
-                }
-            }
-            first_text
-                .or(first_any)
-                .ok_or_else(|| format!("Cannot determine a non-technical key column in parent table '{}'", parent_table))?
-        };
-
-        // Lookup parent_id using the determined key column
-        let parent_id: i64 = conn.query_row(
-            &format!("SELECT id FROM \"{}\" WHERE \"{}\" = ? LIMIT 1", parent_table, key_column_name),
-            [&parent_key],
-            |row| row.get(0)
-        ).map_err(|e| {
-            format!("Cannot find parent row with key '{}' in table '{}' (searched column '{}'). Error: {}", 
-                parent_key, parent_table, key_column_name, e)
-        })?;
-
-        debug!("Batch insert: Found parent row: parent_key='{}' -> parent_id={} in table '{}'", parent_key, parent_id, parent_table);
-
-        // Build column names and batch data (structure tables do not have a parent_id column)
+        // Build column names and batch data
         let mut column_names: Vec<String> = Vec::new();
         let mut batch_rows: Vec<Vec<String>> = Vec::with_capacity(num_rows);
+        // Backward compatibility: detect parent_id presence once
+        let has_parent_id: bool = conn
+            .query_row(
+                &format!("SELECT COUNT(*) FROM pragma_table_info(\"{}\") WHERE name = 'parent_id'", sheet_name),
+                [],
+                |row| row.get::<_, i32>(0).map(|c| c > 0),
+            )
+            .unwrap_or(false);
+        let parent_table_opt = sheet_name.rsplit_once('_').map(|(p, _)| p.to_string());
         
         // Process each row in grid
         for row_idx in 0..num_rows {
@@ -390,6 +247,24 @@ pub(super) fn persist_rows_batch_to_db(
                     column_names.push("parent_key".to_string());
                 }
                 row_data.push(parent_key.clone());
+
+                // If parent_id exists, add it by resolving parent's id from row_index
+                if has_parent_id {
+                    if let Some(parent_table) = parent_table_opt.as_deref() {
+                        let parent_id: Option<i64> = conn
+                            .query_row(
+                                &format!("SELECT id FROM \"{}\" WHERE row_index = ?", parent_table),
+                                [parent_key.as_str()],
+                                |row| row.get(0),
+                            )
+                            .optional()
+                            .unwrap_or(None);
+                        if row_idx == 0 {
+                            column_names.push("parent_id".to_string());
+                        }
+                        row_data.push(parent_id.map(|v| v.to_string()).unwrap_or_default());
+                    }
+                }
                 
                 batch_rows.push(row_data);
             }

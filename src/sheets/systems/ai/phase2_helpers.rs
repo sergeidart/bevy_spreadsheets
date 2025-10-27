@@ -25,12 +25,105 @@ pub fn detect_duplicate_indices(
     let mut duplicate_indices = Vec::new();
     let (cat_ctx, sheet_ctx) = state.current_sheet_context();
 
-    // Build duplicate detection map
+    // Build duplicate detection map, restricting to the same parent when in a virtual structure view
     let mut first_col_value_to_row: HashMap<String, usize> = HashMap::new();
     if let Some(first_col_actual) = included.first() {
         if let Some(sheet_name) = &sheet_ctx {
             if let Some(sheet_ref) = registry.get_sheet(&cat_ctx, sheet_name) {
+                let child_meta = sheet_ref.metadata.as_ref();
+
+                // Resolve restriction to current parent row when in virtual structure view
+                let mut restrict_parent_value: Option<String> = None;
+                let mut parent_key_col_idx: Option<usize> = None;
+                // Also compute expected values for grand_N_parent columns to restrict by FULL ancestor chain
+                use std::collections::HashMap as _HashMap; // avoid name clash
+                let mut expected_grands: _HashMap<usize, String> = _HashMap::new();
+
+                if let Some(meta) = child_meta {
+                    // Find parent_key column index (case-insensitive), fallback to index 1 for structure tables
+                    parent_key_col_idx = meta
+                        .columns
+                        .iter()
+                        .position(|c| c.header.eq_ignore_ascii_case("parent_key"))
+                        .or_else(|| if meta.is_structure_table() { Some(1) } else { None });
+                }
+
+                if !state.virtual_structure_stack.is_empty() {
+                    // Build full ancestor chain of row_index values from the virtual structure stack
+                    let mut chain: Vec<String> = Vec::new();
+                    for vctx in &state.virtual_structure_stack {
+                        if let Some(parent_sheet) = registry.get_sheet(
+                            &vctx.parent.parent_category,
+                            &vctx.parent.parent_sheet,
+                        ) {
+                            if let Some(parent_row) = parent_sheet.grid.get(vctx.parent.parent_row) {
+                                if let Some(row_index_val) = parent_row.get(0) {
+                                    chain.push(row_index_val.clone());
+                                }
+                            }
+                        }
+                    }
+
+                    // The last element in chain is the immediate parent. Earlier elements are grands.
+                    if let Some(last_parent) = chain.last().cloned() {
+                        restrict_parent_value = Some(last_parent);
+                    }
+                    // Map grand_N_parent expected values: N=1 => chain[len-2], N=2 => chain[len-3], ...
+                    let clen = chain.len();
+                    for (i, _val) in chain.iter().enumerate() {
+                        // skip the last (parent); compute N for this ancestor position
+                        if i + 1 < clen {
+                            let n = clen - 1 - i; // when i = clen-2 => n=1, i=clen-3 => n=2
+                            if let Some(v) = chain.get(i) {
+                                expected_grands.insert(n, v.clone());
+                            }
+                        }
+                    }
+                }
+
                 for (row_idx, row) in sheet_ref.grid.iter().enumerate() {
+                    // If we can restrict by parent, skip rows that do not match the current parent_key
+                    if let (Some(pk_idx), Some(ref want_parent)) = (parent_key_col_idx, &restrict_parent_value) {
+                        if let Some(pk_val) = row.get(pk_idx) {
+                            if pk_val != want_parent {
+                                continue;
+                            }
+                        } else {
+                            continue;
+                        }
+                    }
+
+                    // If grand_N_parent restrictions exist, verify all present grand columns match
+                    if let Some(meta) = child_meta {
+                        let mut chain_mismatch = false;
+                        for (col_idx, col) in meta.columns.iter().enumerate() {
+                            if col.header.starts_with("grand_") && col.header.ends_with("_parent") {
+                                if let Some(n_str) = col
+                                    .header
+                                    .strip_prefix("grand_")
+                                    .and_then(|s| s.strip_suffix("_parent"))
+                                {
+                                    if let Ok(n) = n_str.parse::<usize>() {
+                                        if let Some(expected) = expected_grands.get(&n) {
+                                            if let Some(actual) = row.get(col_idx) {
+                                                if actual != expected {
+                                                    chain_mismatch = true;
+                                                    break;
+                                                }
+                                            } else {
+                                                chain_mismatch = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if chain_mismatch {
+                            continue;
+                        }
+                    }
+
                     if let Some(val) = row.get(*first_col_actual) {
                         let norm = normalize_cell_value(val);
                         if !norm.is_empty() {
@@ -163,11 +256,8 @@ pub fn trigger_phase2_deep_review(
             .requested_grounding_with_google_search
             .unwrap_or(false),
         allow_row_additions: false, // KEY: Phase 2 treats everything as existing
-        key_prefix_count: if key_prefix_count > 0 {
-            Some(key_prefix_count)
-        } else {
-            None
-        },
+        // Do not include key_prefix_* metadata in payload
+        key_prefix_count: None,
         key_prefix_headers: None,
         parent_groups: None,
         user_prompt: String::new(),

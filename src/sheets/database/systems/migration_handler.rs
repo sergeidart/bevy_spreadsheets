@@ -223,6 +223,15 @@ pub fn handle_migration_requests(
                 fix_manager.register_fix(Box::new(
                     super::super::migration::fix_row_index_duplicates::FixRowIndexDuplicates
                 ));
+                fix_manager.register_fix(Box::new(
+                    super::super::migration::parent_key_to_row_index::MigrateParentKeyToRowIndex
+                ));
+                fix_manager.register_fix(Box::new(
+                    super::super::migration::cleanup_temp_new_row_index::CleanupTempNewRowIndex
+                ));
+                fix_manager.register_fix(Box::new(
+                    super::super::migration::hide_temp_new_row_index_in_metadata::HideTempNewRowIndexInMetadata
+                ));
                 
                 match fix_manager.apply_all_fixes(&mut conn) {
                     Ok(applied) => {

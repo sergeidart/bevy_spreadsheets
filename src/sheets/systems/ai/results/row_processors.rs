@@ -89,19 +89,48 @@ pub fn process_new_rows(
     let included = &ev.included_non_structure_columns;
     let (cat_ctx, sheet_ctx) = state.current_sheet_context();
 
-    // Build duplicate detection map
-    // Choose a key column to detect duplicates that is NOT the technical parent_key (col 1)
-    // If all included columns are parent_key (unlikely), fall back to the first one.
-    let key_actual_col_opt = included
-        .iter()
-        .copied()
-        .find(|&c| c != 1)
-        .or_else(|| included.first().copied());
+    // Build duplicate detection map constrained to the same ancestor chain when in a structure sheet
+    // Choose a key column to detect duplicates that is NOT a technical column; fallback to first included
+    let key_actual_col_opt = included.iter().copied().find(|&c| c != 1).or_else(|| included.first().copied());
     let mut first_col_value_to_row: HashMap<String, usize> = HashMap::new();
     if let Some(first_col_actual) = key_actual_col_opt {
         if let Some(sheet_name) = &sheet_ctx {
             if let Some(sheet_ref) = registry.get_sheet(&cat_ctx, sheet_name) {
+                let meta_opt = sheet_ref.metadata.as_ref();
+                // Detect structure context via navigation stack and match only rows that share the same ancestors
+                let nav_ctx_opt = state.structure_navigation_stack.last();
+                let (parent_key_col, grand_cols): (Option<usize>, Vec<usize>) = if let Some(meta) = meta_opt {
+                    let pk = meta.columns.iter().position(|c| c.header.eq_ignore_ascii_case("parent_key"));
+                    let gcols = meta
+                        .columns
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, c)| c.header.starts_with("grand_") && c.header.ends_with("_parent"))
+                        .map(|(i, _)| i)
+                        .collect();
+                    (pk, gcols)
+                } else { (None, Vec::new()) };
+
                 for (row_idx, row) in sheet_ref.grid.iter().enumerate() {
+                    // Apply ancestor chain constraint when inside structure nav for this sheet
+                    if let Some(nav_ctx) = nav_ctx_opt {
+                        if &nav_ctx.structure_sheet_name == sheet_name && nav_ctx.parent_category == cat_ctx {
+                            // Parent_key must match
+                            if let Some(pk_idx) = parent_key_col {
+                                let v = row.get(pk_idx).cloned().unwrap_or_default();
+                                if v != nav_ctx.parent_row_key { continue; }
+                            }
+                            // Each grand_* must match in order deepest..shallowest
+                            let mut aidx = 0usize;
+                            for &gcol in &grand_cols {
+                                if let Some(expected) = nav_ctx.ancestor_keys.get(aidx) {
+                                    let gv = row.get(gcol).cloned().unwrap_or_default();
+                                    if &gv != expected { continue; }
+                                    aidx += 1;
+                                }
+                            }
+                        }
+                    }
                     if let Some(val) = row.get(first_col_actual) {
                         let norm = normalize_cell_value(val);
                         if !norm.is_empty() {
@@ -129,16 +158,15 @@ pub fn process_new_rows(
 
         let ai_snapshot = extract_ai_snapshot_from_new_row(new_row, included);
 
-        let (duplicate_match_row, choices, original_for_merge, merge_selected) =
-            check_for_duplicate(
-                &ai_snapshot,
-                &first_col_value_to_row,
-                included,
-                key_actual_col_opt,
-                &cat_ctx,
-                &sheet_ctx,
-                registry,
-            );
+        let (duplicate_match_row, choices, original_for_merge, merge_selected) = check_for_duplicate(
+            &ai_snapshot,
+            &first_col_value_to_row,
+            included,
+            key_actual_col_opt,
+            &cat_ctx,
+            &sheet_ctx,
+            registry,
+        );
 
         let new_row_idx = state.ai_new_row_reviews.len();
         state.ai_new_row_reviews.push(NewRowReview {
