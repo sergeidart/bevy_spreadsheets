@@ -64,12 +64,21 @@ pub fn render_ai_suggested_row(
             row.col(|ui| {
                 if let Some(nr) = ctx.state.ai_new_row_reviews.get_mut(data_idx) {
                     if *merge_decided {
-                        let label = if *merge_selected {
-                            RichText::new("Merge Selected").color(Color32::from_rgb(180, 160, 40))
-                        } else {
-                            RichText::new("Separate").color(Color32::from_rgb(150, 150, 150))
-                        };
-                        ui.small(label);
+                        // After decision: show Decline/Cancel like regular rows
+                        ui.vertical(|ui| {
+                            let mut decline_btn = ui.add_enabled(
+                                !*has_undecided_structures,
+                                egui::Button::new("Decline"),
+                            );
+                            if *has_undecided_structures {
+                                decline_btn = decline_btn
+                                    .on_disabled_hover_text("Review structure decisions first");
+                            }
+                            if decline_btn.clicked() {
+                                // Cancel the decision - go back to Merge/Separate choice
+                                nr.merge_decided = false;
+                            }
+                        });
                     } else {
                         ui.vertical(|ui| {
                             if *has_undecided_structures {

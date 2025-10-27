@@ -12,6 +12,8 @@ use super::row_helpers::{
     create_row_snapshots, extract_ai_snapshot_from_new_row, generate_review_choices,
     normalize_cell_value, skip_key_prefix,
 };
+use super::column_helpers::calculate_dynamic_prefix;
+use super::duplicate_map_helpers::build_composite_duplicate_map_for_parents;
 use super::structure_jobs::enqueue_structure_jobs_for_batch;
 
 /// Detect which new rows are duplicates of existing rows (by first column)
@@ -42,9 +44,7 @@ pub fn detect_duplicate_indices(
     // Check each new row using a row-specific parent chain derived from inbound prefix values
     for (new_idx, new_row_full) in extra_slice.iter().enumerate() {
         // Infer per-row prefix count based on inbound row length
-        let dynamic_prefix = new_row_full
-            .len()
-            .saturating_sub(included.len());
+        let dynamic_prefix = calculate_dynamic_prefix(new_row_full.len(), included.len());
         let parent_prefix_values: Vec<String> = new_row_full
             .iter()
             .take(dynamic_prefix)
@@ -59,7 +59,8 @@ pub fn detect_duplicate_indices(
         let ai_snapshot = extract_ai_snapshot_from_new_row(new_row, included);
 
         // Build a composite duplicate map for this row's parent chain
-        let composite_map = super::results::build_composite_duplicate_map_for_parents(
+        // This map will use the same key format as we build below (without parent row indices in the key)
+        let composite_map = build_composite_duplicate_map_for_parents(
             &parent_prefix_values,
             included,
             &cat_ctx,
@@ -68,12 +69,29 @@ pub fn detect_duplicate_indices(
             state,
         );
 
-        // Build composite key from the AI snapshot (normalize and join)
-        let ai_composite = ai_snapshot
-            .iter()
-            .map(|s| super::row_helpers::normalize_cell_value(s))
-            .collect::<Vec<_>>()
-            .join("||");
+        if new_idx == 0 {
+            info!("Composite map for parent {:?}: {:?}", parent_prefix_values, composite_map);
+        }
+
+        // Build composite key from AI values: just the data columns (normalized)
+        // Note: parent filtering is done by the map builder, not by adding parent indices to the key
+        let mut ai_composite_parts: Vec<String> = Vec::with_capacity(ai_snapshot.len());
+
+        // Add AI data column values to the key (normalized)
+        for ai_val in &ai_snapshot {
+            ai_composite_parts.push(normalize_cell_value(ai_val));
+        }
+
+        let ai_composite = ai_composite_parts.join("||");
+
+        info!(
+            "Row {}: parent_prefix={:?}, ai_snapshot={:?}, ai_composite='{}', in_map={}",
+            new_idx,
+            parent_prefix_values,
+            ai_snapshot,
+            ai_composite,
+            composite_map.contains_key(&ai_composite)
+        );
 
         if composite_map.contains_key(&ai_composite) {
             duplicate_indices.push(new_idx);
@@ -351,9 +369,12 @@ fn process_original_rows_from_phase2(
         // Use actual original row index from Phase 1
         let row_index = phase1.original_row_indices.get(i).copied().unwrap_or(i);
         // Infer prefix count from inbound row: total_len - included_len
-        let dynamic_prefix = suggestion_full
-            .len()
-            .saturating_sub(included.len());
+        let dynamic_prefix = calculate_dynamic_prefix(suggestion_full.len(), included.len());
+        let parent_prefix_values: Vec<String> = suggestion_full
+            .iter()
+            .take(dynamic_prefix)
+            .cloned()
+            .collect();
         let suggestion = skip_key_prefix(suggestion_full, dynamic_prefix);
 
         if suggestion.len() < included.len() {
@@ -374,7 +395,7 @@ fn process_original_rows_from_phase2(
             choices,
             non_structure_columns: included.clone(),
             key_overrides: std::collections::HashMap::new(),
-            ancestor_key_values: Vec::new(),
+            ancestor_key_values: parent_prefix_values.clone(),
             ancestor_dropdown_cache: std::collections::HashMap::new(),
         });
 
@@ -417,9 +438,12 @@ fn process_duplicate_rows_from_phase2(
     }
 
     for suggestion_full in dup_slice.iter() {
-        let dynamic_prefix = suggestion_full
-            .len()
-            .saturating_sub(included.len());
+        let dynamic_prefix = calculate_dynamic_prefix(suggestion_full.len(), included.len());
+        let parent_prefix_values: Vec<String> = suggestion_full
+            .iter()
+            .take(dynamic_prefix)
+            .cloned()
+            .collect();
         let suggestion = skip_key_prefix(suggestion_full, dynamic_prefix);
 
         if suggestion.len() < included.len() {
@@ -453,7 +477,7 @@ fn process_duplicate_rows_from_phase2(
             merge_decided: false,
             original_for_merge: original_for_merge.clone(),
             key_overrides: std::collections::HashMap::new(),
-            ancestor_key_values: Vec::new(),
+            ancestor_key_values: parent_prefix_values.clone(),
             ancestor_dropdown_cache: std::collections::HashMap::new(),
         });
 
@@ -484,9 +508,12 @@ fn process_new_rows_from_phase2(
     let sheet_ctx = &phase1.sheet_name;
 
     for suggestion_full in new_slice.iter() {
-        let dynamic_prefix = suggestion_full
-            .len()
-            .saturating_sub(included.len());
+        let dynamic_prefix = calculate_dynamic_prefix(suggestion_full.len(), included.len());
+        let parent_prefix_values: Vec<String> = suggestion_full
+            .iter()
+            .take(dynamic_prefix)
+            .cloned()
+            .collect();
         let suggestion = skip_key_prefix(suggestion_full, dynamic_prefix);
 
         if suggestion.len() < included.len() {
@@ -504,7 +531,7 @@ fn process_new_rows_from_phase2(
             merge_decided: false,
             original_for_merge: None,
             key_overrides: std::collections::HashMap::new(),
-            ancestor_key_values: Vec::new(),
+            ancestor_key_values: parent_prefix_values.clone(),
             ancestor_dropdown_cache: std::collections::HashMap::new(),
         });
 

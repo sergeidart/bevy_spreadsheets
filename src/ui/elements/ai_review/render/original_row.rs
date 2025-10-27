@@ -66,15 +66,18 @@ pub fn render_original_preview_row(
             row.col(|ui| {
                 if let Some(nr) = ctx.state.ai_new_row_reviews.get_mut(data_idx) {
                     if *merge_decided {
+                        // After decision: show Accept/Cancel like regular rows
                         ui.vertical(|ui| {
-                            if *merge_selected {
-                                ui.label(RichText::new("Merge selected").strong());
-                            } else {
-                                ui.label(RichText::new("Separate selected").strong());
+                            let mut accept_response = ui.add_enabled(
+                                !*has_undecided_structures,
+                                egui::Button::new("Accept"),
+                            );
+                            if *has_undecided_structures {
+                                accept_response = accept_response
+                                    .on_disabled_hover_text("Review structure decisions first");
                             }
-
-                            if ui.button("Change decision").clicked() {
-                                nr.merge_decided = false;
+                            if accept_response.clicked() {
+                                ctx.new_accept.push(data_idx);
                             }
                         });
                     } else {

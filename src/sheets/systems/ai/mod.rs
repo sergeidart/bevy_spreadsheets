@@ -6,6 +6,9 @@ pub mod legacy;
 pub mod results; // Batch result handlers (split into submodules)
 
 // Helper modules
+pub mod column_helpers; // Column extraction utilities (linked columns, dynamic prefix)
+pub mod duplicate_map_helpers; // Duplicate detection map building (parent chain aware)
+pub mod parent_chain_helpers; // Parent chain filtering and row matching
 pub mod phase2_helpers;
 pub mod row_helpers; // Row processing utilities (snapshots, choices, normalization)
 pub mod structure_jobs; // Structure job enqueueing logic
