@@ -156,6 +156,9 @@ pub struct RowReview {
     pub key_overrides: std::collections::HashMap<usize, bool>,
     /// Editable ancestor key values (indexed by ancestor key position)
     pub ancestor_key_values: Vec<String>,
+    /// Cached dropdown options for each ancestor level
+    /// Key: ancestor index, Value: (cached_ancestors_snapshot, options)
+    pub ancestor_dropdown_cache: HashMap<usize, (Vec<String>, Vec<String>)>,
 }
 
 #[derive(Debug, Clone)]
@@ -172,6 +175,9 @@ pub struct NewRowReview {
     pub key_overrides: std::collections::HashMap<usize, bool>,
     /// Editable ancestor key values (indexed by ancestor key position)
     pub ancestor_key_values: Vec<String>,
+    /// Cached dropdown options for each ancestor level
+    /// Key: ancestor index, Value: (cached_ancestors_snapshot, options)
+    pub ancestor_dropdown_cache: HashMap<usize, (Vec<String>, Vec<String>)>,
 }
 
 #[derive(Debug, Clone)]

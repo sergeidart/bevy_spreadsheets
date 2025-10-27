@@ -140,6 +140,94 @@ pub fn render_ai_choice_toggle(
     }
 }
 
+/// Render ancestor key dropdown with textbox+popup pattern (like linked columns)
+pub fn render_ancestor_dropdown(
+    ui: &mut egui::Ui,
+    value: &mut String,
+    allowed_values: &[String],
+    cell_id: egui::Id,
+) -> bool {
+    // Validation check
+    let is_valid = allowed_values.is_empty()
+        || allowed_values
+            .iter()
+            .any(|v| normalize_for_link_cmp(v) == normalize_for_link_cmp(value));
+
+    let bg_color = if !is_valid && !value.is_empty() {
+        Some(Color32::from_rgb(100, 40, 40))
+    } else {
+        None
+    };
+
+    // Text edit with styling
+    let text_edit_id = cell_id.with("text");
+    let popup_id = cell_id.with("popup");
+
+    let resp = ui.add(
+        egui::TextEdit::singleline(value)
+            .id(text_edit_id)
+            .desired_width(140.0),
+    );
+
+    // Paint background for invalid values
+    if let Some(color) = bg_color {
+        ui.painter()
+            .rect_filled(resp.rect, 2.0, color.linear_multiply(0.3));
+    }
+
+    let mut changed = resp.changed();
+
+    // Open popup on focus
+    if resp.gained_focus() {
+        ui.memory_mut(|mem| mem.open_popup(popup_id));
+    }
+
+    // Popup with suggestions
+    egui::popup_below_widget(
+        ui,
+        popup_id,
+        &resp,
+        egui::popup::PopupCloseBehavior::CloseOnClickOutside,
+        |popup_ui| {
+            popup_ui.set_min_width(resp.rect.width().max(200.0));
+            egui::ScrollArea::vertical()
+                .max_height(200.0)
+                .auto_shrink([false; 2])
+                .show(popup_ui, |scroll_ui| {
+                    let current_norm = normalize_for_link_cmp(value);
+                    let mut suggestions: Vec<&String> = allowed_values
+                        .iter()
+                        .filter(|v| normalize_for_link_cmp(v).contains(&current_norm))
+                        .collect();
+                    suggestions.sort_unstable_by(|a, b| {
+                        normalize_for_link_cmp(a).cmp(&normalize_for_link_cmp(b))
+                    });
+
+                    if suggestions.is_empty() && !allowed_values.is_empty() {
+                        scroll_ui.label("(No matching options)");
+                    } else if allowed_values.is_empty() {
+                        scroll_ui.label("(No options available)");
+                    } else {
+                        for suggestion in suggestions.into_iter().take(50) {
+                            let is_selected = normalize_for_link_cmp(value)
+                                == normalize_for_link_cmp(suggestion);
+                            if scroll_ui
+                                .selectable_label(is_selected, suggestion)
+                                .clicked()
+                            {
+                                *value = suggestion.clone();
+                                changed = true;
+                                scroll_ui.memory_mut(|mem| mem.close_popup());
+                            }
+                        }
+                    }
+                });
+        },
+    );
+
+    changed
+}
+
 /// Render AI cell with linked column dropdown support
 pub fn render_review_ai_cell_linked(
     ui: &mut egui::Ui,

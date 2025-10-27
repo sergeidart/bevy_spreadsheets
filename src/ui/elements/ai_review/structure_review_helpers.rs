@@ -55,6 +55,7 @@ pub fn convert_structure_to_reviews(
             choices,
             key_overrides: std::collections::HashMap::new(),
             ancestor_key_values: Vec::new(),
+            ancestor_dropdown_cache: std::collections::HashMap::new(),
         });
     }
 
@@ -114,6 +115,7 @@ pub fn convert_structure_to_reviews(
             merge_decided: false,
             key_overrides: std::collections::HashMap::new(),
             ancestor_key_values: Vec::new(),
+            ancestor_dropdown_cache: std::collections::HashMap::new(),
         });
     }
 

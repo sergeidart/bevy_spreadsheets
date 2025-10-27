@@ -41,7 +41,7 @@ pub fn render_ai_suggested_row(
                     }
                 });
             });
-            ctx.render_ancestor_keys_with_override(row, kind, data_idx);
+            ctx.render_ancestor_keys_for_ai_row(row, kind, data_idx);
             render_ai_suggested_columns(row, kind, data_idx, columns, ctx, None);
         }
         AiSuggestedPlan::NewPlain { columns } => {
@@ -52,7 +52,7 @@ pub fn render_ai_suggested_row(
                     }
                 });
             });
-            ctx.render_ancestor_keys_with_override(row, kind, data_idx);
+            ctx.render_ancestor_keys_for_ai_row(row, kind, data_idx);
             render_ai_suggested_columns(row, kind, data_idx, columns, ctx, None);
         }
         AiSuggestedPlan::NewDuplicate {
@@ -96,7 +96,7 @@ pub fn render_ai_suggested_row(
                     ui.label("—");
                 }
             });
-            ctx.render_ancestor_keys_with_override(row, kind, data_idx);
+            ctx.render_ancestor_keys_for_ai_row(row, kind, data_idx);
             render_ai_suggested_columns(
                 row,
                 kind,

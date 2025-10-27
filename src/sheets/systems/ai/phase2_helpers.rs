@@ -18,126 +18,39 @@ use super::structure_jobs::enqueue_structure_jobs_for_batch;
 pub fn detect_duplicate_indices(
     extra_slice: &[Vec<String>],
     included: &[usize],
-    key_prefix_count: usize,
+    _key_prefix_count: usize,
     state: &EditorWindowState,
     registry: &SheetRegistry,
 ) -> Vec<usize> {
     let mut duplicate_indices = Vec::new();
     let (cat_ctx, sheet_ctx) = state.current_sheet_context();
 
-    // Build duplicate detection map, restricting to the same parent when in a virtual structure view
-    let mut first_col_value_to_row: HashMap<String, usize> = HashMap::new();
-    if let Some(first_col_actual) = included.first() {
-        if let Some(sheet_name) = &sheet_ctx {
-            if let Some(sheet_ref) = registry.get_sheet(&cat_ctx, sheet_name) {
-                let child_meta = sheet_ref.metadata.as_ref();
+    info!(
+        "detect_duplicate_indices: extra_slice.len()={}, included={:?}, sheet_ctx={:?}",
+        extra_slice.len(),
+        included,
+        sheet_ctx
+    );
 
-                // Resolve restriction to current parent row when in virtual structure view
-                let mut restrict_parent_value: Option<String> = None;
-                let mut parent_key_col_idx: Option<usize> = None;
-                // Also compute expected values for grand_N_parent columns to restrict by FULL ancestor chain
-                use std::collections::HashMap as _HashMap; // avoid name clash
-                let mut expected_grands: _HashMap<usize, String> = _HashMap::new();
+    // Choose a key column that isn't the technical parent_key (1)
+    let key_actual_col_opt = included
+        .iter()
+        .copied()
+        .find(|&c| c != 1)
+        .or_else(|| included.first().copied());
 
-                if let Some(meta) = child_meta {
-                    // Find parent_key column index (case-insensitive), fallback to index 1 for structure tables
-                    parent_key_col_idx = meta
-                        .columns
-                        .iter()
-                        .position(|c| c.header.eq_ignore_ascii_case("parent_key"))
-                        .or_else(|| if meta.is_structure_table() { Some(1) } else { None });
-                }
-
-                if !state.virtual_structure_stack.is_empty() {
-                    // Build full ancestor chain of row_index values from the virtual structure stack
-                    let mut chain: Vec<String> = Vec::new();
-                    for vctx in &state.virtual_structure_stack {
-                        if let Some(parent_sheet) = registry.get_sheet(
-                            &vctx.parent.parent_category,
-                            &vctx.parent.parent_sheet,
-                        ) {
-                            if let Some(parent_row) = parent_sheet.grid.get(vctx.parent.parent_row) {
-                                if let Some(row_index_val) = parent_row.get(0) {
-                                    chain.push(row_index_val.clone());
-                                }
-                            }
-                        }
-                    }
-
-                    // The last element in chain is the immediate parent. Earlier elements are grands.
-                    if let Some(last_parent) = chain.last().cloned() {
-                        restrict_parent_value = Some(last_parent);
-                    }
-                    // Map grand_N_parent expected values: N=1 => chain[len-2], N=2 => chain[len-3], ...
-                    let clen = chain.len();
-                    for (i, _val) in chain.iter().enumerate() {
-                        // skip the last (parent); compute N for this ancestor position
-                        if i + 1 < clen {
-                            let n = clen - 1 - i; // when i = clen-2 => n=1, i=clen-3 => n=2
-                            if let Some(v) = chain.get(i) {
-                                expected_grands.insert(n, v.clone());
-                            }
-                        }
-                    }
-                }
-
-                for (row_idx, row) in sheet_ref.grid.iter().enumerate() {
-                    // If we can restrict by parent, skip rows that do not match the current parent_key
-                    if let (Some(pk_idx), Some(ref want_parent)) = (parent_key_col_idx, &restrict_parent_value) {
-                        if let Some(pk_val) = row.get(pk_idx) {
-                            if pk_val != want_parent {
-                                continue;
-                            }
-                        } else {
-                            continue;
-                        }
-                    }
-
-                    // If grand_N_parent restrictions exist, verify all present grand columns match
-                    if let Some(meta) = child_meta {
-                        let mut chain_mismatch = false;
-                        for (col_idx, col) in meta.columns.iter().enumerate() {
-                            if col.header.starts_with("grand_") && col.header.ends_with("_parent") {
-                                if let Some(n_str) = col
-                                    .header
-                                    .strip_prefix("grand_")
-                                    .and_then(|s| s.strip_suffix("_parent"))
-                                {
-                                    if let Ok(n) = n_str.parse::<usize>() {
-                                        if let Some(expected) = expected_grands.get(&n) {
-                                            if let Some(actual) = row.get(col_idx) {
-                                                if actual != expected {
-                                                    chain_mismatch = true;
-                                                    break;
-                                                }
-                                            } else {
-                                                chain_mismatch = true;
-                                                break;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        if chain_mismatch {
-                            continue;
-                        }
-                    }
-
-                    if let Some(val) = row.get(*first_col_actual) {
-                        let norm = normalize_cell_value(val);
-                        if !norm.is_empty() {
-                            first_col_value_to_row.entry(norm).or_insert(row_idx);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Check each new row
+    // Check each new row using a row-specific parent chain derived from inbound prefix values
     for (new_idx, new_row_full) in extra_slice.iter().enumerate() {
-        let new_row = skip_key_prefix(new_row_full, key_prefix_count);
+        // Infer per-row prefix count based on inbound row length
+        let dynamic_prefix = new_row_full
+            .len()
+            .saturating_sub(included.len());
+        let parent_prefix_values: Vec<String> = new_row_full
+            .iter()
+            .take(dynamic_prefix)
+            .cloned()
+            .collect();
+        let new_row = skip_key_prefix(new_row_full, dynamic_prefix);
 
         if new_row.len() < included.len() {
             continue;
@@ -145,14 +58,29 @@ pub fn detect_duplicate_indices(
 
         let ai_snapshot = extract_ai_snapshot_from_new_row(new_row, included);
 
-        if let Some(first_val) = ai_snapshot.get(0) {
-            let normalized_first = normalize_cell_value(first_val);
-            if first_col_value_to_row.contains_key(&normalized_first) {
-                duplicate_indices.push(new_idx);
-            }
+        // Build a composite duplicate map for this row's parent chain
+        let composite_map = super::results::build_composite_duplicate_map_for_parents(
+            &parent_prefix_values,
+            included,
+            &cat_ctx,
+            &sheet_ctx,
+            registry,
+            state,
+        );
+
+        // Build composite key from the AI snapshot (normalize and join)
+        let ai_composite = ai_snapshot
+            .iter()
+            .map(|s| super::row_helpers::normalize_cell_value(s))
+            .collect::<Vec<_>>()
+            .join("||");
+
+        if composite_map.contains_key(&ai_composite) {
+            duplicate_indices.push(new_idx);
         }
     }
 
+    info!("Final duplicate_indices={:?}", duplicate_indices);
     duplicate_indices
 }
 
@@ -422,7 +350,11 @@ fn process_original_rows_from_phase2(
     for (i, suggestion_full) in orig_slice.iter().enumerate() {
         // Use actual original row index from Phase 1
         let row_index = phase1.original_row_indices.get(i).copied().unwrap_or(i);
-        let suggestion = skip_key_prefix(suggestion_full, phase1.key_prefix_count);
+        // Infer prefix count from inbound row: total_len - included_len
+        let dynamic_prefix = suggestion_full
+            .len()
+            .saturating_sub(included.len());
+        let suggestion = skip_key_prefix(suggestion_full, dynamic_prefix);
 
         if suggestion.len() < included.len() {
             warn!("Skipping malformed original row suggestion");
@@ -443,6 +375,7 @@ fn process_original_rows_from_phase2(
             non_structure_columns: included.clone(),
             key_overrides: std::collections::HashMap::new(),
             ancestor_key_values: Vec::new(),
+            ancestor_dropdown_cache: std::collections::HashMap::new(),
         });
 
         // Cache original row
@@ -484,7 +417,10 @@ fn process_duplicate_rows_from_phase2(
     }
 
     for suggestion_full in dup_slice.iter() {
-        let suggestion = skip_key_prefix(suggestion_full, phase1.key_prefix_count);
+        let dynamic_prefix = suggestion_full
+            .len()
+            .saturating_sub(included.len());
+        let suggestion = skip_key_prefix(suggestion_full, dynamic_prefix);
 
         if suggestion.len() < included.len() {
             continue;
@@ -518,6 +454,7 @@ fn process_duplicate_rows_from_phase2(
             original_for_merge: original_for_merge.clone(),
             key_overrides: std::collections::HashMap::new(),
             ancestor_key_values: Vec::new(),
+            ancestor_dropdown_cache: std::collections::HashMap::new(),
         });
 
         // FIX: Cache original for duplicate using the new_row_index
@@ -547,7 +484,10 @@ fn process_new_rows_from_phase2(
     let sheet_ctx = &phase1.sheet_name;
 
     for suggestion_full in new_slice.iter() {
-        let suggestion = skip_key_prefix(suggestion_full, phase1.key_prefix_count);
+        let dynamic_prefix = suggestion_full
+            .len()
+            .saturating_sub(included.len());
+        let suggestion = skip_key_prefix(suggestion_full, dynamic_prefix);
 
         if suggestion.len() < included.len() {
             continue;
@@ -565,6 +505,7 @@ fn process_new_rows_from_phase2(
             original_for_merge: None,
             key_overrides: std::collections::HashMap::new(),
             ancestor_key_values: Vec::new(),
+            ancestor_dropdown_cache: std::collections::HashMap::new(),
         });
 
         // Cache empty original for new rows

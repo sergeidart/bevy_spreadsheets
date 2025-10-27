@@ -86,6 +86,7 @@ pub fn handle_ai_task_results(
                     non_structure_columns: included,
                     key_overrides: std::collections::HashMap::new(),
                     ancestor_key_values: Vec::new(),
+                    ancestor_dropdown_cache: std::collections::HashMap::new(),
                 });
                 state.ai_batch_review_active = true;
             }

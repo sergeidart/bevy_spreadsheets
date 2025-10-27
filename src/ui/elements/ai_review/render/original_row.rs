@@ -34,7 +34,7 @@ pub fn render_original_preview_row(
                     }
                 });
             });
-            ctx.render_ancestor_keys_with_override(row, kind, data_idx);
+            ctx.render_ancestor_keys_for_original_row(row, kind, data_idx);
             render_original_preview_columns(row, kind, data_idx, columns, ctx);
         }
         OriginalPreviewPlan::NewPlain {
@@ -53,7 +53,7 @@ pub fn render_original_preview_row(
                     }
                 });
             });
-            ctx.render_ancestor_keys_with_override(row, kind, data_idx);
+            ctx.render_ancestor_keys_for_original_row(row, kind, data_idx);
             render_original_preview_columns(row, kind, data_idx, columns, ctx);
         }
         OriginalPreviewPlan::NewDuplicate {
@@ -99,7 +99,7 @@ pub fn render_original_preview_row(
                     ui.label("—");
                 }
             });
-            ctx.render_ancestor_keys_with_override(row, kind, data_idx);
+            ctx.render_ancestor_keys_for_original_row(row, kind, data_idx);
             render_original_preview_columns(row, kind, data_idx, columns, ctx);
         }
     }
