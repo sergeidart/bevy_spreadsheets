@@ -37,3 +37,5 @@ opt-level = 3
 
 [build-dependencies]
 embed-resource = "3.0.2"
+ico = "0.3"
+image = { version = "0.25.6", default-features = false, features = ["png"] }
