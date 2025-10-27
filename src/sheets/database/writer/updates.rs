@@ -48,27 +48,57 @@ pub fn update_column_indices(
     ordered_pairs: &[(String, i32)],
 ) -> DbResult<()> {
     let meta_table = format!("{}_Metadata", table_name);
+
+    bevy::log::info!(
+        "update_column_indices: Starting update for table '{}' with {} pairs",
+        table_name, ordered_pairs.len()
+    );
+
     let tx = conn.unchecked_transaction()?;
-    // Phase 1: Shift all indices by a large offset to avoid UNIQUE collisions during remap
-    tx.execute(
+
+    // Phase 0: Move deleted columns to negative indices to get them out of the way
+    bevy::log::debug!("Phase 0: Moving deleted columns to negative indices");
+    let deleted_moved = tx.execute(
         &format!(
-            "UPDATE \"{}\" SET column_index = column_index + 10000",
+            "UPDATE \"{}\" SET column_index = -(column_index + 1) WHERE deleted = 1",
             meta_table
         ),
         [],
     )?;
+    bevy::log::debug!("Phase 0: Moved {} deleted columns", deleted_moved);
+
+    // Phase 1: Shift all non-deleted indices by a large offset to avoid UNIQUE collisions during remap
+    bevy::log::debug!("Phase 1: Shifting all non-deleted column_index values by +10000");
+    let shifted = tx.execute(
+        &format!(
+            "UPDATE \"{}\" SET column_index = column_index + 10000 WHERE (deleted IS NULL OR deleted = 0)",
+            meta_table
+        ),
+        [],
+    )?;
+    bevy::log::debug!("Phase 1: Shifted {} rows", shifted);
 
     // Phase 2: Apply final indices
+    bevy::log::debug!("Phase 2: Applying final column indices");
     {
         let mut stmt = tx.prepare(&format!(
             "UPDATE \"{}\" SET column_index = ? WHERE column_name = ?",
             meta_table
         ))?;
         for (name, idx) in ordered_pairs {
-            stmt.execute(params![idx, name])?;
+            bevy::log::trace!("Setting column '{}' to index {}", name, idx);
+            let updated = stmt.execute(params![idx, name])?;
+            if updated == 0 {
+                bevy::log::warn!(
+                    "Column '{}' not found in metadata table '{}' during reorder",
+                    name, meta_table
+                );
+            }
         }
     }
 
+    bevy::log::debug!("Committing transaction");
     tx.commit()?;
+    bevy::log::info!("update_column_indices: Successfully updated column order for '{}'", table_name);
     Ok(())
 }

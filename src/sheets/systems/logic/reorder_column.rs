@@ -85,42 +85,78 @@ pub fn handle_reorder_column_request(
                         let base = crate::sheets::systems::io::get_default_data_base_path();
                         let db_path = base.join(format!("{}.db", cat));
                         if db_path.exists() {
-                            if let Ok(conn) = rusqlite::Connection::open(&db_path) {
-                                // Determine if this is a structure table
-                                let table_type: Option<String> = conn
-                                    .query_row(
-                                        "SELECT table_type FROM _Metadata WHERE table_name = ?",
-                                        [sheet_name.as_str()],
-                                        |row| row.get(0),
-                                    )
-                                    .ok();
-                                
-                                let is_structure = matches!(table_type.as_deref(), Some("structure"));
-                                
-                                // Calculate how many technical columns to skip
-                                let tech_cols_count = if is_structure { 2 } else { 1 };
-                                
-                                // Build ordered pairs (column_name, persisted_index) 
-                                // Skip technical columns (row_index for regular, row_index+parent_key for structure)
-                                let mut pairs: Vec<(String, i32)> = Vec::new();
-                                for (runtime_idx, c) in metadata.columns.iter().enumerate() {
-                                    // Skip technical columns
-                                    if runtime_idx < tech_cols_count {
-                                        continue;
+                            match rusqlite::Connection::open(&db_path) {
+                                Ok(conn) => {
+                                    // Determine if this is a structure table
+                                    let table_type: Option<String> = conn
+                                        .query_row(
+                                            "SELECT table_type FROM _Metadata WHERE table_name = ?",
+                                            [sheet_name.as_str()],
+                                            |row| row.get(0),
+                                        )
+                                        .ok();
+
+                                    let is_structure = matches!(table_type.as_deref(), Some("structure"));
+
+                                    // Calculate how many technical columns to skip
+                                    let tech_cols_count = if is_structure { 2 } else { 1 };
+
+                                    // Build ordered pairs (column_name, persisted_index)
+                                    // Skip technical columns (row_index for regular, row_index+parent_key for structure)
+                                    let mut pairs: Vec<(String, i32)> = Vec::new();
+                                    for (runtime_idx, c) in metadata.columns.iter().enumerate() {
+                                        // Skip technical columns
+                                        if runtime_idx < tech_cols_count {
+                                            continue;
+                                        }
+                                        // Convert runtime index to persisted index
+                                        let persisted_idx = runtime_idx - tech_cols_count;
+                                        pairs.push((c.header.clone(), persisted_idx as i32));
                                     }
-                                    // Convert runtime index to persisted index
-                                    let persisted_idx = runtime_idx - tech_cols_count;
-                                    pairs.push((c.header.clone(), persisted_idx as i32));
+
+                                    if !pairs.is_empty() {
+                                        info!(
+                                            "Updating column indices in database for '{:?}/{}': {} columns",
+                                            cat, sheet_name, pairs.len()
+                                        );
+                                        for (idx, (col_name, col_idx)) in pairs.iter().enumerate() {
+                                            trace!(
+                                                "  Column {}: '{}' -> index {}",
+                                                idx, col_name, col_idx
+                                            );
+                                        }
+                                        match crate::sheets::database::writer::DbWriter::update_column_indices(
+                                            &conn,
+                                            sheet_name,
+                                            &pairs,
+                                        ) {
+                                            Ok(_) => {
+                                                info!(
+                                                    "Successfully persisted column order to database for '{:?}/{}'",
+                                                    cat, sheet_name
+                                                );
+                                            }
+                                            Err(e) => {
+                                                error!(
+                                                    "Failed to persist column order to database for '{:?}/{}': {}",
+                                                    cat, sheet_name, e
+                                                );
+                                            }
+                                        }
+                                    }
                                 }
-                                
-                                if !pairs.is_empty() {
-                                    let _ = crate::sheets::database::writer::DbWriter::update_column_indices(
-                                        &conn,
-                                        sheet_name,
-                                        &pairs,
+                                Err(e) => {
+                                    error!(
+                                        "Failed to open database for persisting column order '{:?}': {}",
+                                        db_path, e
                                     );
                                 }
                             }
+                        } else {
+                            warn!(
+                                "Database file not found for persisting column order: {:?}",
+                                db_path
+                            );
                         }
                     }
                 } else {
@@ -170,11 +206,14 @@ pub fn handle_reorder_column_request(
         }
     }
 
+    // Note: For DB-backed sheets, column order is persisted directly to the database
+    // during the reorder operation above (via update_column_indices).
+    // For JSON-backed sheets, we save the metadata file here.
     if !sheets_to_save.is_empty() {
         let registry_immut = registry.as_ref();
         for ((cat, name), metadata) in sheets_to_save {
-            info!("Column reordered in '{:?}/{}', triggering save.", cat, name);
             if metadata.category.is_none() {
+                info!("Column reordered in '{:?}/{}', saving JSON metadata.", cat, name);
                 save_single_sheet(registry_immut, &metadata);
             }
         }
