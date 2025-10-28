@@ -67,8 +67,8 @@ pub fn handle_add_row_request(
                         // Auto-fill parent_key if we have structure context
                         if let Some(ctx) = &structure_context {
                             // Fill parent_key from ancestor_row_indices (NUMERIC VALUES, not display values)
-                            // First element is the immediate parent's row_index
-                            if let Some(parent_row_idx_str) = ctx.ancestor_row_indices.first() {
+                            // Last element is the immediate parent's row_index (array is ordered oldest->newest)
+                            if let Some(parent_row_idx_str) = ctx.ancestor_row_indices.last() {
                                 info!("Auto-filling parent_key with row_index: '{}'", parent_row_idx_str);
                                 
                                 // Find parent_key column
