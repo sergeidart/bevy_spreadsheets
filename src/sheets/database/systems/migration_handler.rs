@@ -232,6 +232,9 @@ pub fn handle_migration_requests(
                 fix_manager.register_fix(Box::new(
                     super::super::migration::hide_temp_new_row_index_in_metadata::HideTempNewRowIndexInMetadata
                 ));
+                fix_manager.register_fix(Box::new(
+                    super::super::migration::remove_grand_parent_columns::RemoveGrandParentColumns
+                ));
                 
                 match fix_manager.apply_all_fixes(&mut conn) {
                     Ok(applied) => {

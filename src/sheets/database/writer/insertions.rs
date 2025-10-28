@@ -3,7 +3,7 @@
 
 use super::super::error::DbResult;
 use crate::sheets::definitions::{ColumnValidator, SheetMetadata};
-use rusqlite::{params, Connection, Transaction};
+use rusqlite::{Connection, Transaction};
 use bevy::prelude::*;
 
 /// Insert grid data rows

@@ -89,7 +89,6 @@ pub fn build_table_columns<'a>(
     total_cols: usize,
 ) -> egui_extras::TableBuilder<'a> {
     use crate::sheets::systems::ui_handlers;
-    use bevy_egui::egui;
     use egui_extras::Column;
 
     let num_visible_cols = visible_columns.len();

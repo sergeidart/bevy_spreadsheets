@@ -74,8 +74,7 @@ pub fn handle_update_column_name(
                         .enumerate()
                         .any(|(idx, c)| idx != col_index && !c.deleted && c.header.eq_ignore_ascii_case(new_name));
                     let is_reserved = new_name.eq_ignore_ascii_case("row_index")
-                        || new_name.eq_ignore_ascii_case("parent_key")
-                        || (new_name.starts_with("grand_") && new_name.ends_with("_parent"));
+                        || new_name.eq_ignore_ascii_case("parent_key");
                     let display_duplicate = meta_ro
                         .columns
                         .iter()

@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use bevy_egui::egui::{self, Color32, Id, RichText};
+use bevy_egui::egui::{self, Id, RichText};
 use egui_extras::TableRow;
 
 use super::cell_render::{
@@ -12,8 +12,54 @@ use crate::sheets::systems::ai_review::{
     AiSuggestedCellPlan, AiSuggestedPlan, RegularAiCellPlan, RowKind, StructureButtonPlan,
 };
 use crate::sheets::systems::ai_review::review_logic::ColumnEntry;
+use crate::sheets::systems::logic::lineage_helpers::walk_parent_lineage;
 
 const STRUCTURE_BUTTON_CONTEXT_LABEL: &str = "✓ Accept Structure";
+
+/// Helper function to convert parent_key row_index to lineage display text
+fn get_parent_key_display(
+    parent_key_value: &str,
+    ctx: &RowContext<'_>,
+) -> String {
+    // Try to parse as row_index
+    if let Ok(parent_row_idx) = parent_key_value.parse::<usize>() {
+        // Get parent table info from sheet metadata
+        if let Some(meta) = ctx.sheet_metadata {
+            if let Some(parent_link) = &meta.structure_parent {
+                let parent_category = parent_link.parent_category.clone();
+                let parent_sheet = parent_link.parent_sheet.clone();
+                
+                // Check cache first
+                let cache_key = (parent_category.clone(), parent_sheet.clone(), parent_row_idx);
+                let lineage = if let Some(cached) = ctx.state.parent_lineage_cache.get(&cache_key) {
+                    cached.clone()
+                } else {
+                    // Build lineage and cache it
+                    let lineage = walk_parent_lineage(
+                        ctx.registry,
+                        &parent_category,
+                        &parent_sheet,
+                        parent_row_idx,
+                    );
+                    // We can't insert into cache here as ctx.state is borrowed immutably
+                    // But this is OK, the cache will be populated during table view
+                    lineage
+                };
+                
+                // Format lineage with › separator
+                if !lineage.is_empty() {
+                    return lineage.iter()
+                        .map(|(_, display_val, _)| display_val.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" › ");
+                }
+            }
+        }
+    }
+    
+    // Fallback to raw value
+    parent_key_value.to_string()
+}
 
 pub fn render_ai_suggested_row(
     row: &mut TableRow,
@@ -198,29 +244,47 @@ fn render_ai_regular_cell(
 
     match kind {
         RowKind::Existing => {
+            // Extract parent_key data first to avoid borrow conflicts
+            let (parent_key_value, parent_key_override) = if let Some(rr) = ctx.state.ai_row_reviews.get(data_idx) {
+                if plan.is_parent_key {
+                    let override_enabled = *rr.key_overrides.get(&position).unwrap_or(&false);
+                    let value = rr.ai.get(position).map(|s| s.to_string()).unwrap_or_default();
+                    (Some(value), Some(override_enabled))
+                } else {
+                    (None, None)
+                }
+            } else {
+                (None, None)
+            };
+            
+            // Handle parent_key display if this is a parent_key column
+            if plan.is_parent_key {
+                if let (Some(value), Some(override_enabled)) = (parent_key_value, parent_key_override) {
+                    if override_enabled {
+                        // Show editable textbox when override is checked
+                        if let Some(rr) = ctx.state.ai_row_reviews.get_mut(data_idx) {
+                            if let Some(cell) = rr.ai.get_mut(position) {
+                                ui.add(egui::TextEdit::singleline(cell).desired_width(ui.available_width()));
+                            }
+                        }
+                    } else {
+                        // Show lineage display (green text)
+                        let display = if value.trim().is_empty() { 
+                            "(empty)".to_string() 
+                        } else { 
+                            get_parent_key_display(&value, ctx)
+                        };
+                        ui.label(RichText::new(display).color(PARENT_KEY_COLOR));
+                    }
+                    return;
+                }
+            }
+            
             if let Some(rr) = ctx.state.ai_row_reviews.get_mut(data_idx) {
                 // Check if this is a key column with override enabled
                 let is_key_column = plan.actual_col == 0;
                 let override_enabled = is_key_column && 
                     *rr.key_overrides.get(&position).unwrap_or(&false);
-                
-                if plan.is_parent_key {
-                    // Check if override is enabled for parent_key
-                    let parent_key_override = *rr.key_overrides.get(&position).unwrap_or(&false);
-                    
-                    if parent_key_override {
-                        // Show editable textbox when override is checked (full width)
-                        if let Some(cell) = rr.ai.get_mut(position) {
-                            ui.add(egui::TextEdit::singleline(cell).desired_width(ui.available_width()));
-                        }
-                    } else {
-                        // Show the parent_key as plain, non-interactable green text
-                        let value = rr.ai.get(position).map(|s| s.as_str()).unwrap_or("");
-                        let display = if value.trim().is_empty() { "(empty)" } else { value };
-                        ui.label(RichText::new(display.to_string()).color(PARENT_KEY_COLOR));
-                    }
-                    return;
-                }
 
                 let original_value = rr.original.get(position).cloned().unwrap_or_default();
                 let choices_vec = &mut rr.choices;
@@ -256,29 +320,47 @@ fn render_ai_regular_cell(
             }
         }
         RowKind::NewPlain => {
+            // Extract data first to avoid borrow conflicts
+            let (parent_key_value, parent_key_override) = if let Some(nr) = ctx.state.ai_new_row_reviews.get(data_idx) {
+                if plan.is_parent_key {
+                    let override_enabled = *nr.key_overrides.get(&position).unwrap_or(&false);
+                    let value = nr.ai.get(position).map(|s| s.to_string()).unwrap_or_default();
+                    (Some(value), Some(override_enabled))
+                } else {
+                    (None, None)
+                }
+            } else {
+                (None, None)
+            };
+            
+            // Handle parent_key display if this is a parent_key column
+            if plan.is_parent_key {
+                if let (Some(value), Some(override_enabled)) = (parent_key_value, parent_key_override) {
+                    if override_enabled {
+                        // Show editable textbox when override is checked
+                        if let Some(nr) = ctx.state.ai_new_row_reviews.get_mut(data_idx) {
+                            if let Some(cell) = nr.ai.get_mut(position) {
+                                ui.add(egui::TextEdit::singleline(cell).desired_width(ui.available_width()));
+                            }
+                        }
+                    } else {
+                        // Show lineage display (green text)
+                        let display = if value.trim().is_empty() { 
+                            "(empty)".to_string() 
+                        } else { 
+                            get_parent_key_display(&value, ctx)
+                        };
+                        ui.label(RichText::new(display).color(PARENT_KEY_COLOR));
+                    }
+                    return;
+                }
+            }
+            
             if let Some(nr) = ctx.state.ai_new_row_reviews.get_mut(data_idx) {
                 // Check if this is a key column with override enabled
                 let is_key_column = plan.actual_col == 0;
                 let override_enabled = is_key_column && 
                     *nr.key_overrides.get(&position).unwrap_or(&false);
-                    
-                if plan.is_parent_key {
-                    // Check if override is enabled for parent_key
-                    let parent_key_override = *nr.key_overrides.get(&position).unwrap_or(&false);
-                    
-                    if parent_key_override {
-                        // Show editable textbox when override is checked (full width)
-                        if let Some(cell) = nr.ai.get_mut(position) {
-                            ui.add(egui::TextEdit::singleline(cell).desired_width(ui.available_width()));
-                        }
-                    } else {
-                        // Show the parent_key as plain, non-interactable green text
-                        let value = nr.ai.get(position).map(|s| s.as_str()).unwrap_or("");
-                        let display = if value.trim().is_empty() { "(empty)" } else { value };
-                        ui.label(RichText::new(display.to_string()).color(PARENT_KEY_COLOR));
-                    }
-                    return;
-                }
 
                 let ai_vec = &mut nr.ai;
 
@@ -301,6 +383,42 @@ fn render_ai_regular_cell(
             }
         }
         RowKind::NewDuplicate => {
+            // Extract parent_key data first to avoid borrow conflicts
+            let (parent_key_value, parent_key_override) = if let Some(nr) = ctx.state.ai_new_row_reviews.get(data_idx) {
+                if plan.is_parent_key {
+                    let override_enabled = *nr.key_overrides.get(&position).unwrap_or(&false);
+                    let value = nr.ai.get(position).map(|s| s.to_string()).unwrap_or_default();
+                    (Some(value), Some(override_enabled))
+                } else {
+                    (None, None)
+                }
+            } else {
+                (None, None)
+            };
+            
+            // Handle parent_key display if this is a parent_key column
+            if plan.is_parent_key {
+                if let (Some(value), Some(override_enabled)) = (parent_key_value, parent_key_override) {
+                    if override_enabled {
+                        // Show editable textbox when override is checked
+                        if let Some(nr) = ctx.state.ai_new_row_reviews.get_mut(data_idx) {
+                            if let Some(cell) = nr.ai.get_mut(position) {
+                                ui.add(egui::TextEdit::singleline(cell).desired_width(ui.available_width()));
+                            }
+                        }
+                    } else {
+                        // Show lineage display (green text)
+                        let display = if value.trim().is_empty() { 
+                            "(empty)".to_string() 
+                        } else { 
+                            get_parent_key_display(&value, ctx)
+                        };
+                        ui.label(RichText::new(display).color(PARENT_KEY_COLOR));
+                    }
+                    return;
+                }
+            }
+            
             if let Some(nr) = ctx.state.ai_new_row_reviews.get_mut(data_idx) {
                 let (merge_decided, merge_selected) = merge_state.unwrap_or((false, false));
 
@@ -308,24 +426,6 @@ fn render_ai_regular_cell(
                 let is_key_column = plan.actual_col == 0;
                 let override_enabled = is_key_column && 
                     *nr.key_overrides.get(&position).unwrap_or(&false);
-
-                if plan.is_parent_key {
-                    // Check if override is enabled for parent_key
-                    let parent_key_override = *nr.key_overrides.get(&position).unwrap_or(&false);
-                    
-                    if parent_key_override {
-                        // Show editable textbox when override is checked (full width)
-                        if let Some(cell) = nr.ai.get_mut(position) {
-                            ui.add(egui::TextEdit::singleline(cell).desired_width(ui.available_width()));
-                        }
-                    } else {
-                        // Show the parent_key as plain, non-interactable green text
-                        let value = nr.ai.get(position).map(|s| s.as_str()).unwrap_or("");
-                        let display = if value.trim().is_empty() { "(empty)" } else { value };
-                        ui.label(RichText::new(display.to_string()).color(PARENT_KEY_COLOR));
-                    }
-                    return;
-                }
 
                 let original_value = nr
                     .original_for_merge

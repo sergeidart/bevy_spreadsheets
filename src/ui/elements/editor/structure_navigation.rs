@@ -13,22 +13,13 @@ use bevy::prelude::*;
 
 /// Collects ancestor keys from a parent row for structure navigation.
 /// 
+/// **Post-Refactor (2025-10-28):**
+/// Now uses lineage walking instead of reading grand_N_parent columns.
+/// Walks up the parent chain using parent_key references to build full lineage.
+/// 
 /// Returns (ancestor_keys, display_value) where:
-/// - ancestor_keys: All grand_N_parent values + parent_key value from the parent row
-/// - display_value: The display value from the parent row's content column
-///
-/// # Logic:
-/// For a parent table at depth N:
-/// 1. Collect all grand_N_parent columns (sorted descending: grand_3, grand_2, grand_1)
-/// 2. Collect parent_key column value (if parent is a structure table)
-/// 3. Get display value from the structure-defining column's key parent index
-///
-/// The ancestor_keys become the child's filtering keys:
-/// - Child's grand_(N+1) should match parent's grand_N
-/// - Child's grand_N should match parent's grand_(N-1)
-/// - ...
-/// - Child's grand_1 should match parent's parent_key
-/// - Child's parent_key should match parent's display_value
+/// - ancestor_keys: Display values from all ancestors (root to immediate parent)
+/// - display_value: The display value from the current parent row
 ///
 /// # Arguments
 /// * `target_structure_name` - The name of the child structure table we're navigating to
@@ -39,119 +30,97 @@ pub fn collect_structure_ancestors(
     target_structure_name: &str,
     row_index: usize,
 ) -> (Vec<String>, String) {
-    let mut ancestor_keys: Vec<String> = Vec::new();
+    use crate::sheets::systems::logic::lineage_helpers;
+    
+    // Get the current row's display value
     let mut display_value = String::new();
+    let mut parent_row_parent_key: Option<usize> = None;
     
     if let Some(parent_sheet) = registry.get_sheet(category, sheet_name) {
         if let Some(parent_meta) = &parent_sheet.metadata {
             if let Some(row) = parent_sheet.grid.get(row_index) {
-                // Step 1: Collect all grand_N_parent columns sorted by N (descending)
-                let mut grands: Vec<(usize, String)> = Vec::new();
-                for (idx, col) in parent_meta.columns.iter().enumerate() {
-                    if col.header.starts_with("grand_") && col.header.ends_with("_parent") {
-                        if let Some(n_str) = col.header
-                            .strip_prefix("grand_")
-                            .and_then(|s| s.strip_suffix("_parent"))
-                        {
-                            if let Ok(n) = n_str.parse::<usize>() {
-                                if let Some(key) = row.get(idx) {
-                                    if !key.is_empty() {
-                                        grands.push((n, key.clone()));
-                                    }
-                                }
-                            }
+                // Get display value from first content column
+                display_value = get_first_content_column_value(parent_meta, row);
+                
+                // Get this row's parent_key (to walk its ancestors, not including itself)
+                if let Some(pk_col) = parent_meta.columns.iter().position(|c| c.header.eq_ignore_ascii_case("parent_key")) {
+                    if let Some(pk_str) = row.get(pk_col) {
+                        if !pk_str.is_empty() {
+                            parent_row_parent_key = pk_str.parse::<usize>().ok();
                         }
                     }
                 }
-                
-                // Sort by N descending (grand_3, grand_2, grand_1)
-                grands.sort_by(|a, b| b.0.cmp(&a.0));
-                
-                // Add to ancestor_keys in order
-                for (_n, key) in &grands {
-                    ancestor_keys.push(key.clone());
-                }
-                
-                // Step 2: Add parent's parent_key column value as ancestor (if parent is a structure table)
-                if let Some(parent_key_idx) = parent_meta
-                    .columns
-                    .iter()
-                    .position(|c| c.header.eq_ignore_ascii_case("parent_key"))
-                {
-                    if let Some(parent_key_val) = row.get(parent_key_idx) {
-                        if !parent_key_val.is_empty() {
-                            ancestor_keys.push(parent_key_val.clone());
-                        }
-                    }
-                }
-                
-                // Step 3: Get display value from the first CONTENT column (not technical columns)
-                // This is the column that represents the entity in this table
-                // (e.g., "PLAYSTATION 2" in Games_Platforms, "Steam" in Games_Platforms_Store)
-                
-                // Count technical columns in the grid by checking the metadata
-                // Technical columns are: row_index, grand_N_parent (any number), parent_key
-                // Grid has these at the start, then content columns follow
-                let mut grid_technical_count = 0;
-                
-                // row_index is always first in grid
-                if parent_meta.columns.first().map_or(false, |c| c.header.eq_ignore_ascii_case("row_index")) {
-                    grid_technical_count += 1;
-                }
-                
-                // Count grand_N_parent columns (they come after row_index)
-                for col in parent_meta.columns.iter().skip(grid_technical_count) {
-                    if col.header.starts_with("grand_") && col.header.ends_with("_parent") {
-                        grid_technical_count += 1;
-                    } else {
-                        break; // Stop when we hit non-grand column
-                    }
-                }
-                
-                // parent_key comes after grands (if it exists)
-                if parent_meta.columns.get(grid_technical_count).map_or(false, |c| c.header.eq_ignore_ascii_case("parent_key")) {
-                    grid_technical_count += 1;
-                }
-                
-                // First content column is right after all technical columns
-                let content_col_idx = grid_technical_count;
-                
-                bevy::log::debug!(
-                    "Getting display value from parent row: is_structure={}, grid_technical_count={}, content_col_idx={}, row_len={}",
-                    parent_meta.is_structure_table(),
-                    grid_technical_count,
-                    content_col_idx,
-                    row.len()
-                );
-                
-                if let Some(val) = row.get(content_col_idx) {
-                    display_value = val.clone();
-                    bevy::log::debug!("Display value from index {}: '{}'", content_col_idx, display_value);
-                } else {
-                    bevy::log::warn!(
-                        "Could not get display value at index {} (row has {} columns)",
-                        content_col_idx,
-                        row.len()
-                    );
-                }
-                
-                // Fallback if display value is empty
-                if display_value.is_empty() {
-                    display_value = row_index.to_string();
-                }
-                
-                bevy::log::info!(
-                    "Structure ancestors collected: {} -> {} | ancestors={:?}, display='{}'",
-                    sheet_name,
-                    target_structure_name,
-                    ancestor_keys,
-                    display_value
-                );
             }
         }
     }
     
+    // Walk up the lineage from the parent's parent (to get ancestors, not including current parent)
+    let mut ancestor_keys: Vec<String> = if let Some(parent_pk) = parent_row_parent_key {
+        // This row has a parent, walk from there
+        if let Some(parent_link) = registry.get_sheet(category, sheet_name)
+            .and_then(|sd| sd.metadata.as_ref())
+            .and_then(|meta| meta.structure_parent.as_ref())
+        {
+            let lineage = lineage_helpers::walk_parent_lineage(
+                registry,
+                &parent_link.parent_category,
+                &parent_link.parent_sheet,
+                parent_pk
+            );
+            
+            lineage.iter()
+                .map(|(_, display_val, _)| display_val.clone())
+                .collect()
+        } else {
+            Vec::new()
+        }
+    } else {
+        // This row is at root level (no parent), so no ancestors
+        Vec::new()
+    };
+    
+    // Add the current parent's display value to the ancestor keys
+    // This way, ancestor_keys contains the full lineage including the immediate parent
+    if !display_value.is_empty() {
+        ancestor_keys.push(display_value.clone());
+    }
+    
+    bevy::log::info!(
+        "Structure ancestors collected (lineage walk): {} -> {} | ancestors={:?}, display='{}'",
+        sheet_name,
+        target_structure_name,
+        ancestor_keys,
+        display_value
+    );
+    
     (ancestor_keys, display_value)
+}
+
+/// Get display value from first content column (skipping technical columns)
+pub fn get_first_content_column_value(metadata: &SheetMetadata, row: &[String]) -> String {
+    // Find first non-technical column
+    for (idx, col) in metadata.columns.iter().enumerate() {
+        if col.deleted || col.hidden {
+            continue;
+        }
+        
+        let header_lower = col.header.to_lowercase();
+        if header_lower == "row_index" 
+            || header_lower == "id" 
+            || header_lower == "parent_key"
+        {
+            continue;
+        }
+        
+        // This is a content column
+        return row.get(idx).cloned().unwrap_or_default();
+    }
+    
+    // Fallback: any non-empty value
+    row.iter()
+        .find(|s| !s.is_empty())
+        .cloned()
+        .unwrap_or_else(|| "?".to_string())
 }
 
 // Parse JSON object string into headers + single row

@@ -34,7 +34,6 @@ pub fn generate_structure_preview(raw: &str) -> (String, bool) {
             || lower == "id"
             || lower == "created_at"
             || lower == "updated_at"
-            || (lower.starts_with("grand_") && lower.ends_with("_parent"))
             || lower == "__parentdescriptor"
     }
 
@@ -115,7 +114,7 @@ pub fn generate_structure_preview(raw: &str) -> (String, bool) {
 
 /// Generate a preview string from structure rows (Vec<Vec<String>>)
 /// Similar to generate_structure_preview but takes rows directly instead of JSON
-/// Skips technical columns (row_index, all grand_N_parent, parent_key) to show only data columns
+/// Skips technical columns (row_index, parent_key) to show only data columns
 /// 
 /// headers: Optional column headers to identify technical columns by name
 pub fn generate_structure_preview_from_rows(rows: &[Vec<String>]) -> String {
@@ -136,33 +135,16 @@ pub fn generate_structure_preview_from_rows_with_headers(
     
     // Determine skip count based on headers if available
     let skip_count = if let Some(hdrs) = headers {
-        // Count technical columns: row_index, grand_N_parent, parent_key
+        // Count technical columns: row_index, parent_key
         hdrs.iter()
             .take_while(|h| {
                 h.eq_ignore_ascii_case("row_index")
-                    || h.starts_with("grand_")
                     || h.eq_ignore_ascii_case("parent_key")
             })
             .count()
     } else {
-        // Default: skip at least row_index and parent_key
-        // Try to detect if there are grand_parent columns by checking if index 2 looks like it
-        // For safety, we'll use a heuristic: if first_row.len() > 3, check positions 2+ for common patterns
-        let mut technical_cols = 1; // row_index
-        
-        // Check if we have potential grand_parent columns
-        // They would be between row_index (0) and the last parent_key
-        // For now, we'll just check if there are more than 2 initial columns that might be technical
-        // This is a heuristic - ideally we'd have metadata
-        if first_row.len() > 2 {
-            // Assume the pattern: row_index, [grand_N_parent, ...], parent_key, data...
-            // Find the last technical column (parent_key)
-            // For now, use simpler logic: skip first 2 minimum (row_index, parent_key for flat)
-            // For multi-level, this would need metadata
-            technical_cols = 2; // row_index + parent_key as minimum
-        }
-        
-        technical_cols.min(first_row.len())
+        // Default: skip row_index and parent_key (first 2 columns)
+        2
     };
 
     // Skip technical columns and collect data values

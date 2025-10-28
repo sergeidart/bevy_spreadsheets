@@ -9,13 +9,11 @@ use crate::sheets::{
 };
 
 /// Calculate the hierarchy depth using heuristic detection based on existing columns
-/// Returns the number of parent levels (0 for root, 1 for first child, etc.)
+/// Returns the number of parent levels (0 for root, 1 for child)
 /// 
 /// Heuristic rules:
 /// - No parent_key column: depth = 0 (root table)
-/// - Has parent_key but no grand_N_parent: depth = 1 (first level child)
-/// - Has grand_1_parent: depth = 2
-/// - Has grand_N_parent: depth = N + 1 (highest N determines depth)
+/// - Has parent_key: depth = 1 (child table)
 pub fn calculate_hierarchy_depth(
     registry: &SheetRegistry,
     category: &Option<String>,
@@ -66,25 +64,8 @@ pub fn calculate_hierarchy_depth(
                 info!("  Heuristic: No parent_key found, depth = 0 (root table)");
                 0
             } else {
-                // Find highest grand_N_parent column
-                let max_grand = meta.columns.iter()
-                    .filter_map(|col| {
-                        if col.header.starts_with("grand_") && col.header.ends_with("_parent") {
-                            let n_str = col.header.trim_start_matches("grand_").trim_end_matches("_parent");
-                            n_str.parse::<usize>().ok()
-                        } else {
-                            None
-                        }
-                    })
-                    .max();
-                
-                if let Some(n) = max_grand {
-                    info!("  Heuristic: Found grand_{}_parent, depth = {} (N+1)", n, n + 1);
-                    n + 1
-                } else {
-                    info!("  Heuristic: Has parent_key but no grand_N_parent, depth = 1 (first level child)");
-                    1
-                }
+                info!("  Heuristic: Has parent_key, depth = 1 (child table)");
+                1
             }
         } else {
             info!("  Heuristic: No metadata found, assuming depth = 0");
@@ -106,10 +87,16 @@ pub fn calculate_hierarchy_depth(
     final_depth
 }
 
-/// Create technical columns (row_index, parent_key, grand_N_parent) for a structure sheet
-/// based on its hierarchy depth
-pub fn create_structure_technical_columns(depth: usize) -> Vec<ColumnDefinition> {
-    let mut columns = vec![
+/// Create technical columns (row_index, parent_key) for a structure sheet
+/// 
+/// **Post-Refactor (2025-10-28):**
+/// Now only creates row_index and parent_key columns, regardless of depth.
+/// The grand_N_parent columns have been removed as they were redundant - we can
+/// walk the parent chain programmatically using parent_key references.
+/// 
+/// Lineage display: `Mass Effect 3 › PC › Steam` (built dynamically)
+pub fn create_structure_technical_columns(_depth: usize) -> Vec<ColumnDefinition> {
+    vec![
         ColumnDefinition {
             header: "row_index".to_string(),
                 display_header: None,
@@ -127,42 +114,13 @@ pub fn create_structure_technical_columns(depth: usize) -> Vec<ColumnDefinition>
             structure_key_parent_column_index: None,
             structure_ancestor_key_parent_column_indices: None,
         },
-    ];
-
-    // Add grandparent keys from deepest to shallowest (grand_2_parent, grand_1_parent, parent_key)
-    // This matches the requirement: row_index, grand_2_parent, grand_1_parent, parent_key, data...
-    if depth > 2 {
-        // For depth=3: create grand_2_parent (level=2), grand_1_parent (level=1)
-        // For depth=4: create grand_3_parent (level=3), grand_2_parent (level=2), grand_1_parent (level=1)
-        // Formula: iterate from (depth-1) down to 1
-        for level in (1..=(depth-1)).rev() {
-            columns.push(ColumnDefinition {
-                header: format!("grand_{}_parent", level),
-                display_header: None,
-                data_type: ColumnDataType::String,
-                validator: None,
-                filter: None,
-                ai_context: Some(format!("Level {} parent identifier for hierarchical filtering", level)),
-                ai_enable_row_generation: None,
-                ai_include_in_send: Some(true), // Send all parent keys to AI
-                deleted: false,
-                hidden: false, // Technical but sent to AI
-                width: None,
-                structure_schema: None,
-                structure_column_order: None,
-                structure_key_parent_column_index: None,
-                structure_ancestor_key_parent_column_indices: None,
-            });
-        }
-    } else if depth == 2 {
-        // Add grand_1_parent for depth == 2 only
-        columns.push(ColumnDefinition {
-            header: "grand_1_parent".to_string(),
+        ColumnDefinition {
+            header: "parent_key".to_string(),
                 display_header: None,
             data_type: ColumnDataType::String,
             validator: None,
             filter: None,
-            ai_context: Some("Grandparent identifier for hierarchical filtering".to_string()),
+            ai_context: Some("Parent identifier for hierarchical structure filtering".to_string()),
             ai_enable_row_generation: None,
             ai_include_in_send: Some(true),
             deleted: false,
@@ -172,29 +130,8 @@ pub fn create_structure_technical_columns(depth: usize) -> Vec<ColumnDefinition>
             structure_column_order: None,
             structure_key_parent_column_index: None,
             structure_ancestor_key_parent_column_indices: None,
-        });
-    }
-
-    // Always add parent_key last (as it's the immediate parent)
-    columns.push(ColumnDefinition {
-        header: "parent_key".to_string(),
-                display_header: None,
-        data_type: ColumnDataType::String,
-        validator: None,
-        filter: None,
-        ai_context: Some("Parent identifier for hierarchical structure filtering".to_string()),
-        ai_enable_row_generation: None,
-        ai_include_in_send: Some(true),
-        deleted: false,
-        hidden: false,
-        width: None,
-        structure_schema: None,
-        structure_column_order: None,
-        structure_key_parent_column_index: None,
-        structure_ancestor_key_parent_column_indices: None,
-    });
-
-    columns
+        },
+    ]
 }
 
 

@@ -3,7 +3,7 @@
 
 use crate::sheets::{
     events::{
-        AddSheetRowRequest, OpenStructureViewEvent, RequestBatchUpdateColumnAiInclude,
+        OpenStructureViewEvent, RequestBatchUpdateColumnAiInclude,
         RequestCopyCell, RequestPasteCell, RequestReorderColumn, RequestToggleAiRowGeneration,
         RequestUpdateAiSendSchema, RequestUpdateAiStructureSend, RequestUpdateColumnAiInclude,
         UpdateCellEvent,

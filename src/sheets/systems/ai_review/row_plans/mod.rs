@@ -11,6 +11,6 @@ pub use ai::{
 pub use blocks::{build_blocks, RowBlock, RowKind};
 pub use original::{
     prepare_original_preview_plan, OriginalDataCellPlan, OriginalPreviewCellPlan,
-    OriginalPreviewPlan, StructurePreviewCell, StructurePreviewResult,
+    OriginalPreviewPlan,
 };
 pub use status::{prepare_status_row_plan, StatusActionPlan, StatusCellPlan, StatusRowPlan};

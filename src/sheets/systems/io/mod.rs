@@ -53,8 +53,7 @@ pub fn get_full_metadata_path(base_data_path: &Path, metadata: &SheetMetadata) -
 pub use load::{
     handle_initiate_file_upload, handle_json_sheet_upload, handle_process_upload_request,
 };
-// Save systems (from save.rs)
+
 pub use save::{
-    handle_create_category_directory_request, handle_delete_sheet_file_request,
-    handle_rename_category_directory_request, handle_rename_sheet_file_request,
+    handle_delete_sheet_file_request, handle_rename_sheet_file_request,
 };

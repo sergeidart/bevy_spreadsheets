@@ -112,7 +112,6 @@ fn resolve_row_index_to_display_text(
         let lower = col.header.to_lowercase();
         lower != "row_index"
             && lower != "parent_key"
-            && !lower.starts_with("grand_")
             && lower != "id"
             && lower != "created_at"
             && lower != "updated_at"

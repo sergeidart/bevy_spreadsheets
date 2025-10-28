@@ -97,6 +97,7 @@ impl Default for EditorWindowState {
             force_filter_recalculation: false,
             request_scroll_to_new_row: false,
             scroll_to_row_index: None,
+            parent_lineage_cache: HashMap::new(),
             current_interaction_mode: SheetInteractionState::Idle,
             selected_columns_for_deletion: HashSet::new(),
             column_drag_state: ColumnDragState::default(),

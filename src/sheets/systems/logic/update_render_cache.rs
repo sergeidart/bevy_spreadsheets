@@ -130,7 +130,6 @@ pub fn handle_sheet_render_cache_update(
                 // For large tables, this gives instant responsiveness
                 let has_ancestor_columns = metadata.columns.iter().any(|col| {
                     col.header.eq_ignore_ascii_case("parent_key")
-                        || (col.header.starts_with("grand_") && col.header.ends_with("_parent"))
                 });
 
                 let use_lazy_resolution = num_rows > 500 && has_ancestor_columns;
@@ -215,7 +214,7 @@ pub fn handle_sheet_render_cache_update(
                                                     .and_then(|m| m.columns.get(idx))
                                                     .map(|c| {
                                                         let h = c.header.to_ascii_lowercase();
-                                                        h != "row_index" && h != "parent_key" && h != "temp_new_row_index" && h != "_obsolete_temp_new_row_index" && !h.starts_with("grand_")
+                                                        h != "row_index" && h != "parent_key" && h != "temp_new_row_index" && h != "_obsolete_temp_new_row_index"
                                                     })
                                                     .unwrap_or(false)
                                                 )
@@ -223,7 +222,7 @@ pub fn handle_sheet_render_cache_update(
                                                     parent_sheet.metadata.as_ref().and_then(|meta| {
                                                         meta.columns.iter().position(|c| {
                                                             let h = c.header.to_ascii_lowercase();
-                                                            h != "row_index" && h != "parent_key" && h != "temp_new_row_index" && h != "_obsolete_temp_new_row_index" && !h.starts_with("grand_")
+                                                            h != "row_index" && h != "parent_key" && h != "temp_new_row_index" && h != "_obsolete_temp_new_row_index"
                                                         })
                                                     })
                                                 });
@@ -329,14 +328,6 @@ pub fn handle_sheet_render_cache_update(
                             .columns
                             .iter()
                             .position(|c| c.header.eq_ignore_ascii_case("parent_key"));
-                        // Collect grand_* columns in order
-                        let grand_cols: Vec<usize> = metadata
-                            .columns
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, c)| c.header.starts_with("grand_") && c.header.ends_with("_parent"))
-                            .map(|(i, _)| i)
-                            .collect();
 
                         'rowloop: for r_idx in 0..num_rows {
                             // Apply metadata filters
@@ -360,15 +351,6 @@ pub fn handle_sheet_render_cache_update(
                                         let cell_pk = sheet_data.grid.get(r_idx).and_then(|row| row.get(pk_col)).cloned().unwrap_or_default();
                                         if cell_pk != nav_ctx.parent_row_key { continue 'rowloop; }
                                     }
-                                    // grand_* matches (order per metadata)
-                                    let mut aidx = 0usize;
-                                    for &gcol in &grand_cols {
-                                        if let Some(expected) = nav_ctx.ancestor_keys.get(aidx) {
-                                            let v = sheet_data.grid.get(r_idx).and_then(|row| row.get(gcol)).cloned().unwrap_or_default();
-                                            if &v != expected { continue 'rowloop; }
-                                            aidx += 1;
-                                        }
-                                    }
                                 }
                             }
                             out.push(r_idx);
@@ -382,8 +364,7 @@ pub fn handle_sheet_render_cache_update(
                         for &r_idx in chunk {
                             for c_idx in 0..num_cols {
                                 if let Some(col_def) = metadata.columns.get(c_idx) {
-                                    let is_ancestor = col_def.header.eq_ignore_ascii_case("parent_key")
-                                        || (col_def.header.starts_with("grand_") && col_def.header.ends_with("_parent"));
+                                    let is_ancestor = col_def.header.eq_ignore_ascii_case("parent_key");
                                     if is_ancestor {
                                         let cell_value_str = sheet_data
                                             .grid

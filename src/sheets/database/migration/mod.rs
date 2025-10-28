@@ -9,12 +9,13 @@ pub mod fix_row_index_duplicates;
 pub mod parent_key_to_row_index;
 pub mod cleanup_temp_new_row_index;
 pub mod hide_temp_new_row_index_in_metadata;
+pub mod remove_grand_parent_columns;
 
 // Re-export main types and functions for backward compatibility
 pub use dependency_handler::DependencyHandler;
 pub use io_helpers::{IoHelpers, JsonSheetPair};
 pub use json_migration::{JsonMigration, MigrationReport};
-pub use occasional_fixes::{MigrationFix, OccasionalFixManager};
+pub use occasional_fixes::OccasionalFixManager;
 
 use rusqlite::Connection;
 use std::path::Path;

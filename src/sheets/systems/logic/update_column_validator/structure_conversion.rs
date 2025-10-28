@@ -85,8 +85,7 @@ pub fn handle_structure_conversion_to(
                     
                     // Filter out parent's technical columns by name
                     let is_technical = src_col.header.eq_ignore_ascii_case("row_index")
-                        || src_col.header.eq_ignore_ascii_case("parent_key")
-                        || (src_col.header.starts_with("grand_") && src_col.header.ends_with("_parent"));
+                        || src_col.header.eq_ignore_ascii_case("parent_key");
                     
                     if is_technical {
                         debug!("Skipping parent's technical column '{}'", src_col.header);

@@ -15,4 +15,4 @@ mod sheet_row;
 pub mod sheet_management_bar;
 
 // Re-export the main function for convenience
-pub use sheet_management_bar::{show_sheet_management_controls, SheetManagementEventWriters};
+pub use sheet_management_bar::SheetManagementEventWriters;

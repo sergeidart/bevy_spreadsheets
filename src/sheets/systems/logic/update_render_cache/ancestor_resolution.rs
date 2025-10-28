@@ -22,11 +22,10 @@ pub fn resolve_ancestor_key_display_text(
     current_sheet_name: &str,
     registry: &SheetRegistry,
 ) -> Option<String> {
-    // Only process ancestor key columns
+    // Only process parent_key column
     let is_parent_key = col_def.header.eq_ignore_ascii_case("parent_key");
-    let is_grand_parent = col_def.header.starts_with("grand_") && col_def.header.ends_with("_parent");
 
-    if !is_parent_key && !is_grand_parent {
+    if !is_parent_key {
         return None; // Not an ancestor key column
     }
 
@@ -104,7 +103,6 @@ pub fn resolve_ancestor_key_display_text(
         let lower = col.header.to_lowercase();
         lower != "row_index"
             && lower != "parent_key"
-            && !lower.starts_with("grand_")
             && lower != "id"
             && lower != "created_at"
             && lower != "updated_at"
@@ -133,11 +131,10 @@ pub fn resolve_ancestor_key_with_cache(
     current_sheet_name: &str,
     parent_cache: &std::collections::HashMap<(String, i64), String>,
 ) -> Option<String> {
-    // Only process ancestor key columns
+    // Only process parent_key column
     let is_parent_key = col_def.header.eq_ignore_ascii_case("parent_key");
-    let is_grand_parent = col_def.header.starts_with("grand_") && col_def.header.ends_with("_parent");
 
-    if !is_parent_key && !is_grand_parent {
+    if !is_parent_key {
         return None;
     }
 

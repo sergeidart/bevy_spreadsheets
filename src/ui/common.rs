@@ -11,6 +11,7 @@ use crate::sheets::{
     systems::logic::{
         determine_cell_background_color, determine_effective_validation_state,
         is_column_ai_included, is_structure_column_ai_included, prefetch_linked_column_values,
+        lineage_helpers::walk_parent_lineage,
     },
 };
 use crate::ui::elements::editor::state::EditorWindowState;
@@ -71,18 +72,82 @@ pub fn edit_cell_widget(
                     || col_def.header.eq_ignore_ascii_case("parent_key")
                     || col_def.header.eq_ignore_ascii_case("temp_new_row_index")
                     || col_def.header.eq_ignore_ascii_case("_obsolete_temp_new_row_index")
-                    || (col_def.header.starts_with("grand_") && col_def.header.ends_with("_parent"))
             })
             .unwrap_or(false)
     } else {
         false
     };
     if is_technical_column {
-        let display = if current_display_text.is_empty() {
-            "(empty)"
+        // Special handling for parent_key: show lineage with › separator
+        let is_parent_key = registry
+            .get_sheet(category, sheet_name)
+            .and_then(|sd| sd.metadata.as_ref())
+            .and_then(|meta| meta.columns.get(col_index))
+            .map(|col_def| col_def.header.eq_ignore_ascii_case("parent_key"))
+            .unwrap_or(false);
+        
+        let display = if is_parent_key && !current_display_text.is_empty() {
+            // When in structure navigation context, use ancestor_keys from navigation state
+            // Otherwise, build lineage by walking parent chain
+            if let Some(nav_ctx) = state.structure_navigation_stack.last() {
+                // We're in a structure navigation - use the navigation context lineage
+                // ancestor_keys contains the full lineage including immediate parent
+                if !nav_ctx.ancestor_keys.is_empty() {
+                    nav_ctx.ancestor_keys.join(" › ")
+                } else {
+                    // Edge case: no ancestors (shouldn't happen in normal navigation)
+                    current_display_text.to_string()
+                }
+            } else {
+                // Not in structure navigation - walk the parent chain
+                if let Ok(parent_row_idx) = current_display_text.parse::<usize>() {
+                    // Try to get parent table info from metadata
+                    if let Some(parent_link) = registry
+                        .get_sheet(category, sheet_name)
+                        .and_then(|sd| sd.metadata.as_ref())
+                        .and_then(|meta| meta.structure_parent.as_ref())
+                    {
+                        let parent_category = parent_link.parent_category.clone();
+                        let parent_sheet = parent_link.parent_sheet.clone();
+                        
+                        // Check cache first
+                        let cache_key = (parent_category.clone(), parent_sheet.clone(), parent_row_idx);
+                        let lineage = if let Some(cached) = state.parent_lineage_cache.get(&cache_key) {
+                            cached.clone()
+                        } else {
+                            // Build lineage and cache it
+                            let lineage = walk_parent_lineage(
+                                registry,
+                                &parent_category,
+                                &parent_sheet,
+                                parent_row_idx,
+                            );
+                            state.parent_lineage_cache.insert(cache_key, lineage.clone());
+                            lineage
+                        };
+                        
+                        // Format lineage with › separator
+                        if !lineage.is_empty() {
+                            lineage.iter()
+                                .map(|(_, display_val, _)| display_val.as_str())
+                                .collect::<Vec<_>>()
+                                .join(" › ")
+                        } else {
+                            current_display_text.to_string()
+                        }
+                    } else {
+                        current_display_text.to_string()
+                    }
+                } else {
+                    current_display_text.to_string()
+                }
+            }
+        } else if current_display_text.is_empty() {
+            "(empty)".to_string()
         } else {
-            current_display_text
+            current_display_text.to_string()
         };
+        
     let desired_size = egui::vec2(ui.available_width(), ui.style().spacing.interact_size.y);
         let (_id, rect) = ui.allocate_space(desired_size);
         ui.allocate_new_ui(egui::UiBuilder::new().max_rect(rect), |inner| {
@@ -91,9 +156,31 @@ pub fn edit_cell_widget(
                 egui::Layout::left_to_right(egui::Align::Center),
                 |row_ui| {
                     row_ui.vertical_centered(|vc| {
-                        vc.label(
-                            egui::RichText::new(display).color(egui::Color32::from_rgb(0, 180, 0)),
+                        let label = vc.label(
+                            egui::RichText::new(&display).color(egui::Color32::from_rgb(0, 180, 0)),
                         );
+                        
+                        // Add tooltip for parent_key showing table names
+                        if is_parent_key && !current_display_text.is_empty() {
+                            if let Ok(parent_row_idx) = current_display_text.parse::<usize>() {
+                                if let Some(parent_link) = registry
+                                    .get_sheet(category, sheet_name)
+                                    .and_then(|sd| sd.metadata.as_ref())
+                                    .and_then(|meta| meta.structure_parent.as_ref())
+                                {
+                                    let cache_key = (parent_link.parent_category.clone(), parent_link.parent_sheet.clone(), parent_row_idx);
+                                    if let Some(lineage) = state.parent_lineage_cache.get(&cache_key) {
+                                        if !lineage.is_empty() {
+                                            let tooltip_text = lineage.iter()
+                                                .map(|(table, display, idx)| format!("{} ({}[{}])", display, table, idx))
+                                                .collect::<Vec<_>>()
+                                                .join(" › ");
+                                            label.on_hover_text(tooltip_text);
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     });
                 },
             );
@@ -213,7 +300,6 @@ pub fn edit_cell_widget(
                                                         && h != "parent_key"
                                                         && h != "temp_new_row_index"
                                                         && h != "_obsolete_temp_new_row_index"
-                                                        && !h.starts_with("grand_")
                                                 })
                                             }).or(Some(0));
                                             key_idx_dyn.and_then(|idx| row.get(idx)).cloned()
@@ -262,18 +348,20 @@ pub fn edit_cell_widget(
                                     ));
                                     if resp.clicked() {
                                         if registry.get_sheet(category, &structure_sheet_name).is_some() {
-                                            // Collect ancestor keys and display value from parent row
-                                            let (mut ancestor_keys, display_value) =
-                                                crate::ui::elements::editor::structure_navigation::collect_structure_ancestors(
-                                                    registry,
-                                                    category,
-                                                    sheet_name,
-                                                    &structure_sheet_name,
-                                                    row_index,
-                                                );
+                                            // Build ancestor_keys (display values) and ancestor_row_indices (numeric) from navigation stack
+                                            let mut ancestor_keys = if let Some(current_nav) = state.structure_navigation_stack.last() {
+                                                current_nav.ancestor_keys.clone()
+                                            } else {
+                                                Vec::new()
+                                            };
+                                            
+                                            let mut ancestor_row_indices = if let Some(current_nav) = state.structure_navigation_stack.last() {
+                                                current_nav.ancestor_row_indices.clone()
+                                            } else {
+                                                Vec::new()
+                                            };
 
                                             // Get parent row's row_index value to use as parent_key
-                                            // This is the new approach: store row_index instead of text for stable references
                                             let parent_row_index_value = registry
                                                 .get_sheet(category, sheet_name)
                                                 .and_then(|sd| sd.grid.get(row_index))
@@ -281,12 +369,25 @@ pub fn edit_cell_widget(
                                                 .map(|s| s.clone())
                                                 .unwrap_or_else(|| row_index.to_string());
 
-                                            // Add the row_index value as the final ancestor (becomes child's parent_key)
-                                            ancestor_keys.push(parent_row_index_value.clone());
+                                            // Get the display value for the current row (for UI breadcrumb)
+                                            let display_value = registry
+                                                .get_sheet(category, sheet_name)
+                                                .and_then(|sheet_data| {
+                                                    sheet_data.metadata.as_ref().and_then(|metadata| {
+                                                        sheet_data.grid.get(row_index).map(|row| {
+                                                            crate::ui::elements::editor::structure_navigation::get_first_content_column_value(metadata, row)
+                                                        })
+                                                    })
+                                                })
+                                                .unwrap_or_else(|| current_display_text.to_string());
+
+                                            // Add to lineage arrays
+                                            ancestor_keys.push(display_value.clone());
+                                            ancestor_row_indices.push(parent_row_index_value.clone());
 
                                             bevy::log::info!(
-                                                "Opening structure: {} -> {} | parent_row_index='{}' (display: '{}') | ancestor_keys={:?}",
-                                                sheet_name, structure_sheet_name, parent_row_index_value, display_value, ancestor_keys
+                                                "Opening structure: {} -> {} | parent_row_index='{}' (display: '{}') | ancestor_keys={:?} | ancestor_row_indices={:?}",
+                                                sheet_name, structure_sheet_name, parent_row_index_value, display_value, ancestor_keys, ancestor_row_indices
                                             );
                                             let nav_context = crate::ui::elements::editor::state::StructureNavigationContext {
                                                 structure_sheet_name: structure_sheet_name.clone(),
@@ -294,6 +395,7 @@ pub fn edit_cell_widget(
                                                 parent_sheet_name: sheet_name.to_string(),
                                                 parent_row_key: parent_row_index_value,
                                                 ancestor_keys,
+                                                ancestor_row_indices,
                                                 parent_column_name: ui_header,
                                             };
                                             state.structure_navigation_stack.push(nav_context);

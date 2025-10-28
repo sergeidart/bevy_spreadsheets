@@ -112,7 +112,8 @@ pub(crate) fn get_filtered_row_indices_cached(
     let mut indices = get_filtered_row_indices_internal(grid, metadata);
 
     // Apply hidden structure filter if present
-    // For multi-level structures, we need to match ALL parent keys (grand_N_parent, parent_key)
+    // **Post-Refactor (2025-10-28):**
+    // Now we only check parent_key since it's unique (no need to check grand_N columns)
     if let Some(nav_ctx) = structure_filter {
         indices = indices
             .into_iter()
@@ -122,17 +123,15 @@ pub(crate) fn get_filtered_row_indices_cached(
                     None => return false,
                 };
 
-                // Get parent_key column (usually column 1, but could vary with grands)
-                // Find it by checking metadata
+                // Find parent_key column
                 let parent_key_col_idx = metadata
                     .columns
                     .iter()
                     .position(|c| c.header.eq_ignore_ascii_case("parent_key"))
                     .unwrap_or(1); // Default fallback
 
-                // Check parent_key matches
-                let parent_key_matches = row
-                    .get(parent_key_col_idx)
+                // Check if parent_key matches (this is sufficient since parent_key is unique)
+                row.get(parent_key_col_idx)
                     .map(|pk| {
                         let matches = pk == &nav_ctx.parent_row_key;
                         if !matches {
@@ -148,52 +147,7 @@ pub(crate) fn get_filtered_row_indices_cached(
                         }
                         matches
                     })
-                    .unwrap_or(false);
-
-                if !parent_key_matches {
-                    return false;
-                }
-
-                // Check all ancestor keys match (grand_N_parent columns)
-                // ancestor_keys is ordered: [deepest ancestor, ..., immediate parent's parent_key]
-                // For depth=3: ancestor_keys = [grand_2_value, grand_1_value, parent_key_value]
-                // We iterate columns sequentially and match against ancestor_keys in order
-                if !nav_ctx.ancestor_keys.is_empty() {
-                    let mut ancestor_idx = 0;
-                    
-                    // Iterate through columns and match grand_N_parent columns against ancestor_keys sequentially
-                    for (col_idx, col) in metadata.columns.iter().enumerate() {
-                        if col.header.starts_with("grand_") && col.header.ends_with("_parent") {
-                            // Match this grand column with the next ancestor_key
-                            if ancestor_idx < nav_ctx.ancestor_keys.len() {
-                                let expected_key = &nav_ctx.ancestor_keys[ancestor_idx];
-                                if let Some(row_grand_key) = row.get(col_idx) {
-                                    if row_grand_key != expected_key {
-                                        bevy::log::debug!(
-                                            "Filtering row_idx={}: {} mismatch - expected '{}' (ancestor_keys[{}]), got '{}'",
-                                            row_idx, col.header, expected_key, ancestor_idx, row_grand_key
-                                        );
-                                        return false; // Mismatch
-                                    } else {
-                                        bevy::log::debug!(
-                                            "Filtering row_idx={}: {} match - '{}' == ancestor_keys[{}]",
-                                            row_idx, col.header, row_grand_key, ancestor_idx
-                                        );
-                                    }
-                                } else {
-                                    bevy::log::debug!(
-                                        "Filtering row_idx={}: {} column missing in row data",
-                                        row_idx, col.header
-                                    );
-                                    return false; // Column missing
-                                }
-                                ancestor_idx += 1;
-                            }
-                        }
-                    }
-                }
-
-                true
+                    .unwrap_or(false)
             })
             .collect();
     }

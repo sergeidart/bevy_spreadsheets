@@ -11,8 +11,5 @@ pub mod ui_cache;
 
 // Re-export commonly used functions for convenience
 pub use ai_include_handlers::*;
-pub use category_handlers::*;
 pub use column_handlers::*;
-pub use sheet_handlers::*;
 pub use structure_handlers::*;
-pub use ui_cache::*;

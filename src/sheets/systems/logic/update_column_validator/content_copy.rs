@@ -58,12 +58,8 @@ pub fn copy_parent_content_to_structure_table(
     
     // Check for hierarchy columns
     let has_parent_key = parent_columns.iter().any(|c| normalize_column_name(c) == normalize_column_name("parent_key"));
-    let grand_columns: Vec<&String> = parent_columns.iter()
-        .filter(|c| c.starts_with("grand_") && c.ends_with("_parent"))
-        .collect();
     
     info!("  - Has parent_key: {}", has_parent_key);
-    info!("  - Grand columns: {:?}", grand_columns);
     info!("======================================");
     
     // Find key column name (skip id, row_index)
@@ -146,59 +142,13 @@ pub fn copy_parent_content_to_structure_table(
             );
         }
         
-        // Collect columns in order from structure_columns: grand_N_parent, parent_key, then data columns
+        // Collect columns in order from structure_columns: parent_key, then data columns
         let mut insert_columns: Vec<String> = Vec::new();
         let mut insert_values: Vec<rusqlite::types::Value> = Vec::new();
         
         // Process all columns from structure_columns (excluding row_index which is already filtered)
         for col in columns_to_copy.iter() {
             let col_header = &col.header;
-            
-            // Handle grand_N_parent columns
-            if col_header.starts_with("grand_") && col_header.ends_with("_parent") {
-                let n_str = col_header.trim_start_matches("grand_").trim_end_matches("_parent");
-                if let Ok(n) = n_str.parse::<usize>() {
-                    let value = if n == 1 {
-                        // grand_1_parent = parent's parent_key
-                        let parent_key_normalized = normalize_column_name("parent_key");
-                        if let Some(&parent_key_idx) = parent_col_map.get(&parent_key_normalized) {
-                            let val = parent_row.get(parent_key_idx).cloned().unwrap_or(rusqlite::types::Value::Null);
-                            // Only log every 1000th row or first row
-                            if child_row_index % 1000 == 0 || child_row_index == 0 {
-                                info!("  {} <- parent's parent_key (col {}) = {:?}", col_header, parent_key_idx, val);
-                            }
-                            val
-                        } else {
-                            // Only log once at first row
-                            if child_row_index == 0 {
-                                info!("  {}: parent has no parent_key (root table), using NULL", col_header);
-                            }
-                            rusqlite::types::Value::Null
-                        }
-                    } else {
-                        // grand_N_parent = parent's grand_(N-1)_parent
-                        let source_name = format!("grand_{}_parent", n - 1);
-                        let source_normalized = normalize_column_name(&source_name);
-                        if let Some(&source_idx) = parent_col_map.get(&source_normalized) {
-                            let val = parent_row.get(source_idx).cloned().unwrap_or(rusqlite::types::Value::Null);
-                            // Only log every 1000th row or first row
-                            if child_row_index % 1000 == 0 || child_row_index == 0 {
-                                info!("  {} <- parent's {} (col {}) = {:?}", col_header, source_name, source_idx, val);
-                            }
-                            val
-                        } else {
-                            // Only log once at first row
-                            if child_row_index == 0 {
-                                info!("  {}: parent has no {}, using NULL", col_header, source_name);
-                            }
-                            rusqlite::types::Value::Null
-                        }
-                    };
-                    insert_columns.push(col_header.clone());
-                    insert_values.push(value);
-                }
-                continue;
-            }
             
             // Handle parent_key column
             if col_header.eq_ignore_ascii_case("parent_key") {

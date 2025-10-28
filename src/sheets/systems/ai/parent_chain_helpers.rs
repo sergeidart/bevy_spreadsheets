@@ -5,10 +5,11 @@ use bevy::prelude::*;
 
 use crate::sheets::resources::SheetRegistry;
 use crate::sheets::definitions::SheetMetadata;
+use crate::sheets::systems::logic::lineage_helpers;
 use crate::ui::elements::editor::state::EditorWindowState;
 
-/// Extract parent_key column and grand_*_parent columns from metadata
-/// Returns (parent_key_col, grand_cols) where grand_cols is a vector of (column_index, N)
+/// Extract parent_key column from metadata
+/// Returns parent_key column index if found
 pub fn extract_parent_columns(metadata: &SheetMetadata) -> (Option<usize>, Vec<(usize, usize)>) {
     let parent_key_col = metadata
         .columns
@@ -16,25 +17,8 @@ pub fn extract_parent_columns(metadata: &SheetMetadata) -> (Option<usize>, Vec<(
         .position(|c| c.header.eq_ignore_ascii_case("parent_key"))
         .or_else(|| if metadata.is_structure_table() { Some(1) } else { None });
 
-    let grand_cols: Vec<(usize, usize)> = metadata
-        .columns
-        .iter()
-        .enumerate()
-        .filter_map(|(i, c)| {
-            if c.header.starts_with("grand_") && c.header.ends_with("_parent") {
-                if let Some(n_str) = c
-                    .header
-                    .strip_prefix("grand_")
-                    .and_then(|s| s.strip_suffix("_parent"))
-                {
-                    if let Ok(n) = n_str.parse::<usize>() {
-                        return Some((i, n));
-                    }
-                }
-            }
-            None
-        })
-        .collect();
+    // No longer extract grand_* columns (they've been removed)
+    let grand_cols: Vec<(usize, usize)> = vec![];
 
     (parent_key_col, grand_cols)
 }
@@ -62,30 +46,22 @@ pub fn row_matches_parent_chain(
         }
     }
 
-    // Check grand_N_parent columns
-    if expected_parent_indices.len() > 1 {
-        let clen = expected_parent_indices.len();
-        for (gcol, n) in grand_cols {
-            if clen > *n {
-                let expected_idx = expected_parent_indices[clen - 1 - *n];
-                let expected_str = expected_idx.to_string();
-                if row.get(*gcol).map(|s| s.as_str()) != Some(expected_str.as_str()) {
-                    return false;
-                }
-            }
-        }
-    }
-
+    // No longer check grand_N_parent columns (they've been removed)
+    // Note: This means we only match on immediate parent, not full chain
+    // Full chain filtering would require walking the parent hierarchy
+    
     true
 }
 
 /// Convert human-readable parent names to row_index values
-/// Walks up the parent chain to find the row_index for each parent name
 /// 
+/// This function resolves display names (e.g., ["Battlefield 6", "PC"]) to the parent_key
+/// row_index by using the unified lineage resolution system.
+///
 /// Priority order:
 /// 1. Virtual structure stack (for JSON structure fields)
-/// 2. Structure navigation stack (for real structure tables)
-/// 3. Metadata structure_parent (for direct parent table lookup)
+/// 2. Structure navigation stack (for real structure tables) - uses pre-resolved indices
+/// 3. Lineage resolution (for AI-provided parent names) - resolves display names to row_index
 pub fn convert_parent_names_to_row_indices(
     parent_names: &[String],
     state: &EditorWindowState,
@@ -117,26 +93,21 @@ pub fn convert_parent_names_to_row_indices(
     }
 
     // PRIORITY 2: Check if we're in a real structure navigation (real child tables)
+    // In this case, we already have the resolved row indices
     if !state.structure_navigation_stack.is_empty() {
-        // For real structure sheets, we need to parse parent_row_key to get the row index
+        // Use ancestor_row_indices which contain numeric row_index values
+        // These are separate from ancestor_keys (which contain display values for UI)
         for nav_ctx in &state.structure_navigation_stack {
-            if let Ok(parent_idx) = nav_ctx.parent_row_key.parse::<usize>() {
-                indices.push(parent_idx);
-            } else {
-                warn!(
-                    "convert_parent_names_to_row_indices: Failed to parse parent_row_key '{}' as usize",
-                    nav_ctx.parent_row_key
-                );
-            }
-        }
-        
-        // Also add ancestor keys
-        for nav_ctx in &state.structure_navigation_stack {
-            for ancestor_key in &nav_ctx.ancestor_keys {
-                if let Ok(ancestor_idx) = ancestor_key.parse::<usize>() {
-                    if !indices.contains(&ancestor_idx) {
-                        indices.push(ancestor_idx);
+            for ancestor_row_idx in &nav_ctx.ancestor_row_indices {
+                if let Ok(idx) = ancestor_row_idx.parse::<usize>() {
+                    if !indices.contains(&idx) {
+                        indices.push(idx);
                     }
+                } else {
+                    warn!(
+                        "convert_parent_names_to_row_indices: Failed to parse ancestor_row_index '{}' as usize",
+                        ancestor_row_idx
+                    );
                 }
             }
         }
@@ -148,7 +119,8 @@ pub fn convert_parent_names_to_row_indices(
         return indices;
     }
 
-    // PRIORITY 3: Try to resolve from metadata structure_parent
+    // PRIORITY 3: Resolve from parent names using unified lineage resolution
+    // This is for AI-provided parent names that need to be converted to row_index
     let (cat_ctx, sheet_ctx) = state.current_sheet_context();
     let Some(sheet_name) = sheet_ctx else {
         warn!("convert_parent_names_to_row_indices: No sheet context available");
@@ -172,75 +144,32 @@ pub fn convert_parent_names_to_row_indices(
         return indices;
     };
 
-    // For each parent name, look it up in the parent table
-    let mut current_parent_sheet = parent_info.parent_sheet.clone();
-    let mut current_parent_category = parent_info.parent_category.clone();
-
-    for parent_name in parent_names {
-        let Some(parent_sheet_ref) = registry.get_sheet(&current_parent_category, &current_parent_sheet) else {
-            break;
-        };
-
-        let Some(parent_meta) = &parent_sheet_ref.metadata else {
-            break;
-        };
-
-        // Find the first data column index (skip technical columns)
-        let first_data_col = find_first_data_column(parent_meta);
-
-        let Some(data_col_idx) = first_data_col else {
-            break;
-        };
-
-        // Find the row where the first data column matches the parent name
-        let mut found_row_idx = None;
-        for (row_idx, row) in parent_sheet_ref.grid.iter().enumerate() {
-            if let Some(cell_value) = row.get(data_col_idx) {
-                if cell_value == parent_name {
-                    found_row_idx = Some(row_idx);
-                    break;
-                }
-            }
-        }
-
-        let Some(row_idx) = found_row_idx else {
-            // Parent name not found, can't continue chain
-            warn!(
-                "Parent name '{}' not found in table '{}', stopping chain lookup",
-                parent_name, current_parent_sheet
-            );
-            break;
-        };
-
+    // Use the unified lineage resolution to convert parent names to parent_key
+    let parent_sheet = &parent_info.parent_sheet;
+    
+    info!(
+        "convert_parent_names_to_row_indices: Resolving parent names {:?} in parent sheet '{}'",
+        parent_names, parent_sheet
+    );
+    
+    if let Some(parent_key) = lineage_helpers::resolve_parent_key_from_lineage(
+        registry,
+        &cat_ctx,
+        parent_sheet,
+        parent_names,
+    ) {
+        indices.push(parent_key);
         info!(
-            "Found parent '{}' at row_index={} in table '{}'",
-            parent_name, row_idx, current_parent_sheet
+            "convert_parent_names_to_row_indices: Resolved to parent_key={}",
+            parent_key
         );
-        indices.push(row_idx);
-
-        // Move up to next parent in chain if there is one
-        if let Some(grandparent_link) = &parent_meta.structure_parent {
-            current_parent_sheet = grandparent_link.parent_sheet.clone();
-            current_parent_category = grandparent_link.parent_category.clone();
-        } else {
-            // No more parents in chain
-            break;
-        }
+    } else {
+        warn!(
+            "convert_parent_names_to_row_indices: Failed to resolve parent names {:?} in sheet '{}'",
+            parent_names, parent_sheet
+        );
     }
 
     info!("Final parent_row_indices={:?}", indices);
     indices
-}
-
-/// Find the first non-technical data column in metadata
-fn find_first_data_column(metadata: &SheetMetadata) -> Option<usize> {
-    metadata.columns.iter().position(|col| {
-        let lower = col.header.to_lowercase();
-        lower != "row_index"
-            && lower != "parent_key"
-            && !lower.starts_with("grand_")
-            && lower != "id"
-            && lower != "created_at"
-            && lower != "updated_at"
-    })
 }

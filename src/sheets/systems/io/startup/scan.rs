@@ -6,7 +6,7 @@ use crate::sheets::{
     systems::io::{
         get_default_data_base_path,
         save::save_single_sheet,
-        startup::{grid_load, metadata_load, registration, scan_handlers},
+        startup::{grid_load, metadata_load, scan_handlers},
         validator,
     },
 };

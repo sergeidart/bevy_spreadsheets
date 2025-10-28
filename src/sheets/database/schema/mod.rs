@@ -7,5 +7,4 @@ mod table_creation;
 
 // Re-export everything for backward compatibility
 pub use helpers::*;
-pub use migrations::*;
 pub use table_creation::*;

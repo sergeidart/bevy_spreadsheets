@@ -64,37 +64,21 @@ pub fn handle_add_row_request(
                             row0[0] = "PENDING".to_string();  // Placeholder until DB assigns actual row_index
                         }
                         
-                        // Auto-fill parent_key and ancestor columns if we have structure context
+                        // Auto-fill parent_key if we have structure context
                         if let Some(ctx) = &structure_context {
-                            // Unified ancestor logic: ancestor_keys contains ALL parent values
-                            // ordered from deepest to shallowest: [grand_N, ..., grand_1, parent_key_value]
-                            // We iterate through ALL columns and match by name (grand_N_parent, parent_key)
-                            
-                            info!("Auto-filling structure columns: ancestor_keys={:?}, parent_key='{}'", 
-                                  ctx.ancestor_keys, ctx.parent_key);
-                            
-                            let mut ancestor_idx = 0;
-                            
-                            // Iterate through all columns (skip row_index at index 0)
-                            for col_idx in 1..metadata.columns.len() {
-                                if ancestor_idx >= ctx.ancestor_keys.len() {
-                                    break; // No more ancestor values to assign
-                                }
+                            // Fill parent_key from ancestor_row_indices (NUMERIC VALUES, not display values)
+                            // First element is the immediate parent's row_index
+                            if let Some(parent_row_idx_str) = ctx.ancestor_row_indices.first() {
+                                info!("Auto-filling parent_key with row_index: '{}'", parent_row_idx_str);
                                 
-                                if let Some(col) = metadata.columns.get(col_idx) {
-                                    // Check if this is a grand_N_parent column
-                                    if col.header.starts_with("grand_") && col.header.ends_with("_parent") {
-                                        info!("  Filling column[{}] '{}' with ancestor_keys[{}] = '{}'", 
-                                              col_idx, col.header, ancestor_idx, ctx.ancestor_keys[ancestor_idx]);
-                                        row0[col_idx] = ctx.ancestor_keys[ancestor_idx].clone();
-                                        ancestor_idx += 1;
-                                    }
-                                    // Check if this is the parent_key column
-                                    else if col.header.eq_ignore_ascii_case("parent_key") {
-                                        info!("  Filling column[{}] 'parent_key' with ancestor_keys[{}] = '{}'", 
-                                              col_idx, ancestor_idx, ctx.ancestor_keys[ancestor_idx]);
-                                        row0[col_idx] = ctx.ancestor_keys[ancestor_idx].clone();
-                                        ancestor_idx += 1;
+                                // Find parent_key column
+                                for col_idx in 1..metadata.columns.len() {
+                                    if let Some(col) = metadata.columns.get(col_idx) {
+                                        if col.header.eq_ignore_ascii_case("parent_key") {
+                                            info!("  Filling column[{}] 'parent_key' = '{}'", col_idx, parent_row_idx_str);
+                                            row0[col_idx] = parent_row_idx_str.clone();
+                                            break;
+                                        }
                                     }
                                 }
                             }

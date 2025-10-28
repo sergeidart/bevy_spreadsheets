@@ -8,7 +8,7 @@ use std::path::Path;
 use super::super::error::{DbError, DbResult};
 use super::super::{schema, writer::DbWriter};
 use super::dependency_handler::DependencyHandler;
-use super::io_helpers::{IoHelpers, JsonSheetPair};
+use super::io_helpers::IoHelpers;
 use super::json_extractor::{expand_value_to_rows, parse_cell_json};
 use crate::sheets::definitions::{ColumnValidator, SheetMetadata};
 

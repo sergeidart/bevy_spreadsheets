@@ -1,7 +1,7 @@
 // src/ui/elements/editor/state_definitions.rs
 // Type definitions and enums for editor state
 
-use crate::sheets::definitions::{ColumnDataType, ColumnValidator};
+use crate::sheets::definitions::ColumnDataType;
 use bevy::prelude::Resource;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -138,9 +138,14 @@ pub struct StructureNavigationContext {
     pub parent_sheet_name: String,
     /// Parent row's primary key value (for filtering on parent_key column)
     pub parent_row_key: String,
-    /// Ancestor keys for multi-level structures (grand_1_parent, grand_2_parent, etc.)
-    /// Order: [grand_N_parent, ..., grand_1_parent] (deepest to shallowest)
+    /// Ancestor display values for UI breadcrumb display
+    /// Order: [deepest_ancestor_display, ..., immediate_parent_display]
+    /// Example: ["Game Name", "Platform Name"] for Games -> Platforms -> Store navigation
     pub ancestor_keys: Vec<String>,
+    /// Ancestor row_index values for AI parent chain filtering
+    /// Order matches ancestor_keys: [deepest_ancestor_row_index, ..., immediate_parent_row_index]
+    /// Example: ["3770", "1234"] - numeric strings that can be parsed as usize
+    pub ancestor_row_indices: Vec<String>,
     /// Column name in parent that was clicked
     pub parent_column_name: String,
 }
@@ -232,8 +237,6 @@ pub struct StructureReviewEntry {
     pub has_changes: bool,
     pub accepted: bool,
     pub rejected: bool,
-    /// Whether all rows inside the structure have been decided (accepted or declined).
-    /// This is true when the structure review is complete, regardless of accept/reject.
     pub decided: bool,
     /// The original structure rows parsed from the cell
     pub original_rows: Vec<Vec<String>>,
@@ -245,9 +248,7 @@ pub struct StructureReviewEntry {
     pub differences: Vec<Vec<bool>>,
     /// Per-row operation flags: None = no change, Some(RowOperation) = tracked action
     pub row_operations: Vec<RowOperation>,
-    /// Schema field headers for proper JSON serialization
     pub schema_headers: Vec<String>,
-    /// Number of original rows (before AI additions) - used to identify AI-added rows
     pub original_rows_count: usize,
 }
 
@@ -410,6 +411,10 @@ pub struct EditorWindowState {
     /// Flag to trigger cache reload from DB when switching sheets
     pub force_cache_reload: bool,
     pub scroll_to_row_index: Option<usize>,
+    
+    /// Parent lineage cache: (category, sheet_name, row_index) -> Vec<(table_name, display_value, row_index)>
+    /// Cleared when switching databases or categories to ensure fresh data
+    pub parent_lineage_cache: HashMap<(Option<String>, String, usize), Vec<(String, String, usize)>>,
 
     // Core Interaction Mode
     pub current_interaction_mode: SheetInteractionState,
@@ -444,35 +449,25 @@ pub struct EditorWindowState {
     pub summarizer_copy_status: String,
     // Multiple selected columns for Summarizer when edited in the shared popup
     pub summarizer_selected_columns: Vec<Option<usize>>,
-
-    // Confirmation dialogs
     pub pending_validator_change_requires_confirmation: bool,
     pub pending_validator_new_validator_summary: Option<String>,
-    // NEW: store the validator choice awaiting confirmation (serialized summary & type flag)
     pub pending_validator_target_is_structure: bool,
     // Key Column (context-only) selection ephemeral states
     pub options_structure_key_parent_column_temp: Option<usize>, // during initial creation
     pub options_existing_structure_key_parent_column: Option<usize>, // editing existing structure
-    // Number of context-only key columns prepended to last AI send
     pub ai_context_only_prefix_count: usize,
-    // Pending apply structure key selection (category, sheet, structure_col_index, new key parent col)
     pub pending_structure_key_apply: Option<(Option<String>, String, usize, Option<usize>)>,
     // Stored context-only prefix values per row (for review UI display): Vec of (header, value)
     pub ai_context_prefix_by_row: HashMap<usize, Vec<(String, String)>>,
-
-    // UI layout prefs (persisted): expand/collapse of pickers
     pub category_picker_expanded: bool,
     pub sheet_picker_expanded: bool,
     pub ai_groups_expanded: bool,
-
-    // Edit Mode expanded row visibility (toolbar-expander)
     pub show_edit_mode_panel: bool,
 
     // UI alignment helpers (not persisted): store x positions where toggles were placed
     pub last_ai_button_min_x: f32,
     pub last_edit_mode_button_min_x: f32,
     pub last_toybox_button_min_x: f32,
-
     // Toybox (container for Random Picker + Summarizer)
     pub show_toybox_menu: bool,
     pub toybox_mode: ToyboxMode,
@@ -482,7 +477,6 @@ pub struct EditorWindowState {
     pub ai_throttled_apply_queue: VecDeque<ThrottledAiAction>,
     pub ai_throttled_batch_add_queue: VecDeque<(Option<String>, String, Vec<Vec<(usize, String)>>)>,
     pub ai_batch_has_undecided_merge: bool,
-    // NEW: Prompt popup for zero-row AI request
     pub show_ai_prompt_popup: bool,
     pub ai_prompt_input: String,
     pub last_ai_prompt_only: bool,

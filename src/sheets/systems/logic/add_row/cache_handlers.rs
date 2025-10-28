@@ -35,7 +35,12 @@ pub(super) struct StructureContext {
     pub parent_key: String,
     /// Ancestor keys ordered from deepest to shallowest (matches grand_N_parent order)
     /// Example: [grand_2_parent_value, grand_1_parent_value]
+    /// These are DISPLAY VALUES for UI (human-readable)
     pub ancestor_keys: Vec<String>,
+    /// Ancestor row_index values (numeric strings that match ancestor_keys order)
+    /// Example: ["3770", "1234"]
+    /// These are ROW_INDEX VALUES for database persistence (numeric)
+    pub ancestor_row_indices: Vec<String>,
 }
 
 /// Extracts structure context from editor state (parent_key + ancestor_keys for structure sheets)
@@ -64,6 +69,7 @@ pub(super) fn get_structure_context(
                                     return Some(StructureContext {
                                         parent_key: key_value.clone(),
                                         ancestor_keys: Vec::new(), // TODO: populate from parent row
+                                        ancestor_row_indices: Vec::new(), // TODO: populate from parent row
                                     });
                                 }
                             }
@@ -81,6 +87,7 @@ pub(super) fn get_structure_context(
         Some(StructureContext {
             parent_key: nav_ctx.parent_row_key.clone(),
             ancestor_keys: nav_ctx.ancestor_keys.clone(),
+            ancestor_row_indices: nav_ctx.ancestor_row_indices.clone(),
         })
     } else {
         None

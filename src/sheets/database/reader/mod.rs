@@ -7,8 +7,6 @@ use crate::sheets::definitions::{
 };
 use rusqlite::Connection;
 
-pub use queries::*;
-
 pub struct DbReader;
 
 impl DbReader {
@@ -273,27 +271,19 @@ impl DbReader {
         is_structure: bool,
     ) -> DbResult<Vec<ColumnDefinition>> {
         // Filter out technical columns from persisted metadata
+        // NOTE: grand_N_parent columns are NO LONGER technical columns - they are regular persisted data
         columns.retain(|c| {
             c.header != "id"
                 && c.header != "parent_key"
                 && c.header != "row_index"
                 && c.header != "temp_new_row_index"
                 && c.header != "_obsolete_temp_new_row_index"
-                && !(c.header.starts_with("grand_") && c.header.ends_with("_parent"))
         });
 
         if is_structure {
-            // Get grand_N_parent columns from physical schema
-            let db_columns = queries::get_physical_column_names(conn, table_name)?;
-            let mut grand_parent_columns: Vec<String> = db_columns
-                .iter()
-                .filter(|name| name.starts_with("grand_") && name.ends_with("_parent"))
-                .cloned()
-                .collect();
-            grand_parent_columns.sort_by(|a, b| b.cmp(a)); // Descending order
-
-            let tech_col_count = 2 + grand_parent_columns.len();
-            let mut with_tech = Vec::with_capacity(columns.len() + tech_col_count);
+            // Structure tables have exactly 2 technical columns: row_index and parent_key
+            // grand_N_parent columns (if they exist) are now treated as regular data columns
+            let mut with_tech = Vec::with_capacity(columns.len() + 2);
 
             // 1. row_index (hidden by default)
             with_tech.push(Self::create_technical_column(
@@ -302,23 +292,14 @@ impl DbReader {
                 true,
             ));
 
-            // 2. grand_N_parent columns (visible as green read-only)
-            for grand_col_name in grand_parent_columns {
-                with_tech.push(Self::create_technical_column(
-                    &grand_col_name,
-                    ColumnDataType::String,
-                    false,
-                ));
-            }
-
-            // 3. parent_key (visible as green read-only)
+            // 2. parent_key (visible as green read-only)
             with_tech.push(Self::create_technical_column(
                 "parent_key",
                 ColumnDataType::String,
                 false,
             ));
 
-            // 4. Data columns
+            // 3. Data columns (including grand_N_parent if they exist as legacy columns)
             with_tech.extend(columns);
             Ok(with_tech)
         } else {

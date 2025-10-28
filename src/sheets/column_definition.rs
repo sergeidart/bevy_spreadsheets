@@ -41,6 +41,9 @@ pub struct ColumnDefinition {
     pub structure_column_order: Option<Vec<usize>>,
     #[serde(default)]
     pub structure_key_parent_column_index: Option<usize>,
+    /// DEPRECATED: Previously stored indices of grand_N_parent columns.
+    /// Now always empty/None - lineage is walked programmatically.
+    /// Kept for backward compatibility with old metadata files.
     #[serde(default)]
     pub structure_ancestor_key_parent_column_indices: Option<Vec<usize>>,
 }

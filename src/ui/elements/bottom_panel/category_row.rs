@@ -93,6 +93,9 @@ pub fn show_category_picker<'a, 'w>(
     }
     
     if state.selected_category != previous_selected_category {
+        // Clear lineage cache when switching categories/databases
+        state.parent_lineage_cache.clear();
+        
         if state.selected_sheet_name.is_none() {
             state.reset_interaction_modes_and_selections();
         }

@@ -52,12 +52,12 @@ impl<'a> RowContext<'a> {
 
     /// Build hierarchically filtered options for a specific ancestor level
     ///
-    /// key_idx: The index of the ancestor key (0 = deepest/grand_N, N-1 = shallowest/grand_1)
+    /// key_idx: The index of the ancestor key (0 = root/top-level parent, N-1 = immediate parent)
     /// current_ancestors: The current DISPLAY TEXT values of all ancestors for this row
     ///
     /// Returns: Vec of display text options that the user can select
     ///
-    /// Note: The ancestor columns actually store row_index values, not display text.
+    /// Note: The parent_key column stores row_index values, not display text.
     /// This method returns display text for the UI, and the calling code must convert
     /// the selected display text back to row_index when storing.
     fn build_ancestor_options(&self, key_idx: usize, current_ancestors: &[String]) -> Vec<String> {
@@ -100,7 +100,6 @@ impl<'a> RowContext<'a> {
             let h = c.header.to_lowercase();
             h != "row_index"
                 && h != "parent_key"
-                && !h.starts_with("grand_")
                 && h != "id"
                 && h != "created_at"
                 && h != "updated_at"
@@ -125,124 +124,102 @@ impl<'a> RowContext<'a> {
             return result;
         }
 
-        // For deeper levels, we need to filter based on higher-level ancestors
-        // We need to convert the display text of higher ancestors to row_index values
-        // and then filter the current level's parent sheet by matching those row_index values
-
-        // Build a map of ancestor filters: (column_index, required_row_index)
-        let mut ancestor_filters: Vec<(usize, i64)> = Vec::new();
-
-        // Process each higher-level ancestor (those before key_idx)
-        for higher_key_idx in 0..key_idx {
-            if higher_key_idx >= current_ancestors.len() {
-                break;
-            }
-
-            let ancestor_display_text = &current_ancestors[higher_key_idx];
-            if ancestor_display_text.is_empty() {
-                continue; // Skip empty ancestors
-            }
-
-            // Find which grand_*_parent column in the current parent sheet we need to filter
-            // The distance from current level determines the grand_N number
-            let grand_level = key_idx - higher_key_idx;
-            let grand_col_name = format!("grand_{}_parent", grand_level);
-
-            let filter_col_idx = match meta.columns.iter().position(|c|
-                c.header.to_lowercase() == grand_col_name
-            ) {
-                Some(idx) => idx,
-                None => continue, // This ancestor level doesn't have this grand_*_parent column
-            };
-
-            // Now we need to find the row_index for this ancestor's display text
-            // Get the grandparent sheet (the sheet at higher_key_idx level)
-            let (grandparent_category, grandparent_sheet_name) = if let Some(gp_vs) = self.state.virtual_structure_stack.get(higher_key_idx) {
-                (gp_vs.parent.parent_category.clone(), gp_vs.parent.parent_sheet.clone())
-            } else {
-                // Derive grandparent sheet from current sheet name
-                match &self.state.selected_sheet_name {
-                    Some(current_sheet) => {
-                        let mut target_sheet = current_sheet.as_str();
-                        let mut derivation_failed = false;
-                        for _ in 0..=(higher_key_idx) {
-                            target_sheet = match target_sheet.rsplit_once('_') {
-                                Some((parent, _)) => parent,
-                                None => {
-                                    bevy::log::warn!("  Failed to derive grandparent sheet at higher_key_idx={}", higher_key_idx);
-                                    derivation_failed = true;
-                                    break;
+        // For deeper levels, we need to filter based on the immediate parent's context
+        // Since grand_* columns have been removed, we simplify to only check immediate parent
+        // matching. For full hierarchy filtering, would need to walk parent chain for each row.
+        //
+        // Simplified approach: If we have a parent at key_idx-1, filter by that parent's row_index
+        // This gives reasonable filtering without the complexity of full chain walking.
+        
+        if key_idx > 0 && key_idx <= current_ancestors.len() {
+            let immediate_parent_display = &current_ancestors[key_idx - 1];
+            
+            if !immediate_parent_display.is_empty() {
+                // Find the immediate parent's sheet (one level up)
+                let parent_of_parent = if let Some(vs) = self.state.virtual_structure_stack.get(key_idx - 1) {
+                    (vs.parent.parent_category.clone(), vs.parent.parent_sheet.clone())
+                } else if let Some(current_sheet) = &self.state.selected_sheet_name {
+                    // Derive parent sheet by removing last underscore segment
+                    let mut target = current_sheet.as_str();
+                    for _ in 0..(key_idx - 1) {
+                        target = match target.rsplit_once('_') {
+                            Some((parent, _)) => parent,
+                            None => {
+                                // Can't derive, return all options
+                                let mut options = HashSet::new();
+                                for row in &parent_sheet.grid {
+                                    if let Some(display_value) = row.get(display_col_idx) {
+                                        if !display_value.is_empty() {
+                                            options.insert(display_value.clone());
+                                        }
+                                    }
                                 }
-                            };
-                        }
-                        if derivation_failed {
-                            continue; // Skip this ancestor level
-                        }
-                        (self.state.selected_category.clone(), target_sheet.to_string())
+                                let mut result: Vec<String> = options.into_iter().collect();
+                                result.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+                                return result;
+                            }
+                        };
                     }
-                    None => continue,
-                }
-            };
+                    (self.state.selected_category.clone(), target.to_string())
+                } else {
+                    // No context, return all options
+                    let mut options = HashSet::new();
+                    for row in &parent_sheet.grid {
+                        if let Some(display_value) = row.get(display_col_idx) {
+                            if !display_value.is_empty() {
+                                options.insert(display_value.clone());
+                            }
+                        }
+                    }
+                    let mut result: Vec<String> = options.into_iter().collect();
+                    result.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+                    return result;
+                };
 
-            let grandparent_sheet = match self.registry.get_sheet(&grandparent_category, &grandparent_sheet_name) {
-                Some(s) => s,
-                None => continue,
-            };
-
-            let grandparent_meta = match &grandparent_sheet.metadata {
-                Some(m) => m,
-                None => continue,
-            };
-
-            // Find display column in grandparent sheet
-            let grandparent_display_col = match grandparent_meta.columns.iter().position(|c| {
-                let h = c.header.to_lowercase();
-                h != "row_index"
-                    && h != "parent_key"
-                    && !h.starts_with("grand_")
-                    && h != "id"
-                    && h != "created_at"
-                    && h != "updated_at"
-            }) {
-                Some(idx) => idx,
-                None => continue,
-            };
-
-            // Find the row in grandparent sheet where display column matches ancestor_display_text
-            // and extract its row_index (column 0)
-            let ancestor_row_index: i64 = match grandparent_sheet.grid.iter().find(|row| {
-                row.get(grandparent_display_col)
-                    .map(|v| v == ancestor_display_text)
-                    .unwrap_or(false)
-            }) {
-                Some(row) => {
-                    match row.get(0).and_then(|s| s.parse::<i64>().ok()) {
-                        Some(idx) => idx,
-                        None => continue,
+                // Get the immediate parent's sheet to find its row_index
+                if let Some(parent_of_parent_sheet) = self.registry.get_sheet(&parent_of_parent.0, &parent_of_parent.1) {
+                    if let Some(parent_of_parent_meta) = &parent_of_parent_sheet.metadata {
+                        // Find display column in parent's parent sheet
+                        if let Some(parent_display_col) = parent_of_parent_meta.columns.iter().position(|c| {
+                            let h = c.header.to_lowercase();
+                            h != "row_index" && h != "parent_key" && h != "id" && h != "created_at" && h != "updated_at"
+                        }) {
+                            // Find row_index where display matches immediate_parent_display
+                            if let Some(parent_row_index) = parent_of_parent_sheet.grid.iter()
+                                .find(|row| row.get(parent_display_col).map(|v| v == immediate_parent_display).unwrap_or(false))
+                                .and_then(|row| row.get(0).and_then(|s| s.parse::<i64>().ok()))
+                            {
+                                // Now filter current parent_sheet by parent_key == parent_row_index
+                                if let Some(parent_key_col) = meta.columns.iter().position(|c| c.header.eq_ignore_ascii_case("parent_key")) {
+                                    let mut options = HashSet::new();
+                                    for row in &parent_sheet.grid {
+                                        if let Some(pk_val) = row.get(parent_key_col).and_then(|v| v.parse::<i64>().ok()) {
+                                            if pk_val == parent_row_index {
+                                                if let Some(display_value) = row.get(display_col_idx) {
+                                                    if !display_value.is_empty() {
+                                                        options.insert(display_value.clone());
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    let mut result: Vec<String> = options.into_iter().collect();
+                                    result.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+                                    return result;
+                                }
+                            }
+                        }
                     }
                 }
-                None => continue, // Couldn't find matching row
-            };
-
-            ancestor_filters.push((filter_col_idx, ancestor_row_index));
+            }
         }
 
-        // Now filter rows in the parent sheet based on ancestor row_index values
+        // Fallback: return all options (no filtering)
         let mut options = HashSet::new();
         for row in &parent_sheet.grid {
-            // Check if this row matches all ancestor filters
-            let matches_ancestors = ancestor_filters.iter().all(|(col_idx, expected_row_index)| {
-                row.get(*col_idx)
-                    .and_then(|v| v.parse::<i64>().ok())
-                    .map(|idx| idx == *expected_row_index)
-                    .unwrap_or(false)
-            });
-
-            if matches_ancestors {
-                if let Some(display_value) = row.get(display_col_idx) {
-                    if !display_value.is_empty() {
-                        options.insert(display_value.clone());
-                    }
+            if let Some(display_value) = row.get(display_col_idx) {
+                if !display_value.is_empty() {
+                    options.insert(display_value.clone());
                 }
             }
         }

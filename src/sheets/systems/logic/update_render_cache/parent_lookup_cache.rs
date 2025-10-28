@@ -51,7 +51,6 @@ pub fn build_parent_lookup_cache(
                     let lower = col.header.to_lowercase();
                     lower != "row_index"
                         && lower != "parent_key"
-                        && !lower.starts_with("grand_")
                         && lower != "id"
                         && lower != "created_at"
                         && lower != "updated_at"

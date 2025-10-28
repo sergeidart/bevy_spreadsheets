@@ -3,7 +3,6 @@
 
 use bevy::prelude::*;
 use rusqlite::Connection;
-use std::collections::HashMap;
 
 use super::error::DbResult;
 

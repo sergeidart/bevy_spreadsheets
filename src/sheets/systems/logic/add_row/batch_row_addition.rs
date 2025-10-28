@@ -69,30 +69,18 @@ pub fn handle_add_rows_batch_request(
                                 row[0] = row_idx.to_string();
                             }
                             
-                            // Auto-fill parent_key and ancestor columns if we have structure context
+                            // Auto-fill parent_key if we have structure context
                             if let Some(ctx) = &structure_context {
-                                // Unified ancestor logic: ancestor_keys contains ALL parent values
-                                // ordered from deepest to shallowest: [grand_N, ..., grand_1, parent_key_value]
-                                // We iterate through ALL columns and match by name (grand_N_parent, parent_key)
-                                
-                                let mut ancestor_idx = 0;
-                                
-                                // Iterate through all columns (skip row_index at index 0)
-                                for col_idx in 1..metadata.columns.len() {
-                                    if ancestor_idx >= ctx.ancestor_keys.len() {
-                                        break; // No more ancestor values to assign
-                                    }
-                                    
-                                    if let Some(col) = metadata.columns.get(col_idx) {
-                                        // Check if this is a grand_N_parent column
-                                        if col.header.starts_with("grand_") && col.header.ends_with("_parent") {
-                                            row[col_idx] = ctx.ancestor_keys[ancestor_idx].clone();
-                                            ancestor_idx += 1;
-                                        }
-                                        // Check if this is the parent_key column
-                                        else if col.header.eq_ignore_ascii_case("parent_key") {
-                                            row[col_idx] = ctx.ancestor_keys[ancestor_idx].clone();
-                                            ancestor_idx += 1;
+                                // Fill parent_key from ancestor_row_indices (NUMERIC VALUES, not display values)
+                                // First element is the immediate parent's row_index
+                                if let Some(parent_row_idx_str) = ctx.ancestor_row_indices.first() {
+                                    // Find parent_key column
+                                    for col_idx in 1..metadata.columns.len() {
+                                        if let Some(col) = metadata.columns.get(col_idx) {
+                                            if col.header.eq_ignore_ascii_case("parent_key") {
+                                                row[col_idx] = parent_row_idx_str.clone();
+                                                break;
+                                            }
                                         }
                                     }
                                 }

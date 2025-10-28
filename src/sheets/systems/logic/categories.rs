@@ -1,16 +1,14 @@
 // src/sheets/systems/logic/categories.rs
 use crate::sheets::{
     database::connection::DbConnection,
-    definitions::SheetMetadata,
     events::{
-        RequestCreateCategory, RequestDeleteCategory, RequestDeleteSheetFile,
+        RequestCreateCategory, RequestDeleteCategory,
         RequestRenameCategory, SheetOperationFeedback,
     },
     resources::SheetRegistry,
     systems::io::get_default_data_base_path,
 };
 use bevy::prelude::*;
-use std::path::PathBuf;
 
 /// Handles creating a new empty category (database file)
 pub fn handle_create_category_request(

@@ -8,7 +8,7 @@ use crate::ui::elements::editor::state::{
 
 use super::blocks::RowKind;
 use super::context::{
-    get_structure_preview_rows, has_undecided_structures_in_context, is_parent_key_column,
+    has_undecided_structures_in_context, is_parent_key_column,
     matches_detail_path,
 };
 

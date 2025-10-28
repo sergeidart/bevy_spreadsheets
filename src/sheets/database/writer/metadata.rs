@@ -6,55 +6,68 @@ use super::super::schema::sql_type_for_column;
 use crate::sheets::definitions::{ColumnDataType, ColumnValidator};
 use rusqlite::{params, Connection, OptionalExtension};
 
-/// Convert runtime column index (which includes technical columns) to persisted column index
-/// (which excludes technical columns that are added at runtime).
+/// Convert runtime column index to the actual column_index value in the metadata table.
 /// 
-/// For regular tables: technical column is row_index at index 0
-/// For structure tables: technical columns are row_index (0) and parent_key (1)
+/// IMPORTANT: The runtime_column_index is the visual position (including technical columns),
+/// but we need to find the actual `column_index` value in the metadata table, which is stable
+/// regardless of column order, deletions, etc.
 /// 
-/// Returns the persisted index, or None if the column_index refers to a technical column
+/// This function:
+/// 1. Reads the current metadata to get the column name at the runtime position
+/// 2. Looks up that column's `column_index` value in the metadata table by name
+/// 3. Returns that `column_index` value (or None for technical columns)
 fn runtime_to_persisted_column_index(
     conn: &Connection,
     table_name: &str,
     runtime_column_index: usize,
-) -> DbResult<Option<usize>> {
-    // Determine if this is a structure table
-    let table_type: Option<String> = conn
+) -> DbResult<Option<i32>> {
+    // Read the full metadata to get the visual column list
+    let metadata = crate::sheets::database::reader::DbReader::read_metadata(conn, table_name)?;
+    
+    // Get the column at the runtime index
+    let Some(column) = metadata.columns.get(runtime_column_index) else {
+        bevy::log::warn!(
+            "Runtime column index {} out of bounds for table '{}' (has {} columns)",
+            runtime_column_index,
+            table_name,
+            metadata.columns.len()
+        );
+        return Ok(None);
+    };
+    
+    // Check if this is a technical column (row_index, parent_key, etc.)
+    let column_name = &column.header;
+    if column_name == "row_index" || column_name == "parent_key" || column_name == "id" {
+        bevy::log::debug!(
+            "Skipping metadata update for technical column '{}' at runtime index {} in table '{}'",
+            column_name,
+            runtime_column_index,
+            table_name
+        );
+        return Ok(None);
+    }
+    
+    // Look up the actual column_index value in the metadata table by column name
+    let meta_table = format!("{}_Metadata", table_name);
+    let column_index: Option<i32> = conn
         .query_row(
-            "SELECT table_type FROM _Metadata WHERE table_name = ?",
-            [table_name],
+            &format!("SELECT column_index FROM \"{}\" WHERE column_name = ? AND (deleted IS NULL OR deleted = 0)", meta_table),
+            params![column_name],
             |row| row.get(0),
         )
         .optional()?;
     
-    let is_structure = matches!(table_type.as_deref(), Some("structure"));
-    
-    if is_structure {
-        // Structure tables have row_index (0) and parent_key (1) as technical columns
-        if runtime_column_index < 2 {
-            // This is a technical column, should not be persisted
-            bevy::log::warn!(
-                "Attempted to persist metadata for technical column {} in structure table '{}'",
-                runtime_column_index,
-                table_name
-            );
-            return Ok(None);
-        }
-        // Subtract 2 to get persisted index
-        Ok(Some(runtime_column_index - 2))
-    } else {
-        // Regular tables have row_index (0) as technical column
-        if runtime_column_index == 0 {
-            // This is a technical column, should not be persisted
-            bevy::log::warn!(
-                "Attempted to persist metadata for technical column 0 (row_index) in regular table '{}'",
-                table_name
-            );
-            return Ok(None);
-        }
-        // Subtract 1 to get persisted index
-        Ok(Some(runtime_column_index - 1))
+    if column_index.is_none() {
+        bevy::log::warn!(
+            "Column '{}' at runtime index {} not found in metadata table '{}' for table '{}'",
+            column_name,
+            runtime_column_index,
+            meta_table,
+            table_name
+        );
     }
+    
+    Ok(column_index)
 }
 
 /// Update a table's hidden flag in the global _Metadata table
@@ -200,10 +213,10 @@ pub fn update_column_metadata(
     if let Some(v) = ai_include_in_send {
         params_vec.push(Box::new(v as i32));
     }
-    params_vec.push(Box::new(persisted_index as i32));
+    params_vec.push(Box::new(persisted_index));
     // Log SQL and high-level params for debugging visibility
     bevy::log::info!(
-        "SQL update_column_metadata: {} ; params_count={} ; runtime_idx={} -> persisted_idx={}",
+        "SQL update_column_metadata: {} ; params_count={} ; runtime_idx={} -> column_index={}",
         sql, params_vec.len(), column_index, persisted_index
     );
     conn.execute(&sql, rusqlite::params_from_iter(params_vec.iter()))?;
@@ -234,7 +247,7 @@ pub fn update_column_ai_include(
     
     let meta_table = format!("{}_Metadata", table_name);
     bevy::log::info!(
-        "SQL update_column_ai_include: table='{}' runtime_idx={} -> persisted_idx={} include={}",
+        "SQL update_column_ai_include: table='{}' runtime_idx={} -> column_index={} include={}",
         table_name, column_index, persisted_index, include
     );
     conn.execute(
@@ -242,7 +255,7 @@ pub fn update_column_ai_include(
             "UPDATE \"{}\" SET ai_include_in_send = ? WHERE column_index = ?",
             meta_table
         ),
-        params![include as i32, persisted_index as i32],
+        params![include as i32, persisted_index],
     )?;
     Ok(())
 }

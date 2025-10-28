@@ -1,10 +1,11 @@
 // Handlers for accepting/cancelling AI row suggestions (moved out of monolithic file)
 use crate::sheets::events::{AddSheetRowRequest, UpdateCellEvent};
 use crate::sheets::resources::SheetRegistry;
+use crate::sheets::systems::logic::lineage_helpers::resolve_parent_key_from_lineage;
 use crate::ui::elements::editor::state::{
     EditorWindowState, NewRowReview, ReviewChoice, StructureReviewEntry,
 };
-use bevy::prelude::{info, EventWriter};
+use bevy::prelude::{info, warn, EventWriter};
 
 fn remove_new_row_context(state: &mut EditorWindowState, new_index: usize) {
     state.ai_structure_new_row_contexts.remove(&new_index);
@@ -189,63 +190,43 @@ pub fn process_existing_accept(
                     .get_sheet(selected_category, active_sheet_name)
                     .and_then(|s| s.metadata.as_ref())
                 {
-                    for key_idx in 0..chain_len {
-                        let override_flag = *rr.key_overrides.get(&(1000 + key_idx)).unwrap_or(&false);
-                        if !override_flag { continue; }
-                        let desired_text = rr.ancestor_key_values.get(key_idx).cloned().unwrap_or_default();
-                        if desired_text.trim().is_empty() { continue; }
-
-                        if let Some(vctx) = state.virtual_structure_stack.get(key_idx) {
-                            if let Some(parent_sheet) = registry.get_sheet(&vctx.parent.parent_category, &vctx.parent.parent_sheet) {
-                                if let Some(parent_meta) = &parent_sheet.metadata {
-                                    // Find first data col for display
-                                    let di = parent_meta
+                    // Only handle parent_key (immediate parent), not grand_N columns
+                    let chain_len = state.virtual_structure_stack.len();
+                    let immediate_parent_idx = chain_len - 1;
+                    
+                    let override_flag = *rr.key_overrides.get(&(1000 + immediate_parent_idx)).unwrap_or(&false);
+                    if override_flag {
+                        // Get lineage values up to immediate parent
+                        let lineage_values: Vec<String> = (0..chain_len)
+                            .filter_map(|i| rr.ancestor_key_values.get(i).cloned())
+                            .collect();
+                        
+                        if !lineage_values.is_empty() {
+                            // Get parent sheet name from virtual structure stack
+                            if let Some(parent_ctx) = state.virtual_structure_stack.last() {
+                                // Resolve parent_key from lineage
+                                if let Some(parent_row_idx) = resolve_parent_key_from_lineage(
+                                    registry,
+                                    selected_category,
+                                    &parent_ctx.parent.parent_sheet,
+                                    &lineage_values,
+                                ) {
+                                    // Find parent_key column in child table
+                                    if let Some(parent_key_col) = child_meta
                                         .columns
                                         .iter()
-                                        .position(|c| {
-                                            let h = c.header.to_lowercase();
-                                            h != "row_index"
-                                                && h != "parent_key"
-                                                && !h.starts_with("grand_")
-                                                && h != "id"
-                                                && h != "created_at"
-                                                && h != "updated_at"
+                                        .position(|c| c.header.eq_ignore_ascii_case("parent_key"))
+                                    {
+                                        cell_update_writer.write(UpdateCellEvent {
+                                            category: selected_category.clone(),
+                                            sheet_name: active_sheet_name.to_string(),
+                                            row_index: rr.row_index,
+                                            col_index: parent_key_col,
+                                            new_value: parent_row_idx.to_string(),
                                         });
-                                    if let Some(di) = di {
-                                        // Find the matching parent's row_index by display text
-                                        let numeric = parent_sheet.grid.iter().find_map(|r| {
-                                            if r.get(di).map(|s| s == &desired_text).unwrap_or(false) {
-                                                r.get(0).cloned()
-                                            } else { None }
-                                        });
-                                        if let Some(row_index_numeric) = numeric {
-                                            // Determine target child column by chain position
-                                            let target_col_idx = if key_idx + 1 == chain_len {
-                                                // immediate parent
-                                                child_meta
-                                                    .columns
-                                                    .iter()
-                                                    .position(|c| c.header.eq_ignore_ascii_case("parent_key"))
-                                            } else {
-                                                let n = chain_len - 1 - key_idx; // 1..N
-                                                let header = format!("grand_{}_parent", n);
-                                                child_meta
-                                                    .columns
-                                                    .iter()
-                                                    .position(|c| c.header.eq_ignore_ascii_case(&header))
-                                            };
-
-                                            if let Some(tcol) = target_col_idx {
-                                                cell_update_writer.write(UpdateCellEvent {
-                                                    category: selected_category.clone(),
-                                                    sheet_name: active_sheet_name.to_string(),
-                                                    row_index: rr.row_index,
-                                                    col_index: tcol,
-                                                    new_value: row_index_numeric,
-                                                });
-                                            }
-                                        }
                                     }
+                                } else {
+                                    warn!("Failed to resolve parent_key from lineage: {:?}", lineage_values);
                                 }
                             }
                         }
@@ -462,58 +443,79 @@ pub fn process_new_accept(
                             init_vals.push((*actual_col, val));
                         }
                     }
-                    // Ancestor overrides → technical columns
-                    if !state.virtual_structure_stack.is_empty() {
+                    
+                    // Resolve parent_key for structure tables (both virtual and real)
+                    // PRIORITY 1: Real structure navigation (Games → Games_Score)
+                    if !state.structure_navigation_stack.is_empty() {
+                        if let Some(child_meta) = registry
+                            .get_sheet(selected_category, active_sheet_name)
+                            .and_then(|s| s.metadata.as_ref())
+                        {
+                            // Find parent_key column
+                            if let Some(parent_key_col) = child_meta
+                                .columns
+                                .iter()
+                                .position(|c| c.header.eq_ignore_ascii_case("parent_key"))
+                            {
+                                // Get the parent row_index from the last navigation context
+                                if let Some(nav_ctx) = state.structure_navigation_stack.last() {
+                                    // ancestor_row_indices contains the chain like ["3770"]
+                                    // We need the LAST one (immediate parent)
+                                    if let Some(parent_row_idx_str) = nav_ctx.ancestor_row_indices.last() {
+                                        if let Ok(parent_row_idx) = parent_row_idx_str.parse::<usize>() {
+                                            info!(
+                                                "Resolved parent_key={} from structure_navigation_stack for new row",
+                                                parent_row_idx
+                                            );
+                                            init_vals.push((parent_key_col, parent_row_idx.to_string()));
+                                        } else {
+                                            warn!(
+                                                "Failed to parse parent_row_index '{}' as usize from structure_navigation_stack",
+                                                parent_row_idx_str
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // PRIORITY 2: Virtual structure stack (JSON structure fields)
+                    // Ancestor overrides → parent_key only (no grand_N columns)
+                    else if !state.virtual_structure_stack.is_empty() {
                         if let Some(child_meta) = registry
                             .get_sheet(selected_category, active_sheet_name)
                             .and_then(|s| s.metadata.as_ref())
                         {
                             let chain_len = state.virtual_structure_stack.len();
-                            for key_idx in 0..chain_len {
-                                let override_flag = *nr.key_overrides.get(&(1000 + key_idx)).unwrap_or(&false);
-                                if !override_flag { continue; }
-                                let desired_text = nr.ancestor_key_values.get(key_idx).cloned().unwrap_or_default();
-                                if desired_text.trim().is_empty() { continue; }
-                                if let Some(vctx) = state.virtual_structure_stack.get(key_idx) {
-                                    if let Some(parent_sheet) = registry.get_sheet(&vctx.parent.parent_category, &vctx.parent.parent_sheet) {
-                                        if let Some(parent_meta) = &parent_sheet.metadata {
-                                            let di = parent_meta
+                            let immediate_parent_idx = chain_len - 1;
+                            
+                            let override_flag = *nr.key_overrides.get(&(1000 + immediate_parent_idx)).unwrap_or(&false);
+                            if override_flag {
+                                // Get lineage values up to immediate parent
+                                let lineage_values: Vec<String> = (0..chain_len)
+                                    .filter_map(|i| nr.ancestor_key_values.get(i).cloned())
+                                    .collect();
+                                
+                                if !lineage_values.is_empty() {
+                                    // Get parent sheet name from virtual structure stack
+                                    if let Some(parent_ctx) = state.virtual_structure_stack.last() {
+                                        // Resolve parent_key from lineage
+                                        if let Some(parent_row_idx) = resolve_parent_key_from_lineage(
+                                            registry,
+                                            selected_category,
+                                            &parent_ctx.parent.parent_sheet,
+                                            &lineage_values,
+                                        ) {
+                                            // Find parent_key column in child table
+                                            if let Some(parent_key_col) = child_meta
                                                 .columns
                                                 .iter()
-                                                .position(|c| {
-                                                    let h = c.header.to_lowercase();
-                                                    h != "row_index"
-                                                        && h != "parent_key"
-                                                        && !h.starts_with("grand_")
-                                                        && h != "id"
-                                                        && h != "created_at"
-                                                        && h != "updated_at"
-                                                });
-                                            if let Some(di) = di {
-                                                let numeric = parent_sheet.grid.iter().find_map(|r| {
-                                                    if r.get(di).map(|s| s == &desired_text).unwrap_or(false) {
-                                                        r.get(0).cloned()
-                                                    } else { None }
-                                                });
-                                                if let Some(row_index_numeric) = numeric {
-                                                    let target_col_idx = if key_idx + 1 == chain_len {
-                                                        child_meta
-                                                            .columns
-                                                            .iter()
-                                                            .position(|c| c.header.eq_ignore_ascii_case("parent_key"))
-                                                    } else {
-                                                        let n = chain_len - 1 - key_idx;
-                                                        let header = format!("grand_{}_parent", n);
-                                                        child_meta
-                                                            .columns
-                                                            .iter()
-                                                            .position(|c| c.header.eq_ignore_ascii_case(&header))
-                                                    };
-                                                    if let Some(tcol) = target_col_idx {
-                                                        init_vals.push((tcol, row_index_numeric));
-                                                    }
-                                                }
+                                                .position(|c| c.header.eq_ignore_ascii_case("parent_key"))
+                                            {
+                                                init_vals.push((parent_key_col, parent_row_idx.to_string()));
                                             }
+                                        } else {
+                                            warn!("Failed to resolve parent_key from lineage for new row: {:?}", lineage_values);
                                         }
                                     }
                                 }
@@ -554,57 +556,79 @@ pub fn process_new_accept(
                         init_vals.push((*actual_col, val));
                     }
                 }
-                if !state.virtual_structure_stack.is_empty() {
+                
+                // Resolve parent_key for structure tables (both virtual and real)
+                // PRIORITY 1: Real structure navigation (Games → Games_Score)
+                if !state.structure_navigation_stack.is_empty() {
+                    if let Some(child_meta) = registry
+                        .get_sheet(selected_category, active_sheet_name)
+                        .and_then(|s| s.metadata.as_ref())
+                    {
+                        // Find parent_key column
+                        if let Some(parent_key_col) = child_meta
+                            .columns
+                            .iter()
+                            .position(|c| c.header.eq_ignore_ascii_case("parent_key"))
+                        {
+                            // Get the parent row_index from the last navigation context
+                            if let Some(nav_ctx) = state.structure_navigation_stack.last() {
+                                // ancestor_row_indices contains the chain like ["3770"]
+                                // We need the LAST one (immediate parent)
+                                if let Some(parent_row_idx_str) = nav_ctx.ancestor_row_indices.last() {
+                                    if let Ok(parent_row_idx) = parent_row_idx_str.parse::<usize>() {
+                                        info!(
+                                            "Resolved parent_key={} from structure_navigation_stack for new row (batch)",
+                                            parent_row_idx
+                                        );
+                                        init_vals.push((parent_key_col, parent_row_idx.to_string()));
+                                    } else {
+                                        warn!(
+                                            "Failed to parse parent_row_index '{}' as usize from structure_navigation_stack (batch)",
+                                            parent_row_idx_str
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                // PRIORITY 2: Virtual structure stack (JSON structure fields)
+                // Ancestor overrides → parent_key only (no grand_N columns)
+                else if !state.virtual_structure_stack.is_empty() {
                     if let Some(child_meta) = registry
                         .get_sheet(selected_category, active_sheet_name)
                         .and_then(|s| s.metadata.as_ref())
                     {
                         let chain_len = state.virtual_structure_stack.len();
-                        for key_idx in 0..chain_len {
-                            let override_flag = *nr.key_overrides.get(&(1000 + key_idx)).unwrap_or(&false);
-                            if !override_flag { continue; }
-                            let desired_text = nr.ancestor_key_values.get(key_idx).cloned().unwrap_or_default();
-                            if desired_text.trim().is_empty() { continue; }
-                            if let Some(vctx) = state.virtual_structure_stack.get(key_idx) {
-                                if let Some(parent_sheet) = registry.get_sheet(&vctx.parent.parent_category, &vctx.parent.parent_sheet) {
-                                    if let Some(parent_meta) = &parent_sheet.metadata {
-                                        let di = parent_meta
+                        let immediate_parent_idx = chain_len - 1;
+                        
+                        let override_flag = *nr.key_overrides.get(&(1000 + immediate_parent_idx)).unwrap_or(&false);
+                        if override_flag {
+                            // Get lineage values up to immediate parent
+                            let lineage_values: Vec<String> = (0..chain_len)
+                                .filter_map(|i| nr.ancestor_key_values.get(i).cloned())
+                                .collect();
+                            
+                            if !lineage_values.is_empty() {
+                                // Get parent sheet name from virtual structure stack
+                                if let Some(parent_ctx) = state.virtual_structure_stack.last() {
+                                    // Resolve parent_key from lineage
+                                    if let Some(parent_row_idx) = resolve_parent_key_from_lineage(
+                                        registry,
+                                        selected_category,
+                                        &parent_ctx.parent.parent_sheet,
+                                        &lineage_values,
+                                    ) {
+                                        // Find parent_key column in child table
+                                        if let Some(parent_key_col) = child_meta
                                             .columns
                                             .iter()
-                                            .position(|c| {
-                                                let h = c.header.to_lowercase();
-                                                h != "row_index"
-                                                    && h != "parent_key"
-                                                    && !h.starts_with("grand_")
-                                                    && h != "id"
-                                                    && h != "created_at"
-                                                    && h != "updated_at"
-                                            });
-                                        if let Some(di) = di {
-                                            let numeric = parent_sheet.grid.iter().find_map(|r| {
-                                                if r.get(di).map(|s| s == &desired_text).unwrap_or(false) {
-                                                    r.get(0).cloned()
-                                                } else { None }
-                                            });
-                                            if let Some(row_index_numeric) = numeric {
-                                                let target_col_idx = if key_idx + 1 == chain_len {
-                                                    child_meta
-                                                        .columns
-                                                        .iter()
-                                                        .position(|c| c.header.eq_ignore_ascii_case("parent_key"))
-                                                } else {
-                                                    let n = chain_len - 1 - key_idx;
-                                                    let header = format!("grand_{}_parent", n);
-                                                    child_meta
-                                                        .columns
-                                                        .iter()
-                                                        .position(|c| c.header.eq_ignore_ascii_case(&header))
-                                                };
-                                                if let Some(tcol) = target_col_idx {
-                                                    init_vals.push((tcol, row_index_numeric));
-                                                }
-                                            }
+                                            .position(|c| c.header.eq_ignore_ascii_case("parent_key"))
+                                        {
+                                            init_vals.push((parent_key_col, parent_row_idx.to_string()));
                                         }
+                                    } else {
+                                        warn!("Failed to resolve parent_key from lineage for new row (batch): {:?}", lineage_values);
                                     }
                                 }
                             }

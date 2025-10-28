@@ -10,7 +10,6 @@ mod structure_handlers;
 pub use context_setup::setup_context_prefixes;
 pub use duplicate_detection::check_for_duplicate;
 pub use root_handlers::{handle_root_batch_error, handle_root_batch_result_phase1};
-pub use row_processors::{process_new_rows, process_original_rows};
 pub use structure_handlers::handle_structure_batch_result;
 
 use bevy::prelude::*;

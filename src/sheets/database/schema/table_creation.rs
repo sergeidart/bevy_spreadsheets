@@ -1,7 +1,7 @@
 // src/sheets/database/schema/table_creation.rs
 
 use bevy::prelude::*;
-use rusqlite::{params, Connection};
+use rusqlite::Connection;
 
 use super::super::error::{DbError, DbResult};
 use super::helpers::sql_type_for_column;
@@ -318,8 +318,6 @@ fn build_structure_column_definitions(
 
             if col.header.eq_ignore_ascii_case("row_index") {
                 continue; // Already added
-            } else if col.header.starts_with("grand_") && col.header.ends_with("_parent") {
-                col_defs.push(format!("\"{}\" TEXT", col.header));
             } else if col.header.eq_ignore_ascii_case("parent_key") {
                 col_defs.push("parent_key TEXT NOT NULL".to_string());
                 has_parent_key = true;
@@ -343,8 +341,6 @@ fn build_structure_column_definitions(
 
             if field.header.eq_ignore_ascii_case("row_index") {
                 continue;
-            } else if field.header.starts_with("grand_") && field.header.ends_with("_parent") {
-                col_defs.push(format!("\"{}\" TEXT", field.header));
             } else if field.header.eq_ignore_ascii_case("parent_key") {
                 col_defs.push("parent_key TEXT NOT NULL".to_string());
                 has_parent_key = true;

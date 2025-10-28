@@ -146,37 +146,16 @@ pub fn apply_pending_structure_key_selection(
                             changed = true;
                         }
                         col.structure_key_parent_column_index = new_key_opt;
+                        // Grand_* columns removed - no longer populate ancestor indices
                         col.structure_ancestor_key_parent_column_indices = Some(Vec::new());
                     }
                 }
             }
         }
-        let mut collected: Vec<usize> = Vec::new();
-        let mut current_parent = root_parent_link;
-        let mut safety = 0;
-        while let Some(parent_link) = current_parent.clone() {
-            if safety > 32 {
-                break;
-            }
-            safety += 1;
-            if let Some(parent_sheet) =
-                registry.get_sheet(&parent_link.parent_category, &parent_link.parent_sheet)
-            {
-                if let Some(parent_meta) = &parent_sheet.metadata {
-                    if let Some(parent_col) =
-                        parent_meta.columns.get(parent_link.parent_column_index)
-                    {
-                        if let Some(kidx) = parent_col.structure_key_parent_column_index {
-                            collected.push(kidx);
-                        }
-                    }
-                    current_parent = parent_meta.structure_parent.clone();
-                    continue;
-                }
-            }
-            break;
-        }
-        collected.reverse();
+        // Legacy code removed: Previously built chain of grand_* column indices
+        // Now we walk parent lineage programmatically instead of storing in columns
+        let collected: Vec<usize> = Vec::new();
+        
         if !is_virtual {
             if let Some(sheet_data) = registry.get_sheet_mut(&cat, &sheet) {
                 if let Some(meta) = &mut sheet_data.metadata {
@@ -188,6 +167,7 @@ pub fn apply_pending_structure_key_selection(
                         if existing != collected {
                             changed = true;
                         }
+                        // Always set to empty - grand_* columns no longer exist
                         col.structure_ancestor_key_parent_column_indices = Some(collected);
                     }
                     if changed {

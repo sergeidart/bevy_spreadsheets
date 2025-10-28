@@ -7,5 +7,4 @@ pub mod registration_handlers;
 
 // Re-export commonly used functions
 pub use db_scan_handlers::*;
-pub use schema_handlers::*;
 pub use registration_handlers::*;

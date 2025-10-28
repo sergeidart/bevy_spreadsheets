@@ -151,9 +151,7 @@ pub fn build_merged_columns(
 
                         // Skip technical columns entirely
                         let is_technical = col_def.header.eq_ignore_ascii_case("row_index")
-                            || col_def.header.eq_ignore_ascii_case("parent_key")
-                            || (col_def.header.starts_with("grand_")
-                                && col_def.header.ends_with("_parent"));
+                            || col_def.header.eq_ignore_ascii_case("parent_key");
                         if is_technical {
                             continue;
                         }

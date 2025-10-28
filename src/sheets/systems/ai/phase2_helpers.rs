@@ -2,19 +2,21 @@
 // Phase 2 deep review processing - handles duplicate detection and deep review workflow
 
 use bevy::prelude::*;
-use std::collections::HashMap;
 
 use crate::sheets::events::{AiBatchTaskResult, SheetOperationFeedback};
 use crate::sheets::resources::SheetRegistry;
-use crate::ui::elements::editor::state::{EditorWindowState, NewRowReview};
+use crate::ui::elements::editor::state::EditorWindowState;
 
 use super::row_helpers::{
-    create_row_snapshots, extract_ai_snapshot_from_new_row, generate_review_choices,
-    normalize_cell_value, skip_key_prefix,
+    extract_ai_snapshot_from_new_row, normalize_cell_value, skip_key_prefix,
 };
 use super::column_helpers::calculate_dynamic_prefix;
 use super::duplicate_map_helpers::build_composite_duplicate_map_for_parents;
 use super::structure_jobs::enqueue_structure_jobs_for_batch;
+use super::phase2_row_processors::{
+    process_duplicate_rows_from_phase2, process_new_rows_from_phase2,
+    process_original_rows_from_phase2,
+};
 
 /// Detect which new rows are duplicates of existing rows (by first column)
 pub fn detect_duplicate_indices(
@@ -34,22 +36,20 @@ pub fn detect_duplicate_indices(
         sheet_ctx
     );
 
-    // Choose a key column that isn't the technical parent_key (1)
-    let key_actual_col_opt = included
-        .iter()
-        .copied()
-        .find(|&c| c != 1)
-        .or_else(|| included.first().copied());
-
-    // Check each new row using a row-specific parent chain derived from inbound prefix values
+    // Check each new row using parent context from navigation state
     for (new_idx, new_row_full) in extra_slice.iter().enumerate() {
         // Infer per-row prefix count based on inbound row length
         let dynamic_prefix = calculate_dynamic_prefix(new_row_full.len(), included.len());
-        let parent_prefix_values: Vec<String> = new_row_full
+        
+        // Extract parent prefix values from AI response (for logging/debugging only)
+        // NOTE: These are NOT used for filtering when navigation_stack exists!
+        // The actual parent filtering uses ancestor_row_indices from navigation state.
+        let ai_provided_parent_names: Vec<String> = new_row_full
             .iter()
             .take(dynamic_prefix)
             .cloned()
             .collect();
+        
         let new_row = skip_key_prefix(new_row_full, dynamic_prefix);
 
         if new_row.len() < included.len() {
@@ -58,10 +58,11 @@ pub fn detect_duplicate_indices(
 
         let ai_snapshot = extract_ai_snapshot_from_new_row(new_row, included);
 
-        // Build a composite duplicate map for this row's parent chain
-        // This map will use the same key format as we build below (without parent row indices in the key)
+        // Build a composite duplicate map using actual parent context from navigation state
+        // When navigation_stack exists, convert_parent_names_to_row_indices ignores ai_provided_parent_names
+        // and uses ancestor_row_indices directly for correct parent filtering
         let composite_map = build_composite_duplicate_map_for_parents(
-            &parent_prefix_values,
+            &ai_provided_parent_names,  // Passed but ignored when navigation_stack exists
             included,
             &cat_ctx,
             &sheet_ctx,
@@ -70,7 +71,11 @@ pub fn detect_duplicate_indices(
         );
 
         if new_idx == 0 {
-            info!("Composite map for parent {:?}: {:?}", parent_prefix_values, composite_map);
+            info!(
+                "Composite map for AI-provided parents {:?}: {} existing rows (actual filtering uses navigation state)",
+                ai_provided_parent_names,
+                composite_map.len()
+            );
         }
 
         // Build composite key from AI values: just the data columns (normalized)
@@ -85,9 +90,9 @@ pub fn detect_duplicate_indices(
         let ai_composite = ai_composite_parts.join("||");
 
         info!(
-            "Row {}: parent_prefix={:?}, ai_snapshot={:?}, ai_composite='{}', in_map={}",
+            "Row {}: ai_provided_parents={:?}, ai_snapshot={:?}, ai_composite='{}', in_map={}",
             new_idx,
-            parent_prefix_values,
+            ai_provided_parent_names,
             ai_snapshot,
             ai_composite,
             composite_map.contains_key(&ai_composite)
@@ -347,203 +352,6 @@ pub fn handle_deep_review_result_phase2(
             error!("Phase 2 error: {}", err);
             state.ai_phase1_intermediate = None;
             super::results::handle_root_batch_error(state, ev, err, feedback_writer);
-        }
-    }
-}
-
-/// Process original rows from Phase 2 results
-fn process_original_rows_from_phase2(
-    state: &mut EditorWindowState,
-    registry: &SheetRegistry,
-    phase1: &crate::ui::elements::editor::state::Phase1IntermediateData,
-    orig_slice: &[Vec<String>],
-) {
-    use crate::ui::elements::editor::state::RowReview;
-
-    // Same as before but using Phase 1 context
-    let included = &phase1.included_columns;
-    let cat_ctx = &phase1.category;
-    let sheet_ctx = &phase1.sheet_name;
-
-    for (i, suggestion_full) in orig_slice.iter().enumerate() {
-        // Use actual original row index from Phase 1
-        let row_index = phase1.original_row_indices.get(i).copied().unwrap_or(i);
-        // Infer prefix count from inbound row: total_len - included_len
-        let dynamic_prefix = calculate_dynamic_prefix(suggestion_full.len(), included.len());
-        let parent_prefix_values: Vec<String> = suggestion_full
-            .iter()
-            .take(dynamic_prefix)
-            .cloned()
-            .collect();
-        let suggestion = skip_key_prefix(suggestion_full, dynamic_prefix);
-
-        if suggestion.len() < included.len() {
-            warn!("Skipping malformed original row suggestion");
-            continue;
-        }
-
-        let (original_snapshot, ai_snapshot) = create_row_snapshots(
-            registry, cat_ctx, sheet_ctx, row_index, suggestion, included,
-        );
-
-        let choices = generate_review_choices(&original_snapshot, &ai_snapshot);
-
-        state.ai_row_reviews.push(RowReview {
-            row_index,
-            original: original_snapshot,
-            ai: ai_snapshot,
-            choices,
-            non_structure_columns: included.clone(),
-            key_overrides: std::collections::HashMap::new(),
-            ancestor_key_values: parent_prefix_values.clone(),
-            ancestor_dropdown_cache: std::collections::HashMap::new(),
-        });
-
-        // Cache original row
-        if let Some(sheet_ref) = registry.get_sheet(cat_ctx, sheet_ctx) {
-            if let Some(full_row) = sheet_ref.grid.get(row_index) {
-                state
-                    .ai_original_row_snapshot_cache
-                    .insert((Some(row_index), None), full_row.clone());
-            }
-        }
-    }
-}
-
-/// Process duplicate rows from Phase 2 as merge candidates
-fn process_duplicate_rows_from_phase2(
-    state: &mut EditorWindowState,
-    registry: &SheetRegistry,
-    phase1: &crate::ui::elements::editor::state::Phase1IntermediateData,
-    dup_slice: &[Vec<String>],
-    _duplicate_indices: &[usize],
-) {
-    let included = &phase1.included_columns;
-    let cat_ctx = &phase1.category;
-    let sheet_ctx = &phase1.sheet_name;
-
-    // Build duplicate detection map to find matched rows
-    let mut first_col_value_to_row: HashMap<String, usize> = HashMap::new();
-    if let Some(first_col_actual) = included.first() {
-        if let Some(sheet_ref) = registry.get_sheet(cat_ctx, sheet_ctx) {
-            for (row_idx, row) in sheet_ref.grid.iter().enumerate() {
-                if let Some(val) = row.get(*first_col_actual) {
-                    let norm = normalize_cell_value(val);
-                    if !norm.is_empty() {
-                        first_col_value_to_row.entry(norm).or_insert(row_idx);
-                    }
-                }
-            }
-        }
-    }
-
-    for suggestion_full in dup_slice.iter() {
-        let dynamic_prefix = calculate_dynamic_prefix(suggestion_full.len(), included.len());
-        let parent_prefix_values: Vec<String> = suggestion_full
-            .iter()
-            .take(dynamic_prefix)
-            .cloned()
-            .collect();
-        let suggestion = skip_key_prefix(suggestion_full, dynamic_prefix);
-
-        if suggestion.len() < included.len() {
-            continue;
-        }
-
-        let ai_snapshot = extract_ai_snapshot_from_new_row(suggestion, included);
-
-        // Find the matched existing row
-        let sheet_ctx_opt = Some(sheet_ctx.clone());
-        // Choose a key column that isn't the technical parent_key (1)
-        let key_actual_col_opt = included.iter().copied().find(|&c| c != 1).or_else(|| included.first().copied());
-
-        let (duplicate_match_row, choices, original_for_merge, merge_selected) =
-            super::results::check_for_duplicate(
-                &ai_snapshot,
-                &first_col_value_to_row,
-                included,
-                key_actual_col_opt,
-                cat_ctx,
-                &sheet_ctx_opt,
-                registry,
-            );
-
-        state.ai_new_row_reviews.push(NewRowReview {
-            ai: ai_snapshot.clone(),
-            non_structure_columns: included.clone(),
-            duplicate_match_row,
-            choices,
-            merge_selected,
-            merge_decided: false,
-            original_for_merge: original_for_merge.clone(),
-            key_overrides: std::collections::HashMap::new(),
-            ancestor_key_values: parent_prefix_values.clone(),
-            ancestor_dropdown_cache: std::collections::HashMap::new(),
-        });
-
-        // FIX: Cache original for duplicate using the new_row_index
-        // This ensures structure detail view can find the original row
-        let new_row_idx = state.ai_new_row_reviews.len() - 1;
-        if let Some(matched_idx) = duplicate_match_row {
-            if let Some(sheet_ref) = registry.get_sheet(cat_ctx, sheet_ctx) {
-                if let Some(full_row) = sheet_ref.grid.get(matched_idx) {
-                    state
-                        .ai_original_row_snapshot_cache
-                        .insert((None, Some(new_row_idx)), full_row.clone());
-                }
-            }
-        }
-    }
-}
-
-/// Process new AI-added rows from Phase 2 (these had minimal data in Phase 2 request)
-fn process_new_rows_from_phase2(
-    state: &mut EditorWindowState,
-    registry: &SheetRegistry,
-    phase1: &crate::ui::elements::editor::state::Phase1IntermediateData,
-    new_slice: &[Vec<String>],
-) {
-    let included = &phase1.included_columns;
-    let cat_ctx = &phase1.category;
-    let sheet_ctx = &phase1.sheet_name;
-
-    for suggestion_full in new_slice.iter() {
-        let dynamic_prefix = calculate_dynamic_prefix(suggestion_full.len(), included.len());
-        let parent_prefix_values: Vec<String> = suggestion_full
-            .iter()
-            .take(dynamic_prefix)
-            .cloned()
-            .collect();
-        let suggestion = skip_key_prefix(suggestion_full, dynamic_prefix);
-
-        if suggestion.len() < included.len() {
-            continue;
-        }
-
-        let ai_snapshot = extract_ai_snapshot_from_new_row(suggestion, included);
-
-        state.ai_new_row_reviews.push(NewRowReview {
-            ai: ai_snapshot,
-            non_structure_columns: included.clone(),
-            duplicate_match_row: None,
-            choices: None,
-            merge_selected: false,
-            merge_decided: false,
-            original_for_merge: None,
-            key_overrides: std::collections::HashMap::new(),
-            ancestor_key_values: parent_prefix_values.clone(),
-            ancestor_dropdown_cache: std::collections::HashMap::new(),
-        });
-
-        // Cache empty original for new rows
-        if let Some(sheet_ref) = registry.get_sheet(cat_ctx, sheet_ctx) {
-            if let Some(meta) = &sheet_ref.metadata {
-                let empty_row = vec![String::new(); meta.columns.len()];
-                let new_row_idx = state.ai_new_row_reviews.len() - 1;
-                state
-                    .ai_original_row_snapshot_cache
-                    .insert((None, Some(new_row_idx)), empty_row);
-            }
         }
     }
 }

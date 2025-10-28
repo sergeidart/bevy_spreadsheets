@@ -2,7 +2,7 @@ use bevy_egui::egui::{self, Layout, RichText};
 use egui_extras::TableRow;
 
 use super::cell_render::{render_original_choice_toggle, render_review_original_cell};
-use super::row_render::{RowContext, PARENT_KEY_COLOR};
+use super::row_render::RowContext;
 use crate::sheets::systems::ai_review::{
     OriginalDataCellPlan, OriginalPreviewCellPlan, OriginalPreviewPlan, RowKind,
 };
