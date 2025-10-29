@@ -5,7 +5,6 @@ pub mod ai_context_utils;
 pub mod ai_control_left_panel; // new split left section
 pub mod ai_group_panel; // new group schema management UI
 pub mod ai_panel; // new orchestrator replacing old ai_control_panel
-pub mod ai_panel_structs;
 pub mod structure_review_helpers; // Helper functions for structure review conversion
                                   // New modularized components
 pub mod render {
@@ -14,7 +13,6 @@ pub mod render {
     pub mod column_headers;
     pub mod original_row;
     pub mod row_render;
-    pub mod status_row;
 }
 pub mod handlers;
 pub mod header_actions;

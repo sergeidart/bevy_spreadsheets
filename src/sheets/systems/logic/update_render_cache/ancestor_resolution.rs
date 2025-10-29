@@ -127,7 +127,6 @@ pub fn resolve_ancestor_key_display_text(
 pub fn resolve_ancestor_key_with_cache(
     cell_value: &str,
     col_def: &crate::sheets::definitions::ColumnDefinition,
-    current_category: &Option<String>,
     current_sheet_name: &str,
     parent_cache: &std::collections::HashMap<(String, i64), String>,
 ) -> Option<String> {

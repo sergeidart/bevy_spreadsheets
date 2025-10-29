@@ -28,7 +28,6 @@ pub fn sheet_table_header(
 ) {
     let headers = metadata.get_headers();
     let filters = metadata.get_filters();
-    let num_cols = headers.len();
 
     // Compute visible columns (respecting hidden flag on columns)
     let visible_columns = state.get_visible_column_indices(category, sheet_name, metadata);

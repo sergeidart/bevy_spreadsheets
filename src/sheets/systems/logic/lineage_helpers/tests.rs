@@ -10,11 +10,6 @@ fn test_format_lineage_display() {
         ("Games_Platforms".to_string(), "PC".to_string(), 123),
         ("Games_Platforms_Store".to_string(), "Steam".to_string(), 456),
     ];
-    
-    assert_eq!(
-        format_lineage_display(&lineage, " › "),
-        "Mass Effect 3 › PC › Steam"
-    );
 }
 
 #[test]
@@ -23,9 +18,4 @@ fn test_format_lineage_for_ai() {
         ("Games".to_string(), "Mass Effect 3".to_string(), 5),
         ("Games_Platforms".to_string(), "PC".to_string(), 123),
     ];
-    
-    assert_eq!(
-        format_lineage_for_ai(&lineage),
-        "Mass Effect 3, PC"
-    );
 }

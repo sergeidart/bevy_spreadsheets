@@ -11,27 +11,6 @@ use crate::{
 };
 use bevy_tokio_tasks::TokioTasksRuntime;
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn draw_left_panel(
-    ui: &mut egui::Ui,
-    state: &mut EditorWindowState,
-    registry: &SheetRegistry,
-    _selected_category: &Option<String>,
-    selected_sheet: &Option<String>,
-    session_api_key: &SessionApiKey,
-) {
-    draw_left_panel_impl(
-        ui,
-        state,
-        registry,
-        _selected_category,
-        selected_sheet,
-        session_api_key,
-        None,
-        None,
-    );
-}
-
 // Extended variant used internally when runtime/commands available for sending
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn draw_left_panel_impl(

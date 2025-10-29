@@ -3,7 +3,6 @@
 
 mod insertions;
 mod updates;
-mod deletions;
 mod renames;
 mod metadata;
 mod cascades;
@@ -21,7 +20,6 @@ use rusqlite::{Connection, Transaction};
 /// This struct delegates to specialized modules:
 /// - `insertions`: Row and grid data insertion
 /// - `updates`: Cell and metadata updates
-/// - `deletions`: Row deletion and compaction
 /// - `renames`: Column and table renaming
 /// - `metadata`: AI settings and column metadata management
 pub struct DbWriter;
@@ -31,16 +29,6 @@ impl DbWriter {
     // INSERTIONS - See insertions.rs
     // ============================================================================
     
-    /// Insert grid data rows
-    pub fn insert_grid_data(
-        tx: &Transaction,
-        table_name: &str,
-        grid: &[Vec<String>],
-        metadata: &SheetMetadata,
-    ) -> DbResult<()> {
-        insertions::insert_grid_data(tx, table_name, grid, metadata)
-    }
-
     /// Insert grid data rows with progress callback
     pub fn insert_grid_data_with_progress<F: FnMut(usize)>(
         tx: &Transaction,
@@ -50,27 +38,6 @@ impl DbWriter {
         on_chunk: F,
     ) -> DbResult<()> {
         insertions::insert_grid_data_with_progress(tx, table_name, grid, metadata, on_chunk)
-    }
-
-    /// Insert a new row (appends to end)
-    pub fn insert_row(
-        conn: &Connection,
-        table_name: &str,
-        row_data: &[String],
-        column_names: &[String],
-    ) -> DbResult<i64> {
-        insertions::insert_row(conn, table_name, row_data, column_names)
-    }
-
-    /// Insert a new row at an explicit row_index value
-    pub fn insert_row_with_index(
-        conn: &Connection,
-        table_name: &str,
-        row_index: i32,
-        row_data: &[String],
-        column_names: &[String],
-    ) -> DbResult<i64> {
-        insertions::insert_row_with_index(conn, table_name, row_index, row_data, column_names)
     }
 
     /// Prepend a row (row_index = 0) by shifting existing rows down
@@ -98,17 +65,6 @@ impl DbWriter {
     // UPDATES - See updates.rs
     // ============================================================================
     
-    /// Update a single cell
-    pub fn update_cell(
-        conn: &Connection,
-        table_name: &str,
-        row_index: usize,
-        column_name: &str,
-        value: &str,
-    ) -> DbResult<()> {
-        updates::update_cell(conn, table_name, row_index, column_name, value)
-    }
-
     /// Update a structure sheet's cell value by row id
     pub fn update_structure_cell_by_id(
         conn: &Connection,
@@ -127,33 +83,6 @@ impl DbWriter {
         ordered_pairs: &[(String, i32)],
     ) -> DbResult<()> {
         updates::update_column_indices(conn, table_name, ordered_pairs)
-    }
-
-    // ============================================================================
-    // DELETIONS - See deletions.rs
-    // ============================================================================
-    
-    /// Delete a row
-    pub fn delete_row(conn: &Connection, table_name: &str, row_index: usize) -> DbResult<()> {
-        deletions::delete_row(conn, table_name, row_index)
-    }
-
-    /// Delete a row and compact subsequent row_index values
-    pub fn delete_row_and_compact(
-        conn: &Connection,
-        table_name: &str,
-        row_index: usize,
-    ) -> DbResult<()> {
-        deletions::delete_row_and_compact(conn, table_name, row_index)
-    }
-
-    /// Delete a structure row by primary key id
-    pub fn delete_structure_row_by_id(
-        conn: &Connection,
-        table_name: &str,
-        id: i64,
-    ) -> DbResult<()> {
-        deletions::delete_structure_row_by_id(conn, table_name, id)
     }
 
     // ============================================================================
@@ -418,34 +347,6 @@ mod tests {
             .collect::<Result<_, _>>()
             .unwrap();
         assert_eq!(cols, vec!["D", "B", "A", "C"]);
-    }
-    #[test]
-    fn test_update_cell_updates_value() {
-        let conn = Connection::open_in_memory().unwrap();
-        let table = "Main";
-        setup_simple_table(&conn, table);
-
-        // Insert one row directly
-        conn.execute(
-            &format!(
-                "INSERT INTO \"{}\" (row_index, \"Name\") VALUES (?, ?)",
-                table
-            ),
-            params![0i32, "Alice"],
-        )
-        .unwrap();
-
-        // Update via DbWriter
-        DbWriter::update_cell(&conn, table, 0usize, "Name", "Bob").unwrap();
-        // Verify
-        let name: String = conn
-            .query_row(
-                &format!("SELECT \"Name\" FROM \"{}\" WHERE row_index = 0", table),
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(name, "Bob");
     }
     #[test]
     fn test_prepend_row_shifts_and_inserts() {

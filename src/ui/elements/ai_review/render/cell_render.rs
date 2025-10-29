@@ -38,7 +38,7 @@ pub fn render_review_ai_cell(
     // Enforce a larger minimum by requesting a minimum allocation for the TextEdit
     let min_width = (220.0 * 1.6) as f32;
         ui.set_min_width(min_width);
-        let mut resp = ui.add(
+        let resp = ui.add(
             egui::TextEdit::singleline(ai_cell)
                 .desired_width(min_width)
                 .text_color_opt(if is_diff {
@@ -262,7 +262,7 @@ pub fn render_review_ai_cell_linked(
 
     // Try to request a minimum allocation for linked columns too
     ui.set_min_width((220.0 * 1.6) as f32);
-    let mut resp = ui.add(
+    let resp = ui.add(
         egui::TextEdit::singleline(ai_cell)
             .id(text_edit_id)
             .desired_width((220.0 * 1.6) as f32)

@@ -2,13 +2,8 @@
 use crate::{
     example_definitions::{create_example_items_metadata, create_simple_config_metadata},
     sheets::{
-        definitions::{SheetGridData, SheetMetadata},
         resources::SheetRegistry,
-        systems::io::{
-            get_default_data_base_path,
-            save::save_single_sheet,
-            validator, // Keep validator import for grid validation
-        },
+        systems::io::{get_default_data_base_path, save::save_single_sheet},
     },
 };
 use bevy::prelude::*;
@@ -93,39 +88,4 @@ pub fn register_default_sheets_if_needed(mut registry: ResMut<SheetRegistry>) {
             data_dir_path
         );
     }
-}
-
-/// Validates the grid structure against metadata and adds the sheet to the registry.
-/// Called by the scan process after metadata and grid data have been loaded.
-/// Returns true if registration was successful, false otherwise.
-pub(super) fn add_scanned_sheet_to_registry(
-    registry: &mut SheetRegistry, // Needs mutable access
-    category: Option<String>,
-    sheet_name: String,
-    metadata: SheetMetadata,     // Takes ownership of finalized metadata
-    grid: Vec<Vec<String>>,      // Takes ownership of loaded grid
-    source_path_display: String, // For logging
-) -> bool {
-    // --- Final Grid Structure Validation ---
-    if let Err(e) = validator::validate_grid_structure(&grid, &metadata, &sheet_name) {
-        error!(
-            "Grid structure validation failed for '{}' during registration: {}. Skipping registration.",
-            source_path_display, e
-        );
-        return false; // Do not register if grid structure is invalid
-    }
-
-    // --- Registration ---
-    let sheet_data = SheetGridData {
-        metadata: Some(metadata), // Store the metadata
-        grid,                     // Store the grid
-        row_indices: Vec::new(),  // JSON-backed sheets don't track row_indices
-    };
-
-    registry.add_or_replace_sheet(category.clone(), sheet_name.clone(), sheet_data);
-    info!(
-        "Registered sheet '{:?}/{}' from file '{}'.",
-        category, sheet_name, source_path_display
-    );
-    true
 }

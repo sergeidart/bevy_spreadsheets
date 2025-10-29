@@ -239,7 +239,7 @@ fn load_single_table(
     let (metadata, grid, row_indices) = if has_metadata_table {
         // Load from SkylineDB metadata
         match crate::sheets::database::reader::DbReader::read_metadata(conn, table_name) {
-            Ok(mut metadata) => {
+            Ok(metadata) => {
                 // Load grid data
                 match crate::sheets::database::reader::DbReader::read_grid_data(
                     conn,

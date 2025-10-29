@@ -264,28 +264,7 @@ impl SheetRegistry {
         names
     }
 
-    /// Check if a table is a structure table (has id and parent_key columns)
-    pub fn is_structure_table(&self, category: &Option<String>, sheet_name: &str) -> bool {
-        if let Some(category_map) = self.categorized_sheets.get(category) {
-            if let Some(data) = category_map.get(sheet_name) {
-                return data
-                    .metadata
-                    .as_ref()
-                    .map(|m| {
-                        if m.columns.len() >= 2 {
-                            let h0 = m.columns[0].header.as_str();
-                            let h1 = m.columns[1].header.as_str();
-                            h0.eq_ignore_ascii_case("id") && h1.eq_ignore_ascii_case("parent_key")
-                        } else {
-                            false
-                        }
-                    })
-                    .unwrap_or(false);
-            }
-        }
-        false
-    }
-
+    /// Try to get a specific sheet by category and name (mutable)
     /// Checks if a sheet exists anywhere across all categories.
     pub fn does_sheet_exist(&self, sheet_name: &str) -> bool {
         self.categorized_sheets

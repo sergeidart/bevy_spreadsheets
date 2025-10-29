@@ -7,44 +7,6 @@ use crate::sheets::definitions::{ColumnValidator, SheetMetadata};
 use rusqlite::{Connection, Transaction};
 use bevy::prelude::*;
 
-/// Insert grid data rows
-pub fn insert_grid_data(
-    tx: &Transaction,
-    table_name: &str,
-    grid: &[Vec<String>],
-    metadata: &SheetMetadata,
-) -> DbResult<()> {
-    let column_names: Vec<String> = metadata
-        .columns
-        .iter()
-        .filter(|c| !matches!(c.validator, Some(ColumnValidator::Structure)))
-        .map(|c| c.header.clone())
-        .collect();
-
-    if column_names.is_empty() || grid.is_empty() {
-        return Ok(());
-    }
-
-    let insert_sql = build_insert_sql(table_name, &column_names);
-    let mut stmt = tx.prepare(&insert_sql)?;
-
-    for (row_idx, row_data) in grid.iter().enumerate() {
-        let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(row_idx as i32)];
-
-        // Add cell values (up to column_names length)
-        for cell in row_data.iter().take(column_names.len()) {
-            params_vec.push(Box::new(cell.clone()));
-        }
-
-        // Fill missing columns with empty strings (target: 1 + column_names.len())
-        pad_params_with_empty_strings(&mut params_vec, column_names.len() + 1);
-
-        stmt.execute(rusqlite::params_from_iter(params_vec.iter()))?;
-    }
-
-    Ok(())
-}
-
 /// Insert grid data rows and invoke a progress callback after each 1,000 rows.
 pub fn insert_grid_data_with_progress<F: FnMut(usize)>(
     tx: &Transaction,
@@ -88,37 +50,9 @@ pub fn insert_grid_data_with_progress<F: FnMut(usize)>(
     Ok(())
 }
 
-/// Insert a new row
-pub fn insert_row(
-    conn: &Connection,
-    table_name: &str,
-    row_data: &[String],
-    column_names: &[String],
-) -> DbResult<i64> {
-    // Get max row_index
-    let max_row: i32 = conn.query_row(
-        &format!(
-            "SELECT COALESCE(MAX(row_index), -1) FROM \"{}\"",
-            table_name
-        ),
-        [],
-        |row| row.get(0),
-    )?;
-
-    let new_row_index = max_row + 1;
-
-    let insert_sql = build_insert_sql(table_name, column_names);
-    let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(new_row_index)];
-    append_string_params(&mut params_vec, row_data);
-
-    conn.execute(&insert_sql, rusqlite::params_from_iter(params_vec.iter()))?;
-
-    Ok(conn.last_insert_rowid())
-}
-
-/// Insert a new row at an explicit row_index value.
+/// Insert a new row at an explicit row_index value (internal helper).
 /// Note: Caller must ensure row_index uniqueness.
-pub fn insert_row_with_index(
+fn insert_row_with_index(
     conn: &Connection,
     table_name: &str,
     row_index: i32,

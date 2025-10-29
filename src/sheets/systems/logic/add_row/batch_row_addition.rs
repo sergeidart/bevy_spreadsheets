@@ -38,7 +38,6 @@ pub fn handle_add_rows_batch_request(
         let structure_context = get_structure_context(&editor_state, &sheet_name, &category, &registry);
 
         let num_rows = event.rows_initial_values.len();
-        let mut metadata_cache: Option<crate::sheets::definitions::SheetMetadata> = None;
 
         if let Some(sheet_data) = registry.get_sheet_mut(&category, &sheet_name) {
             if let Some(metadata) = &sheet_data.metadata {
@@ -110,8 +109,6 @@ pub fn handle_add_rows_batch_request(
 
                 // Invalidate cache
                 invalidate_sheet_cache(&mut editor_state, &category, &sheet_name);
-
-                metadata_cache = Some(metadata.clone());
 
                 // Persist to DB if DB-backed
                 if let Some(meta) = &sheet_data.metadata {

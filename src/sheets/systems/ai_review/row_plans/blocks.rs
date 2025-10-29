@@ -6,7 +6,6 @@ use crate::ui::elements::editor::state::EditorWindowState;
 pub enum RowBlock {
     OriginalPreview(usize, RowKind),
     AiSuggested(usize, RowKind),
-    Status(usize, RowKind),
     Separator,
 }
 

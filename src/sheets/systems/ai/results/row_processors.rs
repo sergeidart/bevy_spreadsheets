@@ -13,7 +13,7 @@ use crate::sheets::systems::ai::row_helpers::{
     generate_review_choices, normalize_cell_value, skip_key_prefix,
 };
 use crate::sheets::systems::ai::parent_chain_helpers::{
-    extract_parent_columns, row_matches_parent_chain,
+    extract_parent_key_column, row_matches_parent_chain,
 };
 use crate::sheets::systems::ai::column_helpers::calculate_dynamic_prefix;
 use crate::sheets::systems::ai::duplicate_map_helpers::build_composite_duplicate_map_for_parents;
@@ -139,14 +139,14 @@ pub fn process_new_rows(
                         Vec::new()
                     };
 
-                    let (parent_key_col, grand_cols) = if let Some(meta) = meta_opt {
-                        extract_parent_columns(meta)
-                    } else { (None, Vec::new()) };
+                    let parent_key_col = if let Some(meta) = meta_opt {
+                        extract_parent_key_column(meta)
+                    } else { None };
 
                     for (row_idx, row) in sheet_ref.grid.iter().enumerate() {
                         // If we have ancestors, only include rows matching ALL parent row_index values
                         if has_ancestors && !expected_parent_indices.is_empty() {
-                            if !row_matches_parent_chain(row, &expected_parent_indices, parent_key_col, &grand_cols) {
+                            if !row_matches_parent_chain(row, &expected_parent_indices, parent_key_col) {
                                 continue;
                             }
                         }

@@ -113,10 +113,7 @@ pub fn poll_migration_background(
                         ),
                     }
 
-                    completed_writer.write(MigrationCompleted {
-                        success: true,
-                        report: success_msg,
-                    });
+                    completed_writer.write(MigrationCompleted {});
                     bg_state.progress_rx = None;
                     bg_state.completion_rx = None;
                 }
@@ -127,10 +124,7 @@ pub fn poll_migration_background(
                         message: error_msg.clone(),
                         is_error: true,
                     });
-                    completed_writer.write(MigrationCompleted {
-                        success: false,
-                        report: error_msg,
-                    });
+                    completed_writer.write(MigrationCompleted {});
                     bg_state.progress_rx = None;
                     bg_state.completion_rx = None;
                 }

@@ -123,65 +123,6 @@ pub fn walk_parent_lineage(
     lineage
 }
 
-/// Format lineage as display string with separator (e.g., "Game › Platform › Store")
-pub fn format_lineage_display(lineage: &[LineageEntry], separator: &str) -> String {
-    lineage.iter()
-        .map(|(_, display_val, _)| display_val.as_str())
-        .collect::<Vec<_>>()
-        .join(separator)
-}
-
-/// Format lineage for AI context (comma-separated)
-pub fn format_lineage_for_ai(lineage: &[LineageEntry]) -> String {
-    lineage.iter()
-        .map(|(_, display_val, _)| display_val.as_str())
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
-/// Extract parent lineage display values for navigation
-pub fn build_navigation_lineage(
-    registry: &SheetRegistry,
-    parent_category: &Option<String>,
-    parent_sheet_name: &str,
-    parent_row_index: usize,
-) -> Vec<String> {
-    let lineage = walk_parent_lineage(registry, parent_category, parent_sheet_name, parent_row_index);
-    
-    lineage.iter()
-        .map(|(_, display_val, _)| display_val.clone())
-        .collect()
-}
-
-/// Resolve parent_key to display value from parent row
-pub fn resolve_parent_display_value(
-    registry: &SheetRegistry,
-    category: &Option<String>,
-    parent_sheet_name: &str,
-    parent_key_row_idx: usize,
-) -> String {
-    let Some(parent_sheet) = registry.get_sheet(category, parent_sheet_name) else {
-        warn!("resolve_parent_display_value: Sheet '{}' not found", parent_sheet_name);
-        return String::new();
-    };
-    
-    let Some(parent_metadata) = &parent_sheet.metadata else {
-        warn!("resolve_parent_display_value: Sheet '{}' has no metadata", parent_sheet_name);
-        return String::new();
-    };
-    
-    // Find row with matching row_index
-    if let Some(row) = find_row_by_index(&parent_sheet.grid, parent_key_row_idx) {
-        parent_metadata.get_first_data_column_value(row)
-    } else {
-        warn!(
-            "resolve_parent_display_value: Row index {} not found in sheet '{}'",
-            parent_key_row_idx, parent_sheet_name
-        );
-        String::new()
-    }
-}
-
 /// Gather AI contexts from lineage chain (from first data column definitions)
 pub fn gather_lineage_ai_contexts(
     registry: &SheetRegistry,
@@ -209,22 +150,6 @@ pub fn gather_lineage_ai_contexts(
     }
     
     contexts
-}
-
-/// Combine parent lineage display values with current row values for AI
-pub fn build_ai_attachment_chain(
-    lineage: &[LineageEntry],
-    current_row_values: &[String],
-) -> Vec<String> {
-    let mut chain = Vec::new();
-    
-    for (_, display_val, _) in lineage {
-        chain.push(display_val.clone());
-    }
-    
-    chain.extend_from_slice(current_row_values);
-    
-    chain
 }
 
 /// Convert lineage display values back to parent row_index (inverse of walk_parent_lineage)

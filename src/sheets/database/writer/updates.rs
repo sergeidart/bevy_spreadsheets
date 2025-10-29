@@ -5,19 +5,6 @@ use super::super::error::DbResult;
 use super::helpers::{build_update_sql, metadata_table_name};
 use rusqlite::{params, Connection};
 
-/// Update a single cell
-pub fn update_cell(
-    conn: &Connection,
-    table_name: &str,
-    row_index: usize,
-    column_name: &str,
-    value: &str,
-) -> DbResult<()> {
-    let sql = build_update_sql(table_name, column_name, "row_index = ?");
-    conn.execute(&sql, params![value, row_index as i32])?;
-    Ok(())
-}
-
 /// Update a structure sheet's cell value by row id.
 pub fn update_structure_cell_by_id(
     conn: &Connection,

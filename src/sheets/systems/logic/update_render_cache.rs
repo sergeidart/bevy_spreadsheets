@@ -375,7 +375,6 @@ pub fn handle_sheet_render_cache_update(
                                         if let Some(resolved_text) = resolve_ancestor_key_with_cache(
                                             cell_value_str,
                                             col_def,
-                                            &category,
                                             &sheet_name,
                                             &parent_lookup_cache,
                                         ) {

@@ -10,17 +10,12 @@ use crate::ui::elements::editor::state::EditorWindowState;
 
 /// Extract parent_key column from metadata
 /// Returns parent_key column index if found
-pub fn extract_parent_columns(metadata: &SheetMetadata) -> (Option<usize>, Vec<(usize, usize)>) {
-    let parent_key_col = metadata
+pub fn extract_parent_key_column(metadata: &SheetMetadata) -> Option<usize> {
+    metadata
         .columns
         .iter()
         .position(|c| c.header.eq_ignore_ascii_case("parent_key"))
-        .or_else(|| if metadata.is_structure_table() { Some(1) } else { None });
-
-    // No longer extract grand_* columns (they've been removed)
-    let grand_cols: Vec<(usize, usize)> = vec![];
-
-    (parent_key_col, grand_cols)
+        .or_else(|| if metadata.is_structure_table() { Some(1) } else { None })
 }
 
 /// Check if a row matches all expected parent indices in the chain
@@ -29,7 +24,6 @@ pub fn row_matches_parent_chain(
     row: &[String],
     expected_parent_indices: &[usize],
     parent_key_col: Option<usize>,
-    grand_cols: &[(usize, usize)],
 ) -> bool {
     if expected_parent_indices.is_empty() {
         return true;

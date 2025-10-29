@@ -6,8 +6,8 @@ use crate::sheets::resources::SheetRegistry;
 use crate::sheets::definitions::ColumnValidator;
 use crate::ui::elements::editor::state::EditorWindowState;
 use crate::sheets::systems::ai::row_helpers::normalize_cell_value;
-use crate::sheets::systems::ai::parent_chain_helpers::{
-    extract_parent_columns, row_matches_parent_chain, convert_parent_names_to_row_indices,
+use super::parent_chain_helpers::{
+    extract_parent_key_column, row_matches_parent_chain, convert_parent_names_to_row_indices,
 };
 use crate::sheets::systems::ai::column_helpers::extract_linked_column_info;
 
@@ -105,8 +105,8 @@ pub fn build_duplicate_map_for_parents(
 
     // Get parent column indices
     let meta_opt = sheet_ref.metadata.as_ref();
-    let (parent_key_col, grand_cols) = if let Some(meta) = meta_opt {
-        extract_parent_columns(meta)
+    let parent_key_col = if let Some(meta) = meta_opt {
+        extract_parent_key_column(meta)
     } else {
         return map;
     };
@@ -125,7 +125,7 @@ pub fn build_duplicate_map_for_parents(
 
     // Filter rows to only those matching ALL parent row_index values
     for (row_idx, row) in sheet_ref.grid.iter().enumerate() {
-        if !row_matches_parent_chain(row, &parent_row_indices, parent_key_col, &grand_cols) {
+        if !row_matches_parent_chain(row, &parent_row_indices, parent_key_col) {
             continue;
         }
 
@@ -180,15 +180,15 @@ pub fn build_composite_duplicate_map_for_parents(
     // Compute parent row indices to filter by full chain
     let parent_row_indices = convert_parent_names_to_row_indices(parent_prefix_values, state, registry);
 
-    // Get parent_key and grand columns
-    let (parent_key_col, grand_cols) = extract_parent_columns(meta);
+    // Get parent_key column
+    let parent_key_col = extract_parent_key_column(meta);
 
     // Pre-resolve linked info per included column
     let linked_targets = extract_linked_column_info(meta, included);
 
     // Iterate rows and filter by full parent chain; then build composite key
     for (row_idx, row) in sheet_ref.grid.iter().enumerate() {
-        if !row_matches_parent_chain(row, &parent_row_indices, parent_key_col, &grand_cols) {
+        if !row_matches_parent_chain(row, &parent_row_indices, parent_key_col) {
             continue;
         }
 

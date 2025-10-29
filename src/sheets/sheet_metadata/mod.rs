@@ -224,59 +224,6 @@ impl SheetMetadata {
         self.structure_parent.is_some()
     }
 
-    /// Returns the number of technical columns that exist in the database
-    /// but are NOT in metadata.columns (row_index, parent_key)
-    /// - Structure tables: 2 (row_index + parent_key)
-    /// - Regular tables: 1 (row_index only)
-    pub fn technical_column_count(&self) -> usize {
-        if self.is_structure_table() {
-            2 // row_index + parent_key
-        } else {
-            1 // row_index only
-        }
-    }
-
-    /// Maps a metadata column index to the actual database column index
-    /// accounting for technical columns (id, row_index, parent_key)
-    /// 
-    /// Database layout:
-    /// - Regular: id (0), row_index (1), data columns (2+)
-    /// - Structure: id (0), row_index (1), parent_key (2), data columns (3+)
-    /// 
-    /// Metadata.columns[0] -> DB column 2 (regular) or 3 (structure)
-    pub fn metadata_index_to_db_column(&self, metadata_idx: usize) -> usize {
-        if self.is_structure_table() {
-            metadata_idx + 3 // Skip id, row_index, parent_key
-        } else {
-            metadata_idx + 2 // Skip id, row_index
-        }
-    }
-
-    /// Maps a database column index to a metadata column index
-    /// Returns None if the db_idx points to a technical column
-    pub fn db_column_to_metadata_index(&self, db_idx: usize) -> Option<usize> {
-        let offset = if self.is_structure_table() { 3 } else { 2 };
-        if db_idx < offset {
-            None // Technical column
-        } else {
-            Some(db_idx - offset)
-        }
-    }
-
-    /// Maps a grid column index to a metadata column index
-    /// Grid layout: [technical_cols..., data_cols...]
-    /// - Structure: [row_index, parent_key, data...]
-    /// - Regular: [data...] (no technical cols in grid currently)
-    /// Returns None if the grid_idx points to a technical column
-    pub fn grid_index_to_metadata_index(&self, grid_idx: usize) -> Option<usize> {
-        let technical_count = if self.is_structure_table() { 2 } else { 0 };
-        if grid_idx < technical_count {
-            None // Technical column
-        } else {
-            Some(grid_idx - technical_count)
-        }
-    }
-
     /// Maps a metadata column index to a grid column index
     /// Accounts for technical columns at the start of the grid
     pub fn metadata_index_to_grid_index(&self, metadata_idx: usize) -> usize {
@@ -284,39 +231,6 @@ impl SheetMetadata {
             metadata_idx + 2 // Skip row_index, parent_key
         } else {
             metadata_idx // No offset for regular tables
-        }
-    }
-
-    /// Returns the count of technical columns (row_index, parent_key)
-    /// at the start of the columns list for a structure table
-    pub fn count_structure_technical_columns(&self) -> usize {
-        if !self.is_structure_table() {
-            return 0;
-        }
-
-        self.columns
-            .iter()
-            .take_while(|col| {
-                col.header.eq_ignore_ascii_case("row_index")
-                    || col.header.eq_ignore_ascii_case("parent_key")
-            })
-            .count()
-    }
-
-    /// Returns the index of the first real data column (after technical columns)
-    /// For structure tables, this skips row_index and parent_key
-    pub fn first_data_column_index(&self) -> usize {
-        self.count_structure_technical_columns()
-    }
-
-    /// Returns true if the column at the given index is a technical column
-    /// (row_index or parent_key)
-    pub fn is_technical_column(&self, col_index: usize) -> bool {
-        if let Some(col) = self.columns.get(col_index) {
-            col.header.eq_ignore_ascii_case("row_index")
-                || col.header.eq_ignore_ascii_case("parent_key")
-        } else {
-            false
         }
     }
 

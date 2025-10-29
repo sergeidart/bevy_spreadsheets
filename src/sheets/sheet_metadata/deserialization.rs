@@ -55,10 +55,6 @@ impl<'de> Deserialize<'de> for SheetMetadata {
             ai_model_id: String,
             #[serde(default)]
             ai_temperature: Option<f32>,
-            #[serde(default)]
-            ai_top_k: Option<i32>,
-            #[serde(default)]
-            ai_top_p: Option<f32>,
             #[serde(default = "default_grounding_with_google_search")]
             requested_grounding_with_google_search: Option<bool>,
             #[serde(default)]

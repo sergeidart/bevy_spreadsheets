@@ -3,15 +3,6 @@ use crate::sheets::definitions::{
     default_ai_model_id, ColumnDataType, ColumnDefinition, SheetMetadata,
 };
 
-#[derive(serde::Serialize, serde::Deserialize, Debug, Default)]
-pub struct ExampleItem {
-    pub id: String,
-    pub name: String,
-    pub value: i64,
-    pub cost: f64,
-    pub enabled: bool,
-}
-
 const EXAMPLE_ITEMS_SHEET_NAME: &str = "ExampleItems";
 const EXAMPLE_ITEMS_FILENAME: &str = "ExampleItems.json";
 const EXAMPLE_ITEMS_COLUMN_TYPES: &[ColumnDataType] = &[

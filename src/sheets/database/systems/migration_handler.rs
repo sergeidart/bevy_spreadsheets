@@ -44,7 +44,6 @@ pub fn handle_migration_requests(
                 let _ = tx_prog.send(MigrationProgress {
                     total: total_sheets,
                     completed: 0,
-                    current_sheet: None,
                     message: "Starting migration...".into(),
                 });
 
@@ -62,7 +61,6 @@ pub fn handle_migration_requests(
                     let _ = tx_prog.send(MigrationProgress {
                         total: total_sheets,
                         completed: idx,
-                        current_sheet: Some(sheet_name.clone()),
                         message: format!("Migrating '{}'...", sheet_name),
                     });
                     if let Some(pair) = sheets.get(sheet_name) {
@@ -145,7 +143,6 @@ pub fn handle_migration_requests(
                             let _ = tx_prog_cb.send(MigrationProgress {
                                 total: total_sheets_cb,
                                 completed: idx,
-                                current_sheet: Some(sheet_name_for_cb.clone()),
                                 message: format!(
                                     "{} ({}): {} rows...{}",
                                     sheet_name_for_cb, phase, count_display, suffix
@@ -197,7 +194,6 @@ pub fn handle_migration_requests(
                                 let _ = tx_prog.send(MigrationProgress {
                                     total: total_sheets,
                                     completed: idx + 1,
-                                    current_sheet: Some(sheet_name.clone()),
                                     message: completion_msg,
                                 });
                             }
@@ -215,7 +211,6 @@ pub fn handle_migration_requests(
                 let _ = tx_prog.send(MigrationProgress {
                     total: total_sheets,
                     completed: total_sheets,
-                    current_sheet: None,
                     message: "Applying migration fixes...".into(),
                 });
                 
@@ -251,7 +246,6 @@ pub fn handle_migration_requests(
                 let _ = tx_prog.send(MigrationProgress {
                     total: total_sheets,
                     completed: total_sheets,
-                    current_sheet: None,
                     message: "Validating row_index integrity...".into(),
                 });
                 
@@ -267,7 +261,6 @@ pub fn handle_migration_requests(
                 let _ = tx_prog.send(MigrationProgress {
                     total: total_sheets,
                     completed: total_sheets,
-                    current_sheet: None,
                     message: "Finalizing...".into(),
                 });
                 Ok((report, db_path))

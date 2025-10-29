@@ -3,9 +3,6 @@
 use super::super::error::DbResult;
 use rusqlite::{params, Connection};
 
-/// Current schema version - increment when adding migrations
-const CURRENT_SCHEMA_VERSION: i32 = 1;
-
 /// Create migration tracking table
 pub fn ensure_migration_tracking(conn: &Connection) -> DbResult<()> {
     conn.execute(
@@ -36,9 +33,4 @@ pub fn mark_migration_applied(conn: &Connection, version: i32, description: &str
         params![version, description],
     )?;
     Ok(())
-}
-
-/// Get current schema version constant
-pub fn current_schema_version() -> i32 {
-    CURRENT_SCHEMA_VERSION
 }

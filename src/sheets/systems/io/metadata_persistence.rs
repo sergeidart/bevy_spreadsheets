@@ -50,18 +50,3 @@ pub fn save_sheet_metadata(
         super::save::save_single_sheet(registry, metadata);
     }
 }
-
-/// Toggle the hidden flag for a sheet and persist the change
-pub fn toggle_sheet_hidden(
-    registry: &mut SheetRegistry,
-    category: &Option<String>,
-    sheet_name: &str,
-) -> Option<SheetMetadata> {
-    if let Some(data) = registry.get_sheet_mut(category, sheet_name) {
-        if let Some(meta) = &mut data.metadata {
-            meta.hidden = !meta.hidden;
-            return Some(meta.clone());
-        }
-    }
-    None
-}

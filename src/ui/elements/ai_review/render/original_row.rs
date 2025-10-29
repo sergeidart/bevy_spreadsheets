@@ -58,7 +58,6 @@ pub fn render_original_preview_row(
         }
         OriginalPreviewPlan::NewDuplicate {
             merge_decided,
-            merge_selected,
             has_undecided_structures,
             columns,
             ..

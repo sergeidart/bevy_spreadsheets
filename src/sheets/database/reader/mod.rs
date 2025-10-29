@@ -39,7 +39,7 @@ impl DbReader {
         let mut columns = Self::parse_metadata_columns(meta_rows)?;
 
         // Prepend technical columns based on table type
-        columns = Self::prepend_technical_columns(conn, table_name, columns, is_structure)?;
+        columns = Self::prepend_technical_columns(columns, is_structure)?;
 
         // Auto-recover orphaned columns
         columns = Self::recover_orphaned_columns(conn, table_name, &meta_table, columns)?;
@@ -265,8 +265,6 @@ impl DbReader {
     }
 
     fn prepend_technical_columns(
-        conn: &Connection,
-        table_name: &str,
         mut columns: Vec<ColumnDefinition>,
         is_structure: bool,
     ) -> DbResult<Vec<ColumnDefinition>> {

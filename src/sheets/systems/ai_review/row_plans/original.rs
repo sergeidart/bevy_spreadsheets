@@ -19,16 +19,6 @@ pub struct StructurePreviewResult {
     pub is_ai_added: bool,
 }
 
-impl StructurePreviewResult {
-    pub fn empty() -> Self {
-        Self {
-            preview: String::new(),
-            parse_failed: false,
-            is_ai_added: false,
-        }
-    }
-}
-
 fn get_original_structure_preview_from_cache(
     state: &EditorWindowState,
     ai_structure_reviews: &[StructureReviewEntry],
@@ -145,7 +135,6 @@ pub enum OriginalPreviewCellPlan {
 #[derive(Debug, Clone)]
 pub enum OriginalPreviewPlan {
     Existing {
-        row_index: usize,
         has_undecided_structures: bool,
         columns: Vec<(ColumnEntry, OriginalPreviewCellPlan)>,
     },
@@ -155,9 +144,7 @@ pub enum OriginalPreviewPlan {
     },
     NewDuplicate {
         merge_decided: bool,
-        merge_selected: bool,
         has_undecided_structures: bool,
-        treat_as_regular: bool,
         columns: Vec<(ColumnEntry, OriginalPreviewCellPlan)>,
     },
 }
@@ -221,8 +208,6 @@ pub fn prepare_original_preview_plan(
                         ));
                     }
                     ColumnEntry::Regular(actual_col) => {
-                        // Allow parent_key in original/preview rows with override toggle
-                        let is_parent_key = is_parent_key_column(detail_ctx, *actual_col);
                         if let Some(pos) = rr
                             .non_structure_columns
                             .iter()
@@ -248,7 +233,6 @@ pub fn prepare_original_preview_plan(
             }
 
             Some(OriginalPreviewPlan::Existing {
-                row_index: rr.row_index,
                 has_undecided_structures: has_undecided,
                 columns,
             })
@@ -276,7 +260,7 @@ pub fn prepare_original_preview_plan(
                         ));
                     }
                     ColumnEntry::Regular(actual_col) => {
-                        let is_parent_key = is_parent_key_column(detail_ctx, *actual_col);
+                        let is_parent_key = is_parent_key_column(*actual_col);
                         
                         if is_parent_key {
                             // For parent_key column, create a Data plan so checkbox can render
@@ -359,7 +343,7 @@ pub fn prepare_original_preview_plan(
                                 .iter()
                                 .position(|c| c == actual_col)
                             {
-                                let is_parent_key = is_parent_key_column(detail_ctx, *actual_col);
+                                let is_parent_key = is_parent_key_column(*actual_col);
                                 if is_parent_key {
                                     // Don't show parent_key for original column preview during merge
                                     // (it will be shown inside AI row only)
@@ -399,9 +383,7 @@ pub fn prepare_original_preview_plan(
 
             Some(OriginalPreviewPlan::NewDuplicate {
                 merge_decided: nr.merge_decided,
-                merge_selected: nr.merge_selected,
                 has_undecided_structures: has_undecided,
-                treat_as_regular,
                 columns,
             })
         }

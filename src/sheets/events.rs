@@ -173,8 +173,6 @@ pub struct AiBatchTaskResult {
     pub raw_response: Option<String>,
     pub included_non_structure_columns: Vec<usize>,
     pub key_prefix_count: usize, // number of leading key/context columns prefixed to each row in result
-    // NEW: Indicates this batch was initiated from a prompt with zero selected rows
-    pub prompt_only: bool,
     pub kind: AiBatchResultKind,
 }
 
@@ -316,21 +314,9 @@ pub struct RequestDeleteCategory {
     pub name: String,
 }
 
-// --- IO: Create directory for category on disk ---
-#[derive(Event, Debug, Clone)]
-pub struct RequestCreateCategoryDirectory {
-    pub name: String,
-}
-
 // --- Category rename events ---
 #[derive(Event, Debug, Clone)]
 pub struct RequestRenameCategory {
-    pub old_name: String,
-    pub new_name: String,
-}
-
-#[derive(Event, Debug, Clone)]
-pub struct RequestRenameCategoryDirectory {
     pub old_name: String,
     pub new_name: String,
 }
@@ -367,16 +353,12 @@ pub struct RequestUploadJsonToCurrentDb {
 }
 
 #[derive(Event, Debug, Clone)]
-pub struct MigrationCompleted {
-    pub success: bool,
-    pub report: String,
-}
+pub struct MigrationCompleted {}
 
 #[derive(Event, Debug, Clone)]
 pub struct MigrationProgress {
     pub total: usize,
     pub completed: usize,
-    pub current_sheet: Option<String>,
     pub message: String,
 }
 

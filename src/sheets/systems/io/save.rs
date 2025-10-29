@@ -10,10 +10,7 @@ use std::{
 use super::{get_default_data_base_path, get_full_metadata_path, get_full_sheet_path};
 use crate::sheets::{
     definitions::SheetMetadata, // Added SheetMetadata
-    events::{
-        RequestCreateCategoryDirectory, RequestDeleteSheetFile, RequestRenameCategoryDirectory,
-        RequestRenameSheetFile,
-    },
+    events::{RequestDeleteSheetFile, RequestRenameSheetFile},
     resources::SheetRegistry,
 };
 
@@ -160,36 +157,6 @@ pub fn save_single_sheet(registry: &SheetRegistry, metadata_to_save: &SheetMetad
                 "Failed to save sheet '{:?}/{}': Sheet not found in registry.",
                 category, sheet_name
             );
-        }
-    }
-}
-
-/// Handles creating a directory for a new category under the data base path.
-pub fn handle_create_category_directory_request(
-    mut events: EventReader<RequestCreateCategoryDirectory>,
-) {
-    use std::fs;
-    let base_path = get_default_data_base_path();
-    for ev in events.read() {
-        let name = ev.name.trim();
-        if name.is_empty() {
-            continue;
-        }
-        let dir_path = base_path.join(name);
-        if dir_path.exists() {
-            trace!(
-                "Category directory already exists: '{}'",
-                dir_path.display()
-            );
-            continue;
-        }
-        match fs::create_dir_all(&dir_path) {
-            Ok(_) => info!("Created category directory: '{}'", dir_path.display()),
-            Err(e) => error!(
-                "Failed to create category directory '{}': {}",
-                dir_path.display(),
-                e
-            ),
         }
     }
 }
@@ -387,47 +354,6 @@ pub fn handle_rename_sheet_file_request(mut events: EventReader<RequestRenameShe
                     }
                 }
             }
-        }
-    }
-}
-
-/// Handles renaming a category directory if it exists.
-pub fn handle_rename_category_directory_request(
-    mut events: EventReader<RequestRenameCategoryDirectory>,
-) {
-    use std::fs;
-    let base = get_default_data_base_path();
-    for ev in events.read() {
-        let old = ev.old_name.trim();
-        let new = ev.new_name.trim();
-        if old.is_empty() || new.is_empty() || old == new {
-            continue;
-        }
-        let from = base.join(old);
-        let to = base.join(new);
-        if from.exists() {
-            if to.exists() {
-                warn!(
-                    "Target category directory already exists: '{}'",
-                    to.display()
-                );
-                continue;
-            }
-            match fs::rename(&from, &to) {
-                Ok(_) => info!(
-                    "Renamed category directory: '{}' -> '{}'",
-                    from.display(),
-                    to.display()
-                ),
-                Err(e) => error!(
-                    "Failed to rename category directory '{}' -> '{}': {}",
-                    from.display(),
-                    to.display(),
-                    e
-                ),
-            }
-        } else {
-            trace!("Category directory '{}' not found to rename; it may be empty-only and not created yet.", from.display());
         }
     }
 }

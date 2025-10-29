@@ -45,7 +45,6 @@ pub enum AiSuggestedCellPlan {
 #[derive(Debug, Clone)]
 pub enum AiSuggestedPlan {
     Existing {
-        row_index: usize,
         has_undecided_structures: bool,
         columns: Vec<(ColumnEntry, AiSuggestedCellPlan)>,
     },
@@ -174,7 +173,7 @@ pub fn prepare_ai_suggested_plan(
                             .non_structure_columns
                             .iter()
                             .position(|c| c == actual_col);
-                        let is_parent_key = is_parent_key_column(detail_ctx, *actual_col);
+                        let is_parent_key = is_parent_key_column(*actual_col);
                         let has_linked = linked_column_options.contains_key(actual_col);
                         columns.push((
                             *entry,
@@ -190,7 +189,6 @@ pub fn prepare_ai_suggested_plan(
             }
 
             Some(AiSuggestedPlan::Existing {
-                row_index: rr.row_index,
                 has_undecided_structures: has_undecided,
                 columns,
             })
@@ -216,7 +214,7 @@ pub fn prepare_ai_suggested_plan(
                             .non_structure_columns
                             .iter()
                             .position(|c| c == actual_col);
-                        let is_parent_key = is_parent_key_column(detail_ctx, *actual_col);
+                        let is_parent_key = is_parent_key_column(*actual_col);
                         let has_linked = linked_column_options.contains_key(actual_col);
                         columns.push((
                             *entry,
@@ -268,7 +266,7 @@ pub fn prepare_ai_suggested_plan(
                             .non_structure_columns
                             .iter()
                             .position(|c| c == actual_col);
-                        let is_parent_key = is_parent_key_column(detail_ctx, *actual_col);
+                        let is_parent_key = is_parent_key_column(*actual_col);
                         let has_linked = linked_column_options.contains_key(actual_col);
                         columns.push((
                             *entry,

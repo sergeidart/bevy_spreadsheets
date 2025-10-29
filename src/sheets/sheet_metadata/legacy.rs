@@ -23,8 +23,6 @@ struct LegacySheetMetadataHelper {
     ai_general_rule: Option<String>,
     ai_model_id: Option<String>,
     ai_temperature: Option<f32>,
-    ai_top_k: Option<i32>,
-    ai_top_p: Option<f32>,
     requested_grounding_with_google_search: Option<bool>,
     random_picker: Option<RandomPickerSettings>,
 }

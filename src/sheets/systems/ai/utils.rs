@@ -2,6 +2,77 @@
 // Shared helpers for AI systems (non-UI)
 use crate::sheets::definitions::StructureFieldDefinition;
 
+/// Extract nested structure field by navigating through JSON using field headers
+/// Returns the JSON string representing the nested structure data
+///
+/// # Arguments
+/// * `cell_json` - The JSON string to navigate
+/// * `field_path` - Path of field names to navigate through (e.g., ["Skills", "Proficiency"])
+///
+/// # Returns
+/// `Some(json_string)` if the path exists, `None` otherwise
+pub fn extract_nested_structure_json(cell_json: &str, field_path: &[String]) -> Option<String> {
+    if field_path.is_empty() {
+        return Some(cell_json.to_string());
+    }
+
+    let trimmed = cell_json.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let mut current_value = match serde_json::from_str::<serde_json::Value>(trimmed) {
+        Ok(v) => v,
+        Err(_) => return None,
+    };
+
+    // Navigate through each level of the field path
+    for (depth, field_name) in field_path.iter().enumerate() {
+        let is_last = depth == field_path.len() - 1;
+
+        match current_value {
+            serde_json::Value::Array(arr) => {
+                // For arrays, we need to extract the field from each object in the array
+                // and reconstruct as an array
+                let mut extracted_values = Vec::new();
+
+                for item in arr {
+                    if let serde_json::Value::Object(map) = item {
+                        if let Some(nested_value) = map.get(field_name) {
+                            extracted_values.push(nested_value.clone());
+                        }
+                    }
+                }
+
+                if extracted_values.is_empty() {
+                    return None;
+                }
+
+                if is_last {
+                    // This is the target field - return all extracted values as array
+                    return Some(serde_json::to_string(&extracted_values).unwrap_or_default());
+                } else {
+                    // Continue navigating - if there are multiple values, we take the first one
+                    // (this is a simplification; in practice, nested arrays are complex)
+                    current_value = extracted_values.into_iter().next()?;
+                }
+            }
+            serde_json::Value::Object(map) => {
+                // For a single object, extract the field
+                current_value = map.get(field_name)?.clone();
+
+                if is_last {
+                    // This is the target field - return it
+                    return Some(serde_json::to_string(&current_value).unwrap_or_default());
+                }
+            }
+            _ => return None,
+        }
+    }
+
+    Some(serde_json::to_string(&current_value).unwrap_or_default())
+}
+
 /// Parse structure rows from a serialized cell string produced previously by serialize_structure_rows_for_review.
 /// Accepts either a JSON array of objects or legacy newline/pipe/tab separated formats.
 pub fn parse_structure_rows_from_cell(
@@ -118,4 +189,72 @@ pub fn parse_structure_rows_from_cell(
         }
     }
     rows
+}
+
+/// Build nested field path for structure navigation
+///
+/// Traverses the structure schema to build a path of field headers
+/// for navigating nested structures.
+pub fn build_nested_field_path(
+    structure_path: &[usize],
+    root_meta: &crate::sheets::sheet_metadata::SheetMetadata,
+) -> Vec<String> {
+    if structure_path.len() <= 1 {
+        return Vec::new();
+    }
+
+    let mut field_path = Vec::new();
+    if let Some(&first_col_idx) = structure_path.first() {
+        if let Some(first_col) = root_meta.columns.get(first_col_idx) {
+            let mut current_schema = first_col.structure_schema.as_ref();
+            for &nested_idx in structure_path.iter().skip(1) {
+                if let Some(schema) = current_schema {
+                    if let Some(field) = schema.get(nested_idx) {
+                        field_path.push(field.header.clone());
+                        current_schema = field.structure_schema.as_ref();
+                    }
+                }
+            }
+        }
+    }
+    field_path
+}
+
+/// Extract key column index and row generation settings from structure path
+///
+/// Navigates through the structure schema to find the key parent column
+/// and whether row generation is allowed.
+///
+/// Returns (key_column_index, allow_row_additions)
+pub fn extract_structure_settings(
+    structure_path: &[usize],
+    root_meta: &crate::sheets::sheet_metadata::SheetMetadata,
+) -> (Option<usize>, bool) {
+    let sheet_allow_add_rows = root_meta.ai_enable_row_generation;
+
+    if let Some(&first_path_idx) = structure_path.first() {
+        if let Some(first_col) = root_meta.columns.get(first_path_idx) {
+            if structure_path.len() == 1 {
+                let key_idx = first_col.structure_key_parent_column_index;
+                let allow_add = first_col.ai_enable_row_generation.unwrap_or(sheet_allow_add_rows);
+                return (key_idx, allow_add);
+            } else {
+                let mut current_schema = first_col.structure_schema.as_ref();
+                let mut key_idx = first_col.structure_key_parent_column_index;
+                let mut allow_add = first_col.ai_enable_row_generation.unwrap_or(sheet_allow_add_rows);
+
+                for &nested_idx in structure_path.iter().skip(1) {
+                    if let Some(schema) = current_schema {
+                        if let Some(field) = schema.get(nested_idx) {
+                            key_idx = field.structure_key_parent_column_index;
+                            allow_add = field.ai_enable_row_generation.unwrap_or(allow_add);
+                            current_schema = field.structure_schema.as_ref();
+                        }
+                    }
+                }
+                return (key_idx, allow_add);
+            }
+        }
+    }
+    (None, sheet_allow_add_rows)
 }

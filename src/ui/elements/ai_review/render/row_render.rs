@@ -7,14 +7,12 @@ use egui_extras::{TableBody, TableRow};
 use super::ai_row::render_ai_suggested_row;
 use super::cell_render::render_ancestor_dropdown;
 use super::original_row::render_original_preview_row;
-use super::status_row::render_status_row;
 
 use crate::sheets::definitions::SheetMetadata;
 use crate::sheets::resources::SheetRegistry;
 pub use crate::sheets::systems::ai_review::build_blocks;
 use crate::sheets::systems::ai_review::{
-    prepare_ai_suggested_plan, prepare_original_preview_plan, prepare_status_row_plan, RowBlock,
-    RowKind,
+    prepare_ai_suggested_plan, prepare_original_preview_plan, RowBlock, RowKind,
 };
 use crate::sheets::systems::ai_review::review_logic::ColumnEntry;
 use crate::sheets::systems::logic::lineage_helpers::{
@@ -422,25 +420,6 @@ pub fn render_rows(body: &mut TableBody<'_>, mut ctx: RowContext<'_>) {
 
                 if let Some(plan) = plan {
                     render_ai_suggested_row(&mut row, data_idx, kind, &plan, &mut ctx);
-                } else {
-                    render_empty_row(
-                        &mut row,
-                        ctx.ancestor_key_columns.len(),
-                        ctx.merged_columns.len(),
-                    );
-                }
-            }
-            RowBlock::Status(data_idx, kind) => {
-                let plan = prepare_status_row_plan(
-                    &*ctx.state,
-                    ctx.ai_structure_reviews,
-                    ctx.merged_columns,
-                    kind,
-                    data_idx,
-                );
-
-                if let Some(plan) = plan {
-                    render_status_row(&mut row, data_idx, kind, &plan, &mut ctx);
                 } else {
                     render_empty_row(
                         &mut row,

@@ -52,11 +52,7 @@ pub(super) fn has_undecided_structures_in_context(
     })
 }
 
-pub(super) fn is_parent_key_column(
-    detail_ctx: Option<&StructureDetailContext>,
-    actual_col: usize,
-) -> bool {
+pub(super) fn is_parent_key_column(actual_col: usize) -> bool {
     // Treat the technical parent_key as column index 1 in structure contexts.
-    // It should be special regardless of whether a detail context is present.
     actual_col == 1
 }

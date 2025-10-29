@@ -14,10 +14,6 @@ use std::thread;
 pub fn handle_upload_json_to_current_db(
     mut events: EventReader<RequestUploadJsonToCurrentDb>,
     mut feedback_writer: EventWriter<SheetOperationFeedback>,
-    mut registry: ResMut<crate::sheets::resources::SheetRegistry>,
-    mut data_modified_writer: EventWriter<crate::sheets::events::SheetDataModifiedInRegistryEvent>,
-    mut revalidate_writer: EventWriter<crate::sheets::events::RequestSheetRevalidation>,
-    mut editor_state: Option<ResMut<crate::ui::elements::editor::state::EditorWindowState>>,
     mut bg_state: ResMut<MigrationBackgroundState>,
 ) {
     for event in events.read() {
@@ -111,7 +107,6 @@ pub fn handle_upload_json_to_current_db(
                 let _ = tx_prog.send(MigrationProgress {
                     total: 1,
                     completed: 0,
-                    current_sheet: Some(table_name_clone.clone()),
                     message: format!("Migrating '{}'...", table_name_clone),
                 });
 
@@ -211,7 +206,6 @@ pub fn handle_upload_json_to_current_db(
                     let _ = tx_prog_cb.send(MigrationProgress {
                         total: 1,
                         completed: 0,
-                        current_sheet: Some(table_name_cb.clone()),
                         message: format!(
                             "{} ({}): {} rows...{}",
                             table_name_cb, phase, count_display, suffix
@@ -261,7 +255,6 @@ pub fn handle_upload_json_to_current_db(
                         let _ = tx_prog.send(MigrationProgress {
                             total: 1,
                             completed: 1,
-                            current_sheet: Some(table_name_clone.clone()),
                             message: completion_msg,
                         });
                     }
@@ -273,7 +266,6 @@ pub fn handle_upload_json_to_current_db(
                         let _ = tx_prog.send(MigrationProgress {
                             total: 1,
                             completed: 1,
-                            current_sheet: Some(table_name_clone.clone()),
                             message: format!("Failed '{}'", table_name_clone),
                         });
                     }
