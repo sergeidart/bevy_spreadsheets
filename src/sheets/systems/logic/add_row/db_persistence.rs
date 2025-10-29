@@ -151,6 +151,9 @@ pub(super) fn persist_row_to_db(
         .map_err(|e| format!("Failed to prepend row to database: {:?}", e))?;
     }
 
+    // Checkpoint to ensure data is flushed to disk
+    let _ = crate::sheets::database::checkpoint::checkpoint_database(&conn);
+
     Ok(())
 }
 
@@ -312,6 +315,9 @@ pub(super) fn persist_rows_batch_to_db(
         )
         .map_err(|e| format!("Failed to batch prepend rows to database: {:?}", e))?;
     }
+
+    // Checkpoint to ensure data is flushed to disk
+    let _ = crate::sheets::database::checkpoint::checkpoint_database(&conn);
 
     Ok(())
 }

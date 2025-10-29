@@ -90,6 +90,7 @@ impl Plugin for SheetsPlugin {
         app.init_resource::<PendingStructureCascade>();
         app.init_resource::<ClipboardBuffer>();
         app.init_resource::<super::database::systems::MigrationBackgroundState>();
+        app.init_resource::<super::database::checkpoint::CheckpointTimer>();
 
         app.add_event::<AddSheetRowRequest>()
             .add_event::<AddSheetRowsBatchRequest>()
@@ -259,10 +260,18 @@ impl Plugin for SheetsPlugin {
                 super::database::handle_upload_json_to_current_db,
                 super::database::handle_export_requests,
                 super::database::handle_migration_completion,
+                // Periodic WAL checkpoint to prevent data loss
+                super::database::checkpoint::periodic_checkpoint,
             )
                 .in_set(SheetSystemSet::FileOperations),
         );
 
-        info!("SheetsPlugin initialized (with SheetRenderCache).");
+        // Critical: Checkpoint databases on app exit to prevent data loss
+        app.add_systems(
+            Update,
+            super::database::checkpoint::checkpoint_on_exit,
+        );
+
+        info!("SheetsPlugin initialized (with SheetRenderCache and WAL checkpoint protection).");
     }
 }
