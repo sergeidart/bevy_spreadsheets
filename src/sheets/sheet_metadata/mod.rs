@@ -319,4 +319,66 @@ impl SheetMetadata {
             false
         }
     }
+
+    /// Check if a column header name represents a technical column
+    /// 
+    /// Technical columns include: row_index, parent_key, id, temp_new_row_index, _obsolete_temp_new_row_index
+    pub fn is_technical_column_header(header: &str) -> bool {
+        let h = header.to_lowercase();
+        matches!(
+            h.as_str(),
+            "row_index" | "parent_key" | "id" | "temp_new_row_index" | "_obsolete_temp_new_row_index"
+        )
+    }
+
+    /// Check if a column header name represents a metadata/timestamp column
+    /// 
+    /// Metadata columns include: created_at, updated_at
+    pub fn is_metadata_column_header(header: &str) -> bool {
+        let h = header.to_lowercase();
+        matches!(h.as_str(), "created_at" | "updated_at")
+    }
+
+    /// Find the index of the first data column (excluding technical and metadata columns)
+    /// 
+    /// Returns None if no data column is found
+    pub fn find_first_data_column_index(&self) -> Option<usize> {
+        self.columns.iter().position(|col| {
+            if col.deleted || col.hidden {
+                return false;
+            }
+            !Self::is_technical_column_header(&col.header)
+                && !Self::is_metadata_column_header(&col.header)
+        })
+    }
+
+    /// Get the value from the first data column in a row
+    /// 
+    /// Skips technical columns (row_index, parent_key, id) and metadata columns (created_at, updated_at)
+    /// Returns the first non-empty value found, or empty string if none found
+    pub fn get_first_data_column_value(&self, row: &[String]) -> String {
+        // Find first non-technical, non-metadata column
+        for (idx, col) in self.columns.iter().enumerate() {
+            if col.deleted || col.hidden {
+                continue;
+            }
+
+            if Self::is_technical_column_header(&col.header) {
+                continue;
+            }
+
+            if Self::is_metadata_column_header(&col.header) {
+                continue;
+            }
+
+            // This is a data column
+            return row.get(idx).cloned().unwrap_or_default();
+        }
+
+        // Fallback: any non-empty value
+        row.iter()
+            .find(|s| !s.trim().is_empty())
+            .cloned()
+            .unwrap_or_default()
+    }
 }

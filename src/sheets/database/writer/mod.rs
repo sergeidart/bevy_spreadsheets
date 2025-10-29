@@ -7,6 +7,10 @@ mod deletions;
 mod renames;
 mod metadata;
 mod cascades;
+mod helpers;
+
+#[cfg(test)]
+mod test_helpers;
 
 use super::error::DbResult;
 use crate::sheets::definitions::{ColumnDataType, ColumnValidator, SheetMetadata};
@@ -253,13 +257,6 @@ impl DbWriter {
         renames::update_metadata_column_name_by_name(conn, table_name, old_name, new_name)
     }
 
-    // ============================================================================
-    // CASCADES - See cascades.rs
-    // ============================================================================
-    
-    /// Cascade key value change to child structure tables
-    /// Updates parent_key and grand_N_parent values in all descendant tables
-    /// to maintain referential integrity after a parent key value is changed
     pub fn cascade_key_value_change_to_children(
         conn: &Connection,
         parent_table: &str,
@@ -276,11 +273,6 @@ impl DbWriter {
         )
     }
 
-    // ============================================================================
-    // METADATA - See metadata.rs
-    // ============================================================================
-    
-    /// Update a table's hidden flag in global _Metadata
     pub fn update_table_hidden(conn: &Connection, table_name: &str, hidden: bool) -> DbResult<()> {
         metadata::update_table_hidden(conn, table_name, hidden)
     }
@@ -396,67 +388,7 @@ impl DbWriter {
 mod tests {
     use super::*;
     use rusqlite::{params, Connection};
-
-    fn setup_simple_table(conn: &Connection, table: &str) {
-        let sql = format!(
-            "CREATE TABLE IF NOT EXISTS \"{}\" (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                row_index INTEGER NOT NULL UNIQUE,
-                \"Name\" TEXT,
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )",
-            table
-        );
-        conn.execute(&sql, []).unwrap();
-        // Helpful index similar to production
-        let index_name = table.replace(" ", "_");
-        conn.execute(
-            &format!(
-                "CREATE INDEX IF NOT EXISTS idx_{}_row_index ON \"{}\"(row_index)",
-                index_name, table
-            ),
-            [],
-        )
-        .unwrap();
-    }
-
-    fn setup_metadata_table(conn: &Connection, table: &str, cols: &[&str]) {
-        let meta = format!("{}_Metadata", table);
-        conn.execute(
-            &format!(
-                "CREATE TABLE IF NOT EXISTS \"{}\" (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    column_index INTEGER UNIQUE NOT NULL,
-                    column_name TEXT UNIQUE NOT NULL,
-                    data_type TEXT,
-                    validator_type TEXT,
-                    validator_config TEXT,
-                    ai_context TEXT,
-                    filter_expr TEXT,
-                    ai_enable_row_generation INTEGER DEFAULT 0,
-                    ai_include_in_send INTEGER DEFAULT 1,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
-                )",
-                meta
-            ),
-            [],
-        )
-        .unwrap();
-        let mut idx = 0i32;
-        for c in cols {
-            conn.execute(
-                &format!(
-                    "INSERT INTO \"{}\" (column_index, column_name) VALUES (?, ?)",
-                    meta
-                ),
-                params![idx, *c],
-            )
-            .unwrap();
-            idx += 1;
-        }
-    }
+    use test_helpers::{setup_simple_table, setup_metadata_table};
 
     #[test]
     fn test_update_column_indices_reorders_without_collision() {
@@ -537,12 +469,9 @@ mod tests {
             params![1i32, "A1"],
         )
         .unwrap();
-        // Add new row "New" (appends at max_index + 1)
         let cols = vec!["Name".to_string()];
         let data = vec!["New".to_string()];
         DbWriter::prepend_row(&conn, table, &data, &cols).unwrap();
-        // Expect three rows with indices 0,1,2 and values in storage: A0, A1, New
-        // With DESC sort, display order is: New (2), A1 (1), A0 (0)
         let mut stmt = conn
             .prepare(&format!(
                 "SELECT row_index, \"Name\" FROM \"{}\" ORDER BY row_index DESC",

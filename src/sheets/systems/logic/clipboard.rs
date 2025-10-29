@@ -1,10 +1,11 @@
 // src/sheets/systems/logic/clipboard.rs
 use crate::sheets::{
-    definitions::{ColumnValidator, StructureFieldDefinition},
+    definitions::ColumnValidator,
     events::{RequestCopyCell, RequestPasteCell, SheetOperationFeedback, UpdateCellEvent},
     resources::{ClipboardBuffer, SheetRegistry},
     systems::ai::utils::parse_structure_rows_from_cell,
 };
+use crate::ui::elements::ai_review::serialization_helpers::serialize_structure_rows_to_json;
 use bevy::prelude::*;
 
 /// Handle copy cell events - copies cell value and structure data if applicable
@@ -150,8 +151,9 @@ pub fn handle_paste_cell(
                         .and_then(|meta| meta.columns.get(event.col_index))
                         .and_then(|col| col.structure_schema.as_ref())
                     {
-                        // Convert structure rows back to JSON format
-                        serialize_structure_rows(structure_rows, target_schema)
+                        // Convert structure rows back to JSON format using shared helper
+                        let headers: Vec<String> = target_schema.iter().map(|f| f.header.clone()).collect();
+                        serialize_structure_rows_to_json(structure_rows, &headers)
                     } else {
                         clipboard.cell_value.clone().unwrap_or_default()
                     }
@@ -185,26 +187,4 @@ pub fn handle_paste_cell(
             is_error: false,
         });
     }
-}
-
-/// Serialize structure rows back to JSON format for storage
-fn serialize_structure_rows(rows: &[Vec<String>], schema: &[StructureFieldDefinition]) -> String {
-    if rows.is_empty() {
-        return String::new();
-    }
-
-    // Convert rows to JSON array of objects
-    let json_array: Vec<serde_json::Value> = rows
-        .iter()
-        .map(|row| {
-            let mut obj = serde_json::Map::new();
-            for (idx, field) in schema.iter().enumerate() {
-                let value = row.get(idx).cloned().unwrap_or_default();
-                obj.insert(field.header.clone(), serde_json::Value::String(value));
-            }
-            serde_json::Value::Object(obj)
-        })
-        .collect();
-
-    serde_json::to_string(&json_array).unwrap_or_default()
 }

@@ -2,6 +2,7 @@
 // Update operations - modifying cell values and structure data
 
 use super::super::error::DbResult;
+use super::helpers::{build_update_sql, metadata_table_name};
 use rusqlite::{params, Connection};
 
 /// Update a single cell
@@ -12,13 +13,8 @@ pub fn update_cell(
     column_name: &str,
     value: &str,
 ) -> DbResult<()> {
-    conn.execute(
-        &format!(
-            "UPDATE \"{}\" SET \"{}\" = ? WHERE row_index = ?",
-            table_name, column_name
-        ),
-        params![value, row_index as i32],
-    )?;
+    let sql = build_update_sql(table_name, column_name, "row_index = ?");
+    conn.execute(&sql, params![value, row_index as i32])?;
     Ok(())
 }
 
@@ -30,13 +26,8 @@ pub fn update_structure_cell_by_id(
     column_name: &str,
     value: &str,
 ) -> DbResult<()> {
-    conn.execute(
-        &format!(
-            "UPDATE \"{}\" SET \"{}\" = ? WHERE id = ?",
-            table_name, column_name
-        ),
-        params![value, row_id],
-    )?;
+    let sql = build_update_sql(table_name, column_name, "id = ?");
+    conn.execute(&sql, params![value, row_id])?;
     Ok(())
 }
 
@@ -47,7 +38,7 @@ pub fn update_column_indices(
     table_name: &str,
     ordered_pairs: &[(String, i32)],
 ) -> DbResult<()> {
-    let meta_table = format!("{}_Metadata", table_name);
+    let meta_table = metadata_table_name(table_name);
 
     bevy::log::info!(
         "update_column_indices: Starting update for table '{}' with {} pairs",

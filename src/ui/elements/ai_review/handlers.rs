@@ -5,6 +5,10 @@ use crate::sheets::systems::logic::lineage_helpers::resolve_parent_key_from_line
 use crate::ui::elements::editor::state::{
     EditorWindowState, NewRowReview, ReviewChoice, StructureReviewEntry,
 };
+use crate::ui::elements::ai_review::serialization_helpers::{
+    serialize_structure_rows_to_json, get_rows_to_serialize,
+    resolve_parent_key_for_new_row, adjust_parent_indices_after_removal,
+};
 use bevy::prelude::{info, warn, EventWriter};
 
 fn remove_new_row_context(state: &mut EditorWindowState, new_index: usize) {
@@ -50,6 +54,8 @@ pub fn take_structure_entries_for_new(
     extracted
 }
 
+/// Queue a new row addition (legacy helper - kept for potential future use)
+#[allow(dead_code)]
 pub fn queue_new_row_add(
     review: &NewRowReview,
     _selected_category: &Option<String>,
@@ -77,39 +83,16 @@ pub fn queue_new_row_add(
             continue;
         }
 
-        // Use merged_rows if decided (contains user's final choices), otherwise use ai_rows
-        let rows_to_serialize = if entry.decided {
-            &entry.merged_rows
-        } else {
-            &entry.ai_rows
-        };
+        // Get the appropriate rows based on decision status
+        let rows_to_serialize = get_rows_to_serialize(&entry);
 
-        // Convert rows to array of objects using schema_headers
+        // Serialize rows to JSON using shared helper
         info!(
             "Serializing structure for new row: {} rows, schema_headers={:?}",
             rows_to_serialize.len(),
             entry.schema_headers
         );
-        let array_of_objects: Vec<serde_json::Map<String, serde_json::Value>> = rows_to_serialize
-            .iter()
-            .enumerate()
-            .map(|(row_idx, row)| {
-                info!("  Row {}: len={}, data={:?}", row_idx, row.len(), row);
-                let mut obj = serde_json::Map::new();
-                for (i, value) in row.iter().enumerate() {
-                    let field_name = entry
-                        .schema_headers
-                        .get(i)
-                        .cloned()
-                        .unwrap_or_else(|| format!("field_{}", i));
-                    obj.insert(field_name, serde_json::Value::String(value.clone()));
-                }
-                obj
-            })
-            .collect();
-
-        let json_value = serde_json::json!(array_of_objects);
-        let json_string = serde_json::to_string(&json_value).unwrap_or_else(|_| "[]".to_string());
+        let json_string = serialize_structure_rows_to_json(rows_to_serialize, &entry.schema_headers);
 
         let col_index = *entry.structure_path.first().unwrap_or(&0);
         info!(
@@ -185,7 +168,6 @@ pub fn process_existing_accept(
 
             // Apply ancestor overrides: map human-readable values to numeric row_index for the full chain
             if !state.virtual_structure_stack.is_empty() {
-                let chain_len = state.virtual_structure_stack.len();
                 if let Some(child_meta) = registry
                     .get_sheet(selected_category, active_sheet_name)
                     .and_then(|s| s.metadata.as_ref())
@@ -253,43 +235,16 @@ pub fn process_existing_accept(
                     continue;
                 }
 
-                // Use merged_rows if decided (contains user's final choices), otherwise use ai_rows
-                let rows_to_serialize = if entry.decided {
-                    info!("Using merged_rows (decided=true)");
-                    &entry.merged_rows
-                } else {
-                    info!("Using ai_rows (decided=false)");
-                    &entry.ai_rows
-                };
+                // Get the appropriate rows based on decision status
+                let rows_to_serialize = get_rows_to_serialize(&entry);
 
-                // Convert rows to array of objects using schema_headers
+                // Serialize rows to JSON using shared helper
                 info!(
                     "Serializing structure: {} rows, schema_headers={:?}",
                     rows_to_serialize.len(),
                     entry.schema_headers
                 );
-                let array_of_objects: Vec<serde_json::Map<String, serde_json::Value>> =
-                    rows_to_serialize
-                        .iter()
-                        .enumerate()
-                        .map(|(row_idx, row)| {
-                            info!("  Row {}: len={}, data={:?}", row_idx, row.len(), row);
-                            let mut obj = serde_json::Map::new();
-                            for (i, value) in row.iter().enumerate() {
-                                let field_name = entry
-                                    .schema_headers
-                                    .get(i)
-                                    .cloned()
-                                    .unwrap_or_else(|| format!("field_{}", i));
-                                obj.insert(field_name, serde_json::Value::String(value.clone()));
-                            }
-                            obj
-                        })
-                        .collect();
-
-                let json_value = serde_json::json!(array_of_objects);
-                let json_string =
-                    serde_json::to_string(&json_value).unwrap_or_else(|_| "[]".to_string());
+                let json_string = serialize_structure_rows_to_json(rows_to_serialize, &entry.schema_headers);
 
                 let col_index = *entry.structure_path.first().unwrap_or(&0);
                 info!(
@@ -393,37 +348,9 @@ pub fn process_new_accept(
                             continue;
                         }
 
-                        // Use merged_rows if decided (contains user's final choices), otherwise use ai_rows
-                        let rows_to_serialize = if entry.decided {
-                            &entry.merged_rows
-                        } else {
-                            &entry.ai_rows
-                        };
-
-                        // Convert rows to array of objects using schema_headers
-                        let array_of_objects: Vec<serde_json::Map<String, serde_json::Value>> =
-                            rows_to_serialize
-                                .iter()
-                                .map(|row| {
-                                    let mut obj = serde_json::Map::new();
-                                    for (i, value) in row.iter().enumerate() {
-                                        let field_name = entry
-                                            .schema_headers
-                                            .get(i)
-                                            .cloned()
-                                            .unwrap_or_else(|| format!("field_{}", i));
-                                        obj.insert(
-                                            field_name,
-                                            serde_json::Value::String(value.clone()),
-                                        );
-                                    }
-                                    obj
-                                })
-                                .collect();
-
-                        let json_value = serde_json::json!(array_of_objects);
-                        let json_string =
-                            serde_json::to_string(&json_value).unwrap_or_else(|_| "[]".to_string());
+                        // Get the appropriate rows and serialize using shared helper
+                        let rows_to_serialize = get_rows_to_serialize(&entry);
+                        let json_string = serialize_structure_rows_to_json(rows_to_serialize, &entry.schema_headers);
 
                         let col_index = *entry.structure_path.first().unwrap_or(&0);
                         cell_update_writer.write(UpdateCellEvent {
@@ -445,104 +372,22 @@ pub fn process_new_accept(
                     }
                     
                     // Resolve parent_key for structure tables (both virtual and real)
-                    // PRIORITY 1: Real structure navigation (Games → Games_Score)
-                    if !state.structure_navigation_stack.is_empty() {
-                        if let Some(child_meta) = registry
-                            .get_sheet(selected_category, active_sheet_name)
-                            .and_then(|s| s.metadata.as_ref())
-                        {
-                            // Find parent_key column
-                            if let Some(parent_key_col) = child_meta
-                                .columns
-                                .iter()
-                                .position(|c| c.header.eq_ignore_ascii_case("parent_key"))
-                            {
-                                // Get the parent row_index from the last navigation context
-                                if let Some(nav_ctx) = state.structure_navigation_stack.last() {
-                                    // ancestor_row_indices contains the chain like ["3770"]
-                                    // We need the LAST one (immediate parent)
-                                    if let Some(parent_row_idx_str) = nav_ctx.ancestor_row_indices.last() {
-                                        if let Ok(parent_row_idx) = parent_row_idx_str.parse::<usize>() {
-                                            info!(
-                                                "Resolved parent_key={} from structure_navigation_stack for new row",
-                                                parent_row_idx
-                                            );
-                                            init_vals.push((parent_key_col, parent_row_idx.to_string()));
-                                        } else {
-                                            warn!(
-                                                "Failed to parse parent_row_index '{}' as usize from structure_navigation_stack",
-                                                parent_row_idx_str
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                    if let Some((col, val)) = resolve_parent_key_for_new_row(
+                        state,
+                        registry,
+                        selected_category,
+                        active_sheet_name,
+                        &nr.key_overrides,
+                        &nr.ancestor_key_values,
+                    ) {
+                        init_vals.push((col, val));
                     }
-                    // PRIORITY 2: Virtual structure stack (JSON structure fields)
-                    // Ancestor overrides → parent_key only (no grand_N columns)
-                    else if !state.virtual_structure_stack.is_empty() {
-                        if let Some(child_meta) = registry
-                            .get_sheet(selected_category, active_sheet_name)
-                            .and_then(|s| s.metadata.as_ref())
-                        {
-                            let chain_len = state.virtual_structure_stack.len();
-                            let immediate_parent_idx = chain_len - 1;
-                            
-                            let override_flag = *nr.key_overrides.get(&(1000 + immediate_parent_idx)).unwrap_or(&false);
-                            if override_flag {
-                                // Get lineage values up to immediate parent
-                                let lineage_values: Vec<String> = (0..chain_len)
-                                    .filter_map(|i| nr.ancestor_key_values.get(i).cloned())
-                                    .collect();
-                                
-                                if !lineage_values.is_empty() {
-                                    // Get parent sheet name from virtual structure stack
-                                    if let Some(parent_ctx) = state.virtual_structure_stack.last() {
-                                        // Resolve parent_key from lineage
-                                        if let Some(parent_row_idx) = resolve_parent_key_from_lineage(
-                                            registry,
-                                            selected_category,
-                                            &parent_ctx.parent.parent_sheet,
-                                            &lineage_values,
-                                        ) {
-                                            // Find parent_key column in child table
-                                            if let Some(parent_key_col) = child_meta
-                                                .columns
-                                                .iter()
-                                                .position(|c| c.header.eq_ignore_ascii_case("parent_key"))
-                                            {
-                                                init_vals.push((parent_key_col, parent_row_idx.to_string()));
-                                            }
-                                        } else {
-                                            warn!("Failed to resolve parent_key from lineage for new row: {:?}", lineage_values);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    // Structures
+                    
+                    // Structures - serialize using shared helper
                     for entry in structure_entries {
                         if entry.rejected { continue; }
-                        let rows_to_serialize = if entry.decided { &entry.merged_rows } else { &entry.ai_rows };
-                        let array_of_objects: Vec<serde_json::Map<String, serde_json::Value>> = rows_to_serialize
-                            .iter()
-                            .map(|row| {
-                                let mut obj = serde_json::Map::new();
-                                for (i, value) in row.iter().enumerate() {
-                                    let field_name = entry
-                                        .schema_headers
-                                        .get(i)
-                                        .cloned()
-                                        .unwrap_or_else(|| format!("field_{}", i));
-                                    obj.insert(field_name, serde_json::Value::String(value.clone()));
-                                }
-                                obj
-                            })
-                            .collect();
-                        let json_value = serde_json::json!(array_of_objects);
-                        let json_string = serde_json::to_string(&json_value).unwrap_or_else(|_| "[]".to_string());
+                        let rows_to_serialize = get_rows_to_serialize(&entry);
+                        let json_string = serialize_structure_rows_to_json(rows_to_serialize, &entry.schema_headers);
                         let col_index = *entry.structure_path.first().unwrap_or(&0);
                         init_vals.push((col_index, json_string));
                     }
@@ -558,103 +403,22 @@ pub fn process_new_accept(
                 }
                 
                 // Resolve parent_key for structure tables (both virtual and real)
-                // PRIORITY 1: Real structure navigation (Games → Games_Score)
-                if !state.structure_navigation_stack.is_empty() {
-                    if let Some(child_meta) = registry
-                        .get_sheet(selected_category, active_sheet_name)
-                        .and_then(|s| s.metadata.as_ref())
-                    {
-                        // Find parent_key column
-                        if let Some(parent_key_col) = child_meta
-                            .columns
-                            .iter()
-                            .position(|c| c.header.eq_ignore_ascii_case("parent_key"))
-                        {
-                            // Get the parent row_index from the last navigation context
-                            if let Some(nav_ctx) = state.structure_navigation_stack.last() {
-                                // ancestor_row_indices contains the chain like ["3770"]
-                                // We need the LAST one (immediate parent)
-                                if let Some(parent_row_idx_str) = nav_ctx.ancestor_row_indices.last() {
-                                    if let Ok(parent_row_idx) = parent_row_idx_str.parse::<usize>() {
-                                        info!(
-                                            "Resolved parent_key={} from structure_navigation_stack for new row (batch)",
-                                            parent_row_idx
-                                        );
-                                        init_vals.push((parent_key_col, parent_row_idx.to_string()));
-                                    } else {
-                                        warn!(
-                                            "Failed to parse parent_row_index '{}' as usize from structure_navigation_stack (batch)",
-                                            parent_row_idx_str
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    }
+                if let Some((col, val)) = resolve_parent_key_for_new_row(
+                    state,
+                    registry,
+                    selected_category,
+                    active_sheet_name,
+                    &nr.key_overrides,
+                    &nr.ancestor_key_values,
+                ) {
+                    init_vals.push((col, val));
                 }
-                // PRIORITY 2: Virtual structure stack (JSON structure fields)
-                // Ancestor overrides → parent_key only (no grand_N columns)
-                else if !state.virtual_structure_stack.is_empty() {
-                    if let Some(child_meta) = registry
-                        .get_sheet(selected_category, active_sheet_name)
-                        .and_then(|s| s.metadata.as_ref())
-                    {
-                        let chain_len = state.virtual_structure_stack.len();
-                        let immediate_parent_idx = chain_len - 1;
-                        
-                        let override_flag = *nr.key_overrides.get(&(1000 + immediate_parent_idx)).unwrap_or(&false);
-                        if override_flag {
-                            // Get lineage values up to immediate parent
-                            let lineage_values: Vec<String> = (0..chain_len)
-                                .filter_map(|i| nr.ancestor_key_values.get(i).cloned())
-                                .collect();
-                            
-                            if !lineage_values.is_empty() {
-                                // Get parent sheet name from virtual structure stack
-                                if let Some(parent_ctx) = state.virtual_structure_stack.last() {
-                                    // Resolve parent_key from lineage
-                                    if let Some(parent_row_idx) = resolve_parent_key_from_lineage(
-                                        registry,
-                                        selected_category,
-                                        &parent_ctx.parent.parent_sheet,
-                                        &lineage_values,
-                                    ) {
-                                        // Find parent_key column in child table
-                                        if let Some(parent_key_col) = child_meta
-                                            .columns
-                                            .iter()
-                                            .position(|c| c.header.eq_ignore_ascii_case("parent_key"))
-                                        {
-                                            init_vals.push((parent_key_col, parent_row_idx.to_string()));
-                                        }
-                                    } else {
-                                        warn!("Failed to resolve parent_key from lineage for new row (batch): {:?}", lineage_values);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+                
+                // Structures - serialize using shared helper
                 for entry in structure_entries {
                     if entry.rejected { continue; }
-                    let rows_to_serialize = if entry.decided { &entry.merged_rows } else { &entry.ai_rows };
-                    let array_of_objects: Vec<serde_json::Map<String, serde_json::Value>> = rows_to_serialize
-                        .iter()
-                        .map(|row| {
-                            let mut obj = serde_json::Map::new();
-                            for (i, value) in row.iter().enumerate() {
-                                let field_name = entry
-                                    .schema_headers
-                                    .get(i)
-                                    .cloned()
-                                    .unwrap_or_else(|| format!("field_{}", i));
-                                obj.insert(field_name, serde_json::Value::String(value.clone()));
-                            }
-                            obj
-                        })
-                        .collect();
-                    let json_value = serde_json::json!(array_of_objects);
-                    let json_string = serde_json::to_string(&json_value).unwrap_or_else(|_| "[]".to_string());
+                    let rows_to_serialize = get_rows_to_serialize(&entry);
+                    let json_string = serialize_structure_rows_to_json(rows_to_serialize, &entry.schema_headers);
                     let col_index = *entry.structure_path.first().unwrap_or(&0);
                     init_vals.push((col_index, json_string));
                 }
@@ -663,13 +427,7 @@ pub fn process_new_accept(
 
             // CRITICAL: Update all structure entries with higher parent_new_row_index
             // to account for the removed index shift
-            for entry in state.ai_structure_reviews.iter_mut() {
-                if let Some(parent_idx) = entry.parent_new_row_index {
-                    if parent_idx > idx {
-                        entry.parent_new_row_index = Some(parent_idx - 1);
-                    }
-                }
-            }
+            adjust_parent_indices_after_removal(state, idx);
         }
     }
     
@@ -684,7 +442,8 @@ pub fn process_new_accept(
     }
 }
 
-/// Build initial values for a new row (helper for batch operations)
+/// Build initial values for a new row (legacy helper - kept for potential future use)
+#[allow(dead_code)]
 fn build_row_initial_values(
     review: &NewRowReview,
     structure_entries: Vec<StructureReviewEntry>,
@@ -705,32 +464,9 @@ fn build_row_initial_values(
             continue;
         }
 
-        // Use merged_rows if decided, otherwise use ai_rows
-        let rows_to_serialize = if entry.decided {
-            &entry.merged_rows
-        } else {
-            &entry.ai_rows
-        };
-
-        // Convert to JSON
-        let array_of_objects: Vec<serde_json::Map<String, serde_json::Value>> = rows_to_serialize
-            .iter()
-            .map(|row| {
-                let mut obj = serde_json::Map::new();
-                for (i, value) in row.iter().enumerate() {
-                    let field_name = entry
-                        .schema_headers
-                        .get(i)
-                        .cloned()
-                        .unwrap_or_else(|| format!("field_{}", i));
-                    obj.insert(field_name, serde_json::Value::String(value.clone()));
-                }
-                obj
-            })
-            .collect();
-
-        let json_value = serde_json::json!(array_of_objects);
-        let json_string = serde_json::to_string(&json_value).unwrap_or_else(|_| "[]".to_string());
+        // Get the appropriate rows and serialize using shared helper
+        let rows_to_serialize = get_rows_to_serialize(&entry);
+        let json_string = serialize_structure_rows_to_json(rows_to_serialize, &entry.schema_headers);
 
         let col_index = *entry.structure_path.first().unwrap_or(&0);
         init_vals.push((col_index, json_string));
@@ -755,13 +491,7 @@ pub fn process_new_decline(indices: &[usize], state: &mut EditorWindowState) {
             state.ai_new_row_reviews.remove(idx);
             // CRITICAL: Update all structure entries with higher parent_new_row_index
             // to account for the removed index shift
-            for entry in state.ai_structure_reviews.iter_mut() {
-                if let Some(parent_idx) = entry.parent_new_row_index {
-                    if parent_idx > idx {
-                        entry.parent_new_row_index = Some(parent_idx - 1);
-                    }
-                }
-            }
+            adjust_parent_indices_after_removal(state, idx);
         }
     }
 }

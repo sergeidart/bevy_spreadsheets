@@ -2,73 +2,10 @@
 // Metadata operations - managing table and column metadata, AI settings
 
 use super::super::error::DbResult;
-use super::super::schema::sql_type_for_column;
+use super::super::schema::{sql_type_for_column, runtime_to_persisted_column_index};
+use super::helpers::metadata_table_name;
 use crate::sheets::definitions::{ColumnDataType, ColumnValidator};
-use rusqlite::{params, Connection, OptionalExtension};
-
-/// Convert runtime column index to the actual column_index value in the metadata table.
-/// 
-/// IMPORTANT: The runtime_column_index is the visual position (including technical columns),
-/// but we need to find the actual `column_index` value in the metadata table, which is stable
-/// regardless of column order, deletions, etc.
-/// 
-/// This function:
-/// 1. Reads the current metadata to get the column name at the runtime position
-/// 2. Looks up that column's `column_index` value in the metadata table by name
-/// 3. Returns that `column_index` value (or None for technical columns)
-fn runtime_to_persisted_column_index(
-    conn: &Connection,
-    table_name: &str,
-    runtime_column_index: usize,
-) -> DbResult<Option<i32>> {
-    // Read the full metadata to get the visual column list
-    let metadata = crate::sheets::database::reader::DbReader::read_metadata(conn, table_name)?;
-    
-    // Get the column at the runtime index
-    let Some(column) = metadata.columns.get(runtime_column_index) else {
-        bevy::log::warn!(
-            "Runtime column index {} out of bounds for table '{}' (has {} columns)",
-            runtime_column_index,
-            table_name,
-            metadata.columns.len()
-        );
-        return Ok(None);
-    };
-    
-    // Check if this is a technical column (row_index, parent_key, etc.)
-    let column_name = &column.header;
-    if column_name == "row_index" || column_name == "parent_key" || column_name == "id" {
-        bevy::log::debug!(
-            "Skipping metadata update for technical column '{}' at runtime index {} in table '{}'",
-            column_name,
-            runtime_column_index,
-            table_name
-        );
-        return Ok(None);
-    }
-    
-    // Look up the actual column_index value in the metadata table by column name
-    let meta_table = format!("{}_Metadata", table_name);
-    let column_index: Option<i32> = conn
-        .query_row(
-            &format!("SELECT column_index FROM \"{}\" WHERE column_name = ? AND (deleted IS NULL OR deleted = 0)", meta_table),
-            params![column_name],
-            |row| row.get(0),
-        )
-        .optional()?;
-    
-    if column_index.is_none() {
-        bevy::log::warn!(
-            "Column '{}' at runtime index {} not found in metadata table '{}' for table '{}'",
-            column_name,
-            runtime_column_index,
-            meta_table,
-            table_name
-        );
-    }
-    
-    Ok(column_index)
-}
+use rusqlite::{params, Connection};
 
 /// Update a table's hidden flag in the global _Metadata table
 pub fn update_table_hidden(conn: &Connection, table_name: &str, hidden: bool) -> DbResult<()> {
@@ -175,7 +112,7 @@ pub fn update_column_metadata(
         table_name,
         &inferred_meta,
     );
-    let meta_table = format!("{}_Metadata", table_name);
+    let meta_table = metadata_table_name(table_name);
     let mut sets: Vec<&str> = Vec::new();
     if filter_expr.is_some() {
         sets.push("filter_expr = ?");
@@ -245,7 +182,7 @@ pub fn update_column_ai_include(
         }
     };
     
-    let meta_table = format!("{}_Metadata", table_name);
+    let meta_table = metadata_table_name(table_name);
     bevy::log::info!(
         "SQL update_column_ai_include: table='{}' runtime_idx={} -> column_index={} include={}",
         table_name, column_index, persisted_index, include
@@ -302,7 +239,7 @@ pub fn update_column_validator(
         table_name,
         &inferred_meta,
     );
-    let meta_table = format!("{}_Metadata", table_name);
+    let meta_table = metadata_table_name(table_name);
     let (validator_type, validator_config): (Option<String>, Option<String>) = match validator {
         Some(ColumnValidator::Basic(_)) => (Some("Basic".to_string()), None),
         Some(ColumnValidator::Linked {
@@ -399,7 +336,7 @@ pub fn update_column_display_name(
         }
     };
 
-    let meta_table = format!("{}_Metadata", table_name);
+    let meta_table = metadata_table_name(table_name);
     bevy::log::info!(
         "SQL update_column_display_name: table='{}' runtime_idx={} -> persisted_idx={} display_name='{}'",
         table_name, column_index, persisted_index, display_name
@@ -478,7 +415,7 @@ pub fn add_column_with_metadata(
         None => (None, None),
     };
     // Try to reuse a deleted metadata slot before inserting
-    let meta_table = format!("{}_Metadata", table_name);
+    let meta_table = metadata_table_name(table_name);
     let reuse_sql = format!(
         "UPDATE \"{}\" SET column_name = ?, data_type = ?, validator_type = ?, validator_config = ?, ai_context = ?, filter_expr = ?, ai_enable_row_generation = ?, ai_include_in_send = ?, deleted = 0 WHERE column_index = ? AND deleted = 1",
         meta_table

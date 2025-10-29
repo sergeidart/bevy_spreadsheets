@@ -2,14 +2,13 @@
 // Deletion operations - removing rows and compacting indices
 
 use super::super::error::DbResult;
+use super::helpers::build_delete_sql;
 use rusqlite::{params, Connection};
 
 /// Delete a row
 pub fn delete_row(conn: &Connection, table_name: &str, row_index: usize) -> DbResult<()> {
-    conn.execute(
-        &format!("DELETE FROM \"{}\" WHERE row_index = ?", table_name),
-        params![row_index as i32],
-    )?;
+    let sql = build_delete_sql(table_name, "row_index = ?");
+    conn.execute(&sql, params![row_index as i32])?;
     Ok(())
 }
 
@@ -21,10 +20,8 @@ pub fn delete_row_and_compact(
     row_index: usize,
 ) -> DbResult<()> {
     // Simple delete - no transaction needed, no compaction
-    conn.execute(
-        &format!("DELETE FROM \"{}\" WHERE row_index = ?", table_name),
-        params![row_index as i32],
-    )?;
+    let sql = build_delete_sql(table_name, "row_index = ?");
+    conn.execute(&sql, params![row_index as i32])?;
     Ok(())
 }
 
@@ -36,9 +33,7 @@ pub fn delete_structure_row_by_id(
     id: i64,
 ) -> DbResult<()> {
     // Simple delete - no need to fetch indices or compact
-    conn.execute(
-        &format!("DELETE FROM \"{}\" WHERE id = ?", table_name),
-        params![id],
-    )?;
+    let sql = build_delete_sql(table_name, "id = ?");
+    conn.execute(&sql, params![id])?;
     Ok(())
 }

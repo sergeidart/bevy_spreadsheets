@@ -1,6 +1,80 @@
 // src/sheets/database/schema/helpers.rs
 
 use crate::sheets::definitions::ColumnDataType;
+use rusqlite::{params, Connection, OptionalExtension};
+use super::super::error::DbResult;
+
+/// Technical columns that are system-managed and not part of user data
+pub const TECHNICAL_COLUMNS: &[&str] = &["row_index", "parent_key", "id"];
+
+/// Check if a column name is a technical (system-managed) column
+pub fn is_technical_column(column_name: &str) -> bool {
+    TECHNICAL_COLUMNS.contains(&column_name)
+}
+
+/// Convert runtime column index to the actual column_index value in the metadata table.
+/// 
+/// IMPORTANT: The runtime_column_index is the visual position (including technical columns),
+/// but we need to find the actual `column_index` value in the metadata table, which is stable
+/// regardless of column order, deletions, etc.
+/// 
+/// This function:
+/// 1. Reads the current metadata to get the column name at the runtime position
+/// 2. Looks up that column's `column_index` value in the metadata table by name
+/// 3. Returns that `column_index` value (or None for technical columns)
+pub fn runtime_to_persisted_column_index(
+    conn: &Connection,
+    table_name: &str,
+    runtime_column_index: usize,
+) -> DbResult<Option<i32>> {
+    // Read the full metadata to get the visual column list
+    let metadata = crate::sheets::database::reader::DbReader::read_metadata(conn, table_name)?;
+    
+    // Get the column at the runtime index
+    let Some(column) = metadata.columns.get(runtime_column_index) else {
+        bevy::log::warn!(
+            "Runtime column index {} out of bounds for table '{}' (has {} columns)",
+            runtime_column_index,
+            table_name,
+            metadata.columns.len()
+        );
+        return Ok(None);
+    };
+    
+    // Check if this is a technical column (row_index, parent_key, etc.)
+    let column_name = &column.header;
+    if is_technical_column(column_name) {
+        bevy::log::debug!(
+            "Skipping metadata update for technical column '{}' at runtime index {} in table '{}'",
+            column_name,
+            runtime_column_index,
+            table_name
+        );
+        return Ok(None);
+    }
+    
+    // Look up the actual column_index value in the metadata table by column name
+    let meta_table = format!("{}_Metadata", table_name);
+    let column_index: Option<i32> = conn
+        .query_row(
+            &format!("SELECT column_index FROM \"{}\" WHERE column_name = ? AND (deleted IS NULL OR deleted = 0)", meta_table),
+            params![column_name],
+            |row| row.get(0),
+        )
+        .optional()?;
+    
+    if column_index.is_none() {
+        bevy::log::warn!(
+            "Column '{}' at runtime index {} not found in metadata table '{}' for table '{}'",
+            column_name,
+            runtime_column_index,
+            meta_table,
+            table_name
+        );
+    }
+    
+    Ok(column_index)
+}
 
 /// SQL type mapping for column data types
 pub fn sql_type_for_column(data_type: ColumnDataType) -> &'static str {

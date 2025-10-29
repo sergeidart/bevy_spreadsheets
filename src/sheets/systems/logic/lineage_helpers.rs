@@ -1,35 +1,29 @@
 // src/sheets/systems/logic/lineage_helpers.rs
-//! Helper functions for building parent lineage chains dynamically
+//! Helper functions for building parent lineage chains dynamically.
 //!
-//! **Post-Refactor (2025-10-28):**
-//! Now that grand_N_parent columns are removed, we build lineage by walking
-//! the parent chain using parent_key references.
-//!
-//! Example lineage for Games_Platforms_Store:
-//! - Row has parent_key = 123 (points to Games_Platforms row)
-//! - Games_Platforms row 123 has parent_key = 5 (points to Games row)
-//! - Games row 5 has no parent_key (root table)
-//! - Result: ["Mass Effect 3", "PC", "Steam"]
+//! Lineage is built by walking parent_key references (no grand_N_parent columns).
+//! Example: Games → Games_Platforms → Games_Platforms_Store
 
 use bevy::prelude::*;
 use crate::sheets::resources::SheetRegistry;
-use crate::sheets::definitions::SheetMetadata;
+
+#[cfg(test)]
+mod tests;
 
 /// Lineage entry: (table_name, display_value, row_index)
 pub type LineageEntry = (String, String, usize);
 
-/// Walk up the parent chain to build full lineage from root to current position
-///
-/// Returns lineage in ROOT-TO-LEAF order: [root, mid-level, immediate-parent]
-///
-/// # Arguments
-/// * `registry` - Sheet registry for looking up parent tables
-/// * `category` - Current category (optional)
-/// * `sheet_name` - Current sheet name
-/// * `parent_row_index` - Row index of the parent row to start walking from
-///
-/// # Returns
-/// Vector of (table_name, display_value, row_index) tuples in root-to-leaf order
+/// Find a row in grid by its row_index value (column 0)
+fn find_row_by_index(grid: &[Vec<String>], row_index: usize) -> Option<&Vec<String>> {
+    grid.iter().find(|row| {
+        row.get(0)
+            .and_then(|idx_str| idx_str.parse::<usize>().ok())
+            .map(|idx| idx == row_index)
+            .unwrap_or(false)
+    })
+}
+
+/// Walk up parent chain to build lineage in root-to-leaf order
 pub fn walk_parent_lineage(
     registry: &SheetRegistry,
     category: &Option<String>,
@@ -63,54 +57,36 @@ pub fn walk_parent_lineage(
             break;
         };
         
-        // Find grid index where row_index column equals current_row_idx
-        // (Grid is sorted DESC, so we can't use row_idx directly as array index)
-        let grid_index = sheet.grid.iter().position(|row| {
-            row.get(0).and_then(|s| s.parse::<usize>().ok()) == Some(current_row_idx)
-        });
-        
-        let Some(grid_idx) = grid_index else {
+        // Find row with matching row_index
+        let Some(row) = find_row_by_index(&sheet.grid, current_row_idx) else {
             warn!("Lineage walk: Row with row_index={} not found in sheet '{}'", current_row_idx, current_sheet);
             break;
         };
         
-        // Get current row using the found grid index
-        let Some(row) = sheet.grid.get(grid_idx) else {
-            warn!("Lineage walk: Grid index {} out of bounds in sheet '{}'", grid_idx, current_sheet);
-            break;
-        };
-        
-        // Get display value from first data column
-        let display_value = crate::ui::elements::editor::structure_navigation::get_first_content_column_value(metadata, row);
+        let display_value = metadata.get_first_data_column_value(row);
         
         bevy::log::info!(
             "🔍   Processing: table='{}', row_idx={}, display='{}', row_data={:?}",
             current_sheet, current_row_idx, display_value, row
         );
         
-        // Add to lineage (we'll reverse at the end)
         lineage.push((current_sheet.clone(), display_value, current_row_idx));
         
-        // Check if this sheet has a parent (structure table)
         let parent_key_col = metadata.columns.iter()
             .position(|c| c.header.eq_ignore_ascii_case("parent_key"));
         
         if let Some(pk_col) = parent_key_col {
-            // Get parent_key value
             let parent_key_str = row.get(pk_col).cloned().unwrap_or_default();
             
             if parent_key_str.is_empty() {
-                // No parent, we've reached the root
-                break;
+                break; // Root table
             }
             
-            // Parse parent_key as row_index
             let Ok(parent_idx) = parent_key_str.parse::<usize>() else {
                 warn!("Lineage walk: Invalid parent_key '{}' in sheet '{}'", parent_key_str, current_sheet);
                 break;
             };
             
-            // Determine parent table name from metadata
             if let Some(parent_link) = &metadata.structure_parent {
                 current_category = parent_link.parent_category.clone();
                 current_sheet = parent_link.parent_sheet.clone();
@@ -118,19 +94,17 @@ pub fn walk_parent_lineage(
                 continue;
             }
             
-            // Fallback: parse parent table from table name (e.g., "Games_Platforms" -> "Games")
+            // Fallback: parse from table name (e.g., "Games_Platforms" → "Games")
             if let Some((parent_table, _)) = current_sheet.rsplit_once('_') {
                 current_sheet = parent_table.to_string();
                 current_row_idx = parent_idx;
                 continue;
             }
             
-            // Can't determine parent table
             warn!("Lineage walk: Cannot determine parent table for '{}'", current_sheet);
             break;
         } else {
-            // No parent_key column, this is a root table
-            break;
+            break; // Root table
         }
     }
     
@@ -138,8 +112,7 @@ pub fn walk_parent_lineage(
         error!("Lineage walk: Hit depth limit (possible circular reference)");
     }
     
-    // Reverse to get root-to-leaf order
-    lineage.reverse();
+    lineage.reverse(); // Convert to root-to-leaf order
     
     bevy::log::info!(
         "🔍 walk_parent_lineage END: {} entries (root-to-leaf): {:?}",
@@ -150,9 +123,7 @@ pub fn walk_parent_lineage(
     lineage
 }
 
-/// Format lineage as display string with separator
-///
-/// Example: "Mass Effect 3 › PC › Steam"
+/// Format lineage as display string with separator (e.g., "Game › Platform › Store")
 pub fn format_lineage_display(lineage: &[LineageEntry], separator: &str) -> String {
     lineage.iter()
         .map(|(_, display_val, _)| display_val.as_str())
@@ -161,8 +132,6 @@ pub fn format_lineage_display(lineage: &[LineageEntry], separator: &str) -> Stri
 }
 
 /// Format lineage for AI context (comma-separated)
-///
-/// Example: "Mass Effect 3, PC, Steam"
 pub fn format_lineage_for_ai(lineage: &[LineageEntry]) -> String {
     lineage.iter()
         .map(|(_, display_val, _)| display_val.as_str())
@@ -170,9 +139,7 @@ pub fn format_lineage_for_ai(lineage: &[LineageEntry]) -> String {
         .join(", ")
 }
 
-/// Build lineage for the current row's context (used in navigation)
-///
-/// This extracts the parent lineage from a parent row for navigating into structure
+/// Extract parent lineage display values for navigation
 pub fn build_navigation_lineage(
     registry: &SheetRegistry,
     parent_category: &Option<String>,
@@ -181,25 +148,12 @@ pub fn build_navigation_lineage(
 ) -> Vec<String> {
     let lineage = walk_parent_lineage(registry, parent_category, parent_sheet_name, parent_row_index);
     
-    // Return just the display values
     lineage.iter()
         .map(|(_, display_val, _)| display_val.clone())
         .collect()
 }
 
-/// Resolve parent_key (row_index) to display value for a single level
-///
-/// Given a parent_key value (row_index), looks up the parent row and returns
-/// its display value (first data column).
-///
-/// # Arguments
-/// * `registry` - Sheet registry for looking up tables
-/// * `category` - Parent category (optional)
-/// * `parent_sheet_name` - Name of the parent table
-/// * `parent_key_row_idx` - The row_index value stored in parent_key column
-///
-/// # Returns
-/// Display value of the parent row, or empty string if not found
+/// Resolve parent_key to display value from parent row
 pub fn resolve_parent_display_value(
     registry: &SheetRegistry,
     category: &Option<String>,
@@ -216,16 +170,9 @@ pub fn resolve_parent_display_value(
         return String::new();
     };
     
-    // Find row with matching row_index (column 0)
-    let parent_row = parent_sheet.grid.iter().find(|row| {
-        row.get(0)
-            .and_then(|idx_str| idx_str.parse::<usize>().ok())
-            .map(|idx| idx == parent_key_row_idx)
-            .unwrap_or(false)
-    });
-    
-    if let Some(row) = parent_row {
-        crate::ui::elements::editor::structure_navigation::get_first_content_column_value(parent_metadata, row)
+    // Find row with matching row_index
+    if let Some(row) = find_row_by_index(&parent_sheet.grid, parent_key_row_idx) {
+        parent_metadata.get_first_data_column_value(row)
     } else {
         warn!(
             "resolve_parent_display_value: Row index {} not found in sheet '{}'",
@@ -235,17 +182,7 @@ pub fn resolve_parent_display_value(
     }
 }
 
-/// Gather AI contexts from the lineage chain
-///
-/// Walks through the lineage and collects the ai_context from each level's
-/// first data column definition.
-///
-/// # Arguments
-/// * `registry` - Sheet registry for looking up metadata
-/// * `lineage` - Lineage entries (from walk_parent_lineage)
-///
-/// # Returns
-/// Vector of AI context strings, one per lineage level (may be empty strings if no context defined)
+/// Gather AI contexts from lineage chain (from first data column definitions)
 pub fn gather_lineage_ai_contexts(
     registry: &SheetRegistry,
     lineage: &[LineageEntry],
@@ -261,15 +198,9 @@ pub fn gather_lineage_ai_contexts(
             .get_sheet(&category, table_name)
             .and_then(|sheet| sheet.metadata.as_ref())
             .and_then(|metadata| {
-                // Find first data column
-                metadata.columns.iter().find(|col| {
-                    if col.deleted || col.hidden {
-                        return false;
-                    }
-                    let h = col.header.to_lowercase();
-                    h != "row_index" && h != "id" && h != "parent_key"
-                        && h != "temp_new_row_index" && h != "_obsolete_temp_new_row_index"
-                })
+                // Find first data column using the metadata helper
+                let first_idx = metadata.find_first_data_column_index()?;
+                metadata.columns.get(first_idx)
             })
             .and_then(|col| col.ai_context.clone())
             .unwrap_or_default();
@@ -280,61 +211,23 @@ pub fn gather_lineage_ai_contexts(
     contexts
 }
 
-/// Build full AI attachment chain (lineage display values + current row data)
-///
-/// Combines parent lineage display values with the current row's data values
-/// to create the full chain that AI needs for context.
-///
-/// # Arguments
-/// * `lineage` - Parent lineage entries (from walk_parent_lineage)
-/// * `current_row_values` - Current row's data column values (excluding technical columns)
-///
-/// # Returns
-/// Vector combining lineage display values followed by current row values
+/// Combine parent lineage display values with current row values for AI
 pub fn build_ai_attachment_chain(
     lineage: &[LineageEntry],
     current_row_values: &[String],
 ) -> Vec<String> {
     let mut chain = Vec::new();
     
-    // Add parent lineage display values
     for (_, display_val, _) in lineage {
         chain.push(display_val.clone());
     }
     
-    // Add current row values
     chain.extend_from_slice(current_row_values);
     
     chain
 }
 
-/// Resolve parent_key from lineage display values
-///
-/// Given ancestor display values (e.g., ["Mass Effect 3", "PC"]), finds the parent row's row_index
-/// by walking down the hierarchy and matching display values.
-///
-/// This is the INVERSE of walk_parent_lineage - it converts display names back to row_index.
-///
-/// # Arguments
-/// * `registry` - Sheet registry for looking up tables
-/// * `category` - Current category (optional)
-/// * `parent_sheet_name` - Name of the immediate parent table (e.g., "Games_Platforms")
-/// * `lineage_values` - Display values from root to immediate parent (e.g., ["Mass Effect 3", "PC"])
-///
-/// # Returns
-/// The row_index of the parent row if found, None otherwise
-///
-/// # Example
-/// ```
-/// // For Games_Platforms_Store with lineage ["Mass Effect 3", "PC"]
-/// // This finds the row_index of the "PC" row under "Mass Effect 3" in Games_Platforms table
-/// let parent_key = resolve_parent_key_from_lineage(
-///     registry,
-///     &category,
-///     "Games_Platforms",
-///     &["Mass Effect 3", "PC"]
-/// );
-/// ```
+/// Convert lineage display values back to parent row_index (inverse of walk_parent_lineage)
 pub fn resolve_parent_key_from_lineage(
     registry: &SheetRegistry,
     category: &Option<String>,
@@ -345,18 +238,14 @@ pub fn resolve_parent_key_from_lineage(
         return None;
     }
     
-    // Build table chain from parent sheet name
-    // e.g., "Games_Platforms_Store" -> ["Games", "Games_Platforms", "Games_Platforms_Store"]
+    // Build table chain: "Games_Platforms_Store" → ["Games", "Games_Platforms", "Games_Platforms_Store"]
     let mut table_chain = Vec::new();
-    let mut parts: Vec<&str> = parent_sheet_name.split('_').collect();
+    let parts: Vec<&str> = parent_sheet_name.split('_').collect();
     
-    // Build cumulative table names
     for i in 1..=parts.len() {
         table_chain.push(parts[0..i].join("_"));
     }
     
-    // lineage_values should match the table_chain length
-    // Each lineage value corresponds to a table level
     if lineage_values.len() != table_chain.len() {
         warn!(
             "resolve_parent_key_from_lineage: Lineage length mismatch: got {} values for {} tables (sheet: {})",
@@ -369,36 +258,21 @@ pub fn resolve_parent_key_from_lineage(
         return None;
     }
     
-    // Walk down the hierarchy to find the matching parent row
     let mut current_row_idx: Option<usize> = None;
     
     for (level, (table_name, display_value)) in table_chain.iter().zip(lineage_values.iter()).enumerate() {
         let sheet = registry.get_sheet(category, table_name)?;
         let metadata = sheet.metadata.as_ref()?;
         
-        // Find first data column index (skip technical columns)
-        let first_data_col = metadata.columns.iter().enumerate().find_map(|(idx, col)| {
-            if col.deleted || col.hidden {
-                return None;
-            }
-            let h = col.header.to_lowercase();
-            if h == "row_index" || h == "parent_key" || h == "id" 
-                || h == "temp_new_row_index" || h == "_obsolete_temp_new_row_index" {
-                return None;
-            }
-            Some(idx)
-        })?;
+        let first_data_col = metadata.find_first_data_column_index()?;
         
-        // Find parent_key column (if not at root level)
         let parent_key_col = if level > 0 {
             metadata.columns.iter().position(|c| c.header.eq_ignore_ascii_case("parent_key"))
         } else {
             None
         };
         
-        // Find row that matches the display value and parent constraint
         let found_row = sheet.grid.iter().find(|row| {
-            // Check if display value matches
             let display_matches = row.get(first_data_col)
                 .map(|v| v == display_value)
                 .unwrap_or(false);
@@ -407,7 +281,6 @@ pub fn resolve_parent_key_from_lineage(
                 return false;
             }
             
-            // If this is not the root level, also check parent_key matches
             if level > 0 {
                 if let Some(expected_parent_idx) = current_row_idx {
                     if let Some(pk_col) = parent_key_col {
@@ -415,20 +288,19 @@ pub fn resolve_parent_key_from_lineage(
                             .and_then(|s| s.parse::<usize>().ok());
                         
                         if actual_parent != Some(expected_parent_idx) {
-                            return false; // Parent doesn't match
+                            return false;
                         }
                     } else {
-                        return false; // No parent_key column found
+                        return false;
                     }
                 } else {
-                    return false; // Expected parent but none found
+                    return false;
                 }
             }
             
             true
         });
         
-        // Extract row_index from the found row
         current_row_idx = found_row.and_then(|row| {
             row.get(0)?.parse::<usize>().ok()
         });
@@ -450,34 +322,139 @@ pub fn resolve_parent_key_from_lineage(
     current_row_idx
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    
-    #[test]
-    fn test_format_lineage_display() {
-        let lineage = vec![
-            ("Games".to_string(), "Mass Effect 3".to_string(), 5),
-            ("Games_Platforms".to_string(), "PC".to_string(), 123),
-            ("Games_Platforms_Store".to_string(), "Steam".to_string(), 456),
-        ];
-        
-        assert_eq!(
-            format_lineage_display(&lineage, " › "),
-            "Mass Effect 3 › PC › Steam"
-        );
+/// Get unique display values from parent sheet for dropdown options
+pub fn get_parent_sheet_options(
+    registry: &SheetRegistry,
+    category: &Option<String>,
+    parent_sheet_name: &str,
+) -> Vec<String> {
+    let Some(parent_sheet) = registry.get_sheet(category, parent_sheet_name) else {
+        return Vec::new();
+    };
+
+    let Some(metadata) = &parent_sheet.metadata else {
+        return Vec::new();
+    };
+
+    // Find first data column
+    let Some(display_col_idx) = metadata.find_first_data_column_index() else {
+        return Vec::new();
+    };
+
+    // Collect unique display values
+    let mut options = std::collections::HashSet::new();
+    for row in &parent_sheet.grid {
+        if let Some(display_value) = row.get(display_col_idx) {
+            if !display_value.is_empty() {
+                options.insert(display_value.clone());
+            }
+        }
     }
-    
-    #[test]
-    fn test_format_lineage_for_ai() {
-        let lineage = vec![
-            ("Games".to_string(), "Mass Effect 3".to_string(), 5),
-            ("Games_Platforms".to_string(), "PC".to_string(), 123),
-        ];
-        
-        assert_eq!(
-            format_lineage_for_ai(&lineage),
-            "Mass Effect 3, PC"
-        );
+
+    // Convert to sorted vector
+    let mut result: Vec<String> = options.into_iter().collect();
+    result.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    result
+}
+
+/// Get display values from parent sheet filtered by parent_key (for hierarchical dropdowns)
+pub fn get_parent_sheet_options_filtered(
+    registry: &SheetRegistry,
+    category: &Option<String>,
+    parent_sheet_name: &str,
+    parent_key_filter: i64,
+) -> Vec<String> {
+    let Some(parent_sheet) = registry.get_sheet(category, parent_sheet_name) else {
+        return Vec::new();
+    };
+
+    let Some(metadata) = &parent_sheet.metadata else {
+        return Vec::new();
+    };
+
+    // Find first data column
+    let Some(display_col_idx) = metadata.find_first_data_column_index() else {
+        return Vec::new();
+    };
+
+    // Find parent_key column
+    let Some(parent_key_col) = metadata.columns.iter()
+        .position(|c| c.header.eq_ignore_ascii_case("parent_key"))
+    else {
+        // No parent_key column, return all options
+        return get_parent_sheet_options(registry, category, parent_sheet_name);
+    };
+
+    // Collect display values where parent_key matches
+    let mut options = std::collections::HashSet::new();
+    for row in &parent_sheet.grid {
+        if let Some(pk_val) = row.get(parent_key_col).and_then(|v| v.parse::<i64>().ok()) {
+            if pk_val == parent_key_filter {
+                if let Some(display_value) = row.get(display_col_idx) {
+                    if !display_value.is_empty() {
+                        options.insert(display_value.clone());
+                    }
+                }
+            }
+        }
     }
+
+    // Convert to sorted vector
+    let mut result: Vec<String> = options.into_iter().collect();
+    result.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    result
+}
+
+/// Convert display value to row_index in parent sheet (optionally filtered by parent_key)
+pub fn display_value_to_row_index(
+    registry: &SheetRegistry,
+    category: &Option<String>,
+    parent_sheet_name: &str,
+    display_value: &str,
+    parent_key_filter: Option<i64>,
+) -> Option<i64> {
+    let Some(parent_sheet) = registry.get_sheet(category, parent_sheet_name) else {
+        return None;
+    };
+
+    let Some(metadata) = &parent_sheet.metadata else {
+        return None;
+    };
+
+    // Find first data column
+    let display_col_idx = metadata.find_first_data_column_index()?;
+
+    // Find parent_key column if we need to filter
+    let parent_key_col = if parent_key_filter.is_some() {
+        metadata.columns.iter()
+            .position(|c| c.header.eq_ignore_ascii_case("parent_key"))
+    } else {
+        None
+    };
+
+    // Find row matching display value (and optionally parent_key)
+    let found_row = parent_sheet.grid.iter().find(|row| {
+        // Check display value matches
+        let display_matches = row.get(display_col_idx)
+            .map(|v| v == display_value)
+            .unwrap_or(false);
+
+        if !display_matches {
+            return false;
+        }
+
+        // If parent_key filter is specified, check it matches
+        if let Some(expected_pk) = parent_key_filter {
+            if let Some(pk_col) = parent_key_col {
+                let actual_pk = row.get(pk_col)
+                    .and_then(|s| s.parse::<i64>().ok());
+                return actual_pk == Some(expected_pk);
+            }
+        }
+
+        true
+    })?;
+
+    // Extract row_index from column 0
+    found_row.get(0)?.parse::<i64>().ok()
 }

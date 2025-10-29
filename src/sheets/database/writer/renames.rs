@@ -2,6 +2,7 @@
 // Rename operations - renaming columns and tables
 
 use super::super::error::DbResult;
+use super::helpers::metadata_table_name;
 use rusqlite::{params, Connection, OptionalExtension};
 
 /// Rename a data column and update its metadata column_name accordingly (for main or structure tables with real columns).
@@ -30,7 +31,7 @@ pub fn rename_data_column(
     
     if new_name_exists {
         // Check if it's marked as deleted in metadata
-        let meta_table = format!("{}_Metadata", table_name);
+        let meta_table = metadata_table_name(table_name);
         let is_deleted: Option<i32> = conn.query_row(
             &format!("SELECT deleted FROM \"{}\" WHERE column_name = ?", meta_table),
             params![new_name],
@@ -80,7 +81,7 @@ pub fn rename_data_column(
         );
         
         // Just update metadata - need to handle deleted columns with the new name
-        let meta_table = format!("{}_Metadata", table_name);
+        let meta_table = metadata_table_name(table_name);
         
         // First, get the column_index of the column we're renaming
         let source_column_index: Option<i32> = conn
@@ -190,7 +191,7 @@ pub fn rename_data_column(
     
     // Old column exists physically - proceed with full rename
     // CRITICAL: Before renaming the physical column, check metadata for conflicts
-    let meta_table = format!("{}_Metadata", table_name);
+    let meta_table = metadata_table_name(table_name);
     
     // Get the column_index of the column we're renaming (using old_name)
     let source_column_index: Option<i32> = conn
@@ -351,7 +352,7 @@ pub fn update_metadata_column_name(
         column_index - 1
     };
     
-    let meta_table = format!("{}_Metadata", table_name);
+    let meta_table = metadata_table_name(table_name);
     bevy::log::info!(
         "SQL update_metadata_column_name: table='{}' runtime_idx={} -> persisted_idx={} new_name='{}'",
         table_name, column_index, persisted_index, new_name
@@ -452,8 +453,8 @@ pub fn rename_structure_table(
         .optional()?
         .is_some();
 
-    let old_meta = format!("{}_Metadata", old_struct);
-    let new_meta = format!("{}_Metadata", new_struct);
+    let old_meta = metadata_table_name(&old_struct);
+    let new_meta = metadata_table_name(&new_struct);
     let meta_exists: bool = conn
         .query_row(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
@@ -530,7 +531,7 @@ pub fn update_metadata_column_name_by_name(
     old_name: &str,
     new_name: &str,
 ) -> DbResult<()> {
-    let meta_table = format!("{}_Metadata", table_name);
+    let meta_table = metadata_table_name(table_name);
 
     // Get the source column index for old_name
     let source_column_index: Option<i32> = conn
@@ -690,7 +691,7 @@ pub fn rename_table_and_descendants(
                 .optional()?
                 .is_some();
 
-            let new_meta = format!("{}_Metadata", new_name);
+            let new_meta = metadata_table_name(new_name);
             let new_meta_exists: bool = conn
                 .query_row(
                     "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
@@ -749,8 +750,8 @@ pub fn rename_table_and_descendants(
             }
 
             // Metadata table
-            let old_meta = format!("{}_Metadata", old_name);
-            let new_meta = format!("{}_Metadata", new_name);
+            let old_meta = metadata_table_name(old_name);
+            let new_meta = metadata_table_name(new_name);
             let meta_exists: bool = conn
                 .query_row(
                     "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",

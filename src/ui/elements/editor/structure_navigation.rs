@@ -23,6 +23,7 @@ use bevy::prelude::*;
 ///
 /// # Arguments
 /// * `target_structure_name` - The name of the child structure table we're navigating to
+#[allow(dead_code)]
 pub fn collect_structure_ancestors(
     registry: &SheetRegistry,
     category: &Option<String>,
@@ -97,30 +98,24 @@ pub fn collect_structure_ancestors(
 }
 
 /// Get display value from first content column (skipping technical columns)
+/// 
+/// This is a wrapper around SheetMetadata::get_first_data_column_value for backwards compatibility
 pub fn get_first_content_column_value(metadata: &SheetMetadata, row: &[String]) -> String {
-    // Find first non-technical column
-    for (idx, col) in metadata.columns.iter().enumerate() {
-        if col.deleted || col.hidden {
-            continue;
-        }
-        
-        let header_lower = col.header.to_lowercase();
-        if header_lower == "row_index" 
-            || header_lower == "id" 
-            || header_lower == "parent_key"
-        {
-            continue;
-        }
-        
-        // This is a content column
-        return row.get(idx).cloned().unwrap_or_default();
-    }
-    
-    // Fallback: any non-empty value
-    row.iter()
-        .find(|s| !s.is_empty())
-        .cloned()
-        .unwrap_or_else(|| "?".to_string())
+    metadata.get_first_data_column_value(row)
+}
+
+/// Get the index of the first data (non-technical) column in metadata.
+/// Filters out: row_index, parent_key, id, created_at, updated_at
+#[allow(dead_code)]
+pub fn get_first_data_column_index(metadata: &SheetMetadata) -> Option<usize> {
+    metadata.columns.iter().position(|col| {
+        let lower = col.header.to_lowercase();
+        lower != "row_index"
+            && lower != "parent_key"
+            && lower != "id"
+            && lower != "created_at"
+            && lower != "updated_at"
+    })
 }
 
 // Parse JSON object string into headers + single row

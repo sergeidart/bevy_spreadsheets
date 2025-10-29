@@ -17,10 +17,65 @@ use crate::sheets::systems::ai_review::{
     RowKind,
 };
 use crate::sheets::systems::ai_review::review_logic::ColumnEntry;
+use crate::sheets::systems::logic::lineage_helpers::{
+    get_parent_sheet_options, get_parent_sheet_options_filtered, display_value_to_row_index,
+};
 use crate::ui::elements::editor::state::{EditorWindowState, StructureReviewEntry};
 
 const ROW_HEIGHT: f32 = 26.0;
 pub(super) const PARENT_KEY_COLOR: Color32 = Color32::from_rgb(0, 150, 0);
+
+/// Trait for review entries that support ancestor dropdown caching
+trait AncestorDropdownSupport {
+    fn get_key_overrides(&self) -> &HashMap<usize, bool>;
+    fn get_key_overrides_mut(&mut self) -> &mut HashMap<usize, bool>;
+    fn get_ancestor_key_values(&self) -> &Vec<String>;
+    fn get_ancestor_key_values_mut(&mut self) -> &mut Vec<String>;
+    fn get_ancestor_dropdown_cache(&self) -> &HashMap<usize, (Vec<String>, Vec<String>)>;
+    fn get_ancestor_dropdown_cache_mut(&mut self) -> &mut HashMap<usize, (Vec<String>, Vec<String>)>;
+}
+
+impl AncestorDropdownSupport for crate::ui::elements::editor::state::RowReview {
+    fn get_key_overrides(&self) -> &HashMap<usize, bool> {
+        &self.key_overrides
+    }
+    fn get_key_overrides_mut(&mut self) -> &mut HashMap<usize, bool> {
+        &mut self.key_overrides
+    }
+    fn get_ancestor_key_values(&self) -> &Vec<String> {
+        &self.ancestor_key_values
+    }
+    fn get_ancestor_key_values_mut(&mut self) -> &mut Vec<String> {
+        &mut self.ancestor_key_values
+    }
+    fn get_ancestor_dropdown_cache(&self) -> &HashMap<usize, (Vec<String>, Vec<String>)> {
+        &self.ancestor_dropdown_cache
+    }
+    fn get_ancestor_dropdown_cache_mut(&mut self) -> &mut HashMap<usize, (Vec<String>, Vec<String>)> {
+        &mut self.ancestor_dropdown_cache
+    }
+}
+
+impl AncestorDropdownSupport for crate::ui::elements::editor::state::NewRowReview {
+    fn get_key_overrides(&self) -> &HashMap<usize, bool> {
+        &self.key_overrides
+    }
+    fn get_key_overrides_mut(&mut self) -> &mut HashMap<usize, bool> {
+        &mut self.key_overrides
+    }
+    fn get_ancestor_key_values(&self) -> &Vec<String> {
+        &self.ancestor_key_values
+    }
+    fn get_ancestor_key_values_mut(&mut self) -> &mut Vec<String> {
+        &mut self.ancestor_key_values
+    }
+    fn get_ancestor_dropdown_cache(&self) -> &HashMap<usize, (Vec<String>, Vec<String>)> {
+        &self.ancestor_dropdown_cache
+    }
+    fn get_ancestor_dropdown_cache_mut(&mut self) -> &mut HashMap<usize, (Vec<String>, Vec<String>)> {
+        &mut self.ancestor_dropdown_cache
+    }
+}
 
 pub struct RowContext<'a> {
     pub state: &'a mut EditorWindowState,
@@ -50,6 +105,78 @@ impl<'a> RowContext<'a> {
         }
     }
 
+    /// Get parent sheet info for a specific ancestor level
+    ///
+    /// Tries virtual_structure_stack first, falls back to deriving from sheet name
+    fn get_parent_sheet_info(&self, key_idx: usize) -> Option<(Option<String>, String)> {
+        // Try virtual_structure_stack first
+        if let Some(vs) = self.state.virtual_structure_stack.get(key_idx) {
+            return Some((vs.parent.parent_category.clone(), vs.parent.parent_sheet.clone()));
+        }
+
+        // Fallback: derive from current sheet name
+        let current_sheet = self.state.selected_sheet_name.as_ref()?;
+
+        // Navigate up by removing suffixes (key_idx + 1) levels
+        let mut target_sheet = current_sheet.as_str();
+        for _ in 0..=(key_idx) {
+            target_sheet = target_sheet.rsplit_once('_')?.0;
+        }
+
+        Some((self.state.selected_category.clone(), target_sheet.to_string()))
+    }
+
+    /// Prepare ancestor dropdown for a review entry
+    ///
+    /// Ensures ancestor_key_values is populated and initialized from context if needed.
+    /// Returns (override_enabled, need_rebuild, ancestor_snapshot) tuple.
+    fn prepare_ancestor_dropdown<T: AncestorDropdownSupport>(
+        review: &mut T,
+        key_idx: usize,
+        context_value: &str,
+    ) -> (bool, bool, Option<Vec<String>>) {
+        let values = review.get_ancestor_key_values_mut();
+
+        // Ensure ancestor_key_values is populated
+        while values.len() <= key_idx {
+            values.push(String::new());
+        }
+
+        // Initialize from context if empty
+        if values[key_idx].is_empty() {
+            values[key_idx] = context_value.to_string();
+        }
+
+        let override_key = 1000 + key_idx;
+        let override_enabled = *review.get_key_overrides().get(&override_key).unwrap_or(&false);
+
+        let (need_rebuild, snapshot_opt) = if override_enabled {
+            let cache = review.get_ancestor_dropdown_cache();
+            let values = review.get_ancestor_key_values();
+
+            let need_rebuild = if let Some((cached_ancestors, _)) = cache.get(&key_idx) {
+                cached_ancestors.len() != key_idx ||
+                cached_ancestors.iter().enumerate().any(|(i, v)| {
+                    values.get(i).map(|s| s.as_str()) != Some(v.as_str())
+                })
+            } else {
+                true
+            };
+
+            let snapshot: Option<Vec<String>> = if need_rebuild {
+                Some(values.iter().take(key_idx).cloned().collect())
+            } else {
+                None
+            };
+
+            (need_rebuild, snapshot)
+        } else {
+            (false, None)
+        };
+
+        (override_enabled, need_rebuild, snapshot_opt)
+    }
+
     /// Build hierarchically filtered options for a specific ancestor level
     ///
     /// key_idx: The index of the ancestor key (0 = root/top-level parent, N-1 = immediate parent)
@@ -61,200 +188,63 @@ impl<'a> RowContext<'a> {
     /// This method returns display text for the UI, and the calling code must convert
     /// the selected display text back to row_index when storing.
     fn build_ancestor_options(&self, key_idx: usize, current_ancestors: &[String]) -> Vec<String> {
-        // Try to get parent sheet info from virtual_structure_stack first
-        // If not available, derive it from sheet name
-        let (parent_category, parent_sheet_name) = if let Some(vs) = self.state.virtual_structure_stack.get(key_idx) {
-            (vs.parent.parent_category.clone(), vs.parent.parent_sheet.clone())
-        } else {
-            // Fallback: derive parent sheet from current sheet name
-            // Structure tables are named: ParentTable_ColumnName
-            let current_sheet = match &self.state.selected_sheet_name {
-                Some(s) => s,
-                None => return Vec::new(),
-            };
-
-            // Navigate up by removing suffixes (key_idx + 1) levels
-            let mut target_sheet = current_sheet.as_str();
-            for _ in 0..=(key_idx) {
-                target_sheet = match target_sheet.rsplit_once('_') {
-                    Some((parent, _)) => parent,
-                    None => return Vec::new(),
-                };
-            }
-
-            (self.state.selected_category.clone(), target_sheet.to_string())
-        };
-
-        // Get the parent sheet that contains the options for this level
-        let parent_sheet = match self.registry.get_sheet(&parent_category, &parent_sheet_name) {
-            Some(s) => s,
-            None => return Vec::new(),
-        };
-        let meta = match &parent_sheet.metadata {
-            Some(m) => m,
-            None => return Vec::new(),
-        };
-
-        // Find the first data column (for display text)
-        let display_col_idx = match meta.columns.iter().position(|c| {
-            let h = c.header.to_lowercase();
-            h != "row_index"
-                && h != "parent_key"
-                && h != "id"
-                && h != "created_at"
-                && h != "updated_at"
-        }) {
-            Some(idx) => idx,
-            None => return Vec::new(),
+        // Get parent sheet info for this level
+        let Some((parent_category, parent_sheet_name)) = self.get_parent_sheet_info(key_idx) else {
+            return Vec::new();
         };
 
         // If this is the first level (key_idx == 0), no filtering needed
-        // Just return all unique display values from the parent sheet
         if key_idx == 0 {
-            let mut options = HashSet::new();
-            for row in &parent_sheet.grid {
-                if let Some(display_value) = row.get(display_col_idx) {
-                    if !display_value.is_empty() {
-                        options.insert(display_value.clone());
-                    }
-                }
-            }
-            let mut result: Vec<String> = options.into_iter().collect();
-            result.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
-            return result;
+            return get_parent_sheet_options(self.registry, &parent_category, &parent_sheet_name);
         }
 
-        // For deeper levels, we need to filter based on the immediate parent's context
-        // Since grand_* columns have been removed, we simplify to only check immediate parent
-        // matching. For full hierarchy filtering, would need to walk parent chain for each row.
-        //
-        // Simplified approach: If we have a parent at key_idx-1, filter by that parent's row_index
-        // This gives reasonable filtering without the complexity of full chain walking.
-        
+        // For deeper levels, filter based on immediate parent's row_index
         if key_idx > 0 && key_idx <= current_ancestors.len() {
             let immediate_parent_display = &current_ancestors[key_idx - 1];
-            
+
             if !immediate_parent_display.is_empty() {
-                // Find the immediate parent's sheet (one level up)
-                let parent_of_parent = if let Some(vs) = self.state.virtual_structure_stack.get(key_idx - 1) {
-                    (vs.parent.parent_category.clone(), vs.parent.parent_sheet.clone())
-                } else if let Some(current_sheet) = &self.state.selected_sheet_name {
-                    // Derive parent sheet by removing last underscore segment
-                    let mut target = current_sheet.as_str();
-                    for _ in 0..(key_idx - 1) {
-                        target = match target.rsplit_once('_') {
-                            Some((parent, _)) => parent,
-                            None => {
-                                // Can't derive, return all options
-                                let mut options = HashSet::new();
-                                for row in &parent_sheet.grid {
-                                    if let Some(display_value) = row.get(display_col_idx) {
-                                        if !display_value.is_empty() {
-                                            options.insert(display_value.clone());
-                                        }
-                                    }
-                                }
-                                let mut result: Vec<String> = options.into_iter().collect();
-                                result.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
-                                return result;
-                            }
-                        };
-                    }
-                    (self.state.selected_category.clone(), target.to_string())
-                } else {
-                    // No context, return all options
-                    let mut options = HashSet::new();
-                    for row in &parent_sheet.grid {
-                        if let Some(display_value) = row.get(display_col_idx) {
-                            if !display_value.is_empty() {
-                                options.insert(display_value.clone());
-                            }
-                        }
-                    }
-                    let mut result: Vec<String> = options.into_iter().collect();
-                    result.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
-                    return result;
+                // Get the immediate parent's sheet info (one level up)
+                let Some((grandparent_category, grandparent_sheet_name)) = self.get_parent_sheet_info(key_idx - 1) else {
+                    // Can't determine parent, return all options
+                    return get_parent_sheet_options(self.registry, &parent_category, &parent_sheet_name);
                 };
 
-                // Get the immediate parent's sheet to find its row_index
-                if let Some(parent_of_parent_sheet) = self.registry.get_sheet(&parent_of_parent.0, &parent_of_parent.1) {
-                    if let Some(parent_of_parent_meta) = &parent_of_parent_sheet.metadata {
-                        // Find display column in parent's parent sheet
-                        if let Some(parent_display_col) = parent_of_parent_meta.columns.iter().position(|c| {
-                            let h = c.header.to_lowercase();
-                            h != "row_index" && h != "parent_key" && h != "id" && h != "created_at" && h != "updated_at"
-                        }) {
-                            // Find row_index where display matches immediate_parent_display
-                            if let Some(parent_row_index) = parent_of_parent_sheet.grid.iter()
-                                .find(|row| row.get(parent_display_col).map(|v| v == immediate_parent_display).unwrap_or(false))
-                                .and_then(|row| row.get(0).and_then(|s| s.parse::<i64>().ok()))
-                            {
-                                // Now filter current parent_sheet by parent_key == parent_row_index
-                                if let Some(parent_key_col) = meta.columns.iter().position(|c| c.header.eq_ignore_ascii_case("parent_key")) {
-                                    let mut options = HashSet::new();
-                                    for row in &parent_sheet.grid {
-                                        if let Some(pk_val) = row.get(parent_key_col).and_then(|v| v.parse::<i64>().ok()) {
-                                            if pk_val == parent_row_index {
-                                                if let Some(display_value) = row.get(display_col_idx) {
-                                                    if !display_value.is_empty() {
-                                                        options.insert(display_value.clone());
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    let mut result: Vec<String> = options.into_iter().collect();
-                                    result.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
-                                    return result;
-                                }
-                            }
-                        }
-                    }
+                // Convert immediate parent's display text to row_index
+                if let Some(parent_row_index) = display_value_to_row_index(
+                    self.registry,
+                    &grandparent_category,
+                    &grandparent_sheet_name,
+                    immediate_parent_display,
+                    None, // No parent filter for the grandparent lookup
+                ) {
+                    // Return options filtered by this parent_key
+                    return get_parent_sheet_options_filtered(
+                        self.registry,
+                        &parent_category,
+                        &parent_sheet_name,
+                        parent_row_index,
+                    );
                 }
             }
         }
 
         // Fallback: return all options (no filtering)
-        let mut options = HashSet::new();
-        for row in &parent_sheet.grid {
-            if let Some(display_value) = row.get(display_col_idx) {
-                if !display_value.is_empty() {
-                    options.insert(display_value.clone());
-                }
-            }
-        }
-
-        // Convert to sorted vector for consistent UI
-        let mut result: Vec<String> = options.into_iter().collect();
-        result.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
-        result
+        get_parent_sheet_options(self.registry, &parent_category, &parent_sheet_name)
     }
 
     pub fn render_ancestor_keys_for_original_row(&mut self, row: &mut TableRow, kind: RowKind, data_idx: usize) {
         for (key_idx, (_header, _context_value)) in self.ancestor_key_columns.iter().enumerate() {
             row.col(|ui| {
-                match kind {
-                    RowKind::Existing => {
-                        if let Some(rr) = self.state.ai_row_reviews.get_mut(data_idx) {
-                            let override_key = 1000 + key_idx;
-                            let override_val = rr.key_overrides.entry(override_key).or_insert(false);
-                            ui.checkbox(override_val, "Override");
-                        }
-                    }
-                    RowKind::NewDuplicate => {
-                        if let Some(nr) = self.state.ai_new_row_reviews.get_mut(data_idx) {
-                            let override_key = 1000 + key_idx;
-                            let override_val = nr.key_overrides.entry(override_key).or_insert(false);
-                            ui.checkbox(override_val, "Override");
-                        }
-                    }
-                    RowKind::NewPlain => {
-                        if let Some(nr) = self.state.ai_new_row_reviews.get_mut(data_idx) {
-                            let override_key = 1000 + key_idx;
-                            let override_val = nr.key_overrides.entry(override_key).or_insert(false);
-                            ui.checkbox(override_val, "Override");
-                        }
-                    }
+                // Get the review entry and render the override checkbox
+                let review_opt: Option<&mut dyn AncestorDropdownSupport> = match kind {
+                    RowKind::Existing => self.state.ai_row_reviews.get_mut(data_idx).map(|r| r as &mut dyn AncestorDropdownSupport),
+                    RowKind::NewDuplicate | RowKind::NewPlain => self.state.ai_new_row_reviews.get_mut(data_idx).map(|r| r as &mut dyn AncestorDropdownSupport),
+                };
+
+                if let Some(review) = review_opt {
+                    let override_key = 1000 + key_idx;
+                    let override_val = review.get_key_overrides_mut().entry(override_key).or_insert(false);
+                    ui.checkbox(override_val, "Override");
                 }
             });
         }
@@ -265,47 +255,15 @@ impl<'a> RowContext<'a> {
             row.col(|ui| {
                 match kind {
                     RowKind::Existing => {
-                        // Phase 1: Prepare data (mutable access)
-                        let (override_enabled, need_rebuild, ancestor_snapshot_opt) = if let Some(rr) = self.state.ai_row_reviews.get_mut(data_idx) {
-                            // Ensure ancestor_key_values is populated
-                            while rr.ancestor_key_values.len() <= key_idx {
-                                rr.ancestor_key_values.push(String::new());
-                            }
-                            // Initialize from context if empty
-                            if rr.ancestor_key_values[key_idx].is_empty() {
-                                rr.ancestor_key_values[key_idx] = context_value.clone();
-                            }
-
-                            let override_key = 1000 + key_idx;
-                            let override_enabled = *rr.key_overrides.get(&override_key).unwrap_or(&false);
-
-                            let (need_rebuild, snapshot_opt) = if override_enabled {
-                                let need_rebuild = if let Some((cached_ancestors, _)) = rr.ancestor_dropdown_cache.get(&key_idx) {
-                                    cached_ancestors.len() != key_idx ||
-                                    cached_ancestors.iter().enumerate().any(|(i, v)| {
-                                        rr.ancestor_key_values.get(i).map(|s| s.as_str()) != Some(v.as_str())
-                                    })
-                                } else {
-                                    true
-                                };
-
-                                let snapshot: Option<Vec<String>> = if need_rebuild {
-                                    Some(rr.ancestor_key_values.iter().take(key_idx).cloned().collect())
-                                } else {
-                                    None
-                                };
-
-                                (need_rebuild, snapshot)
+                        // Phase 1: Prepare data
+                        let (override_enabled, need_rebuild, ancestor_snapshot_opt) =
+                            if let Some(rr) = self.state.ai_row_reviews.get_mut(data_idx) {
+                                Self::prepare_ancestor_dropdown(rr, key_idx, context_value)
                             } else {
-                                (false, None)
+                                (false, false, None)
                             };
 
-                            (override_enabled, need_rebuild, snapshot_opt)
-                        } else {
-                            (false, false, None)
-                        };
-
-                        // Phase 2: Build options (immutable access to self)
+                        // Phase 2: Build options
                         if need_rebuild {
                             if let Some(ancestor_snapshot) = ancestor_snapshot_opt {
                                 let options = self.build_ancestor_options(key_idx, &ancestor_snapshot);
@@ -339,47 +297,15 @@ impl<'a> RowContext<'a> {
                         }
                     }
                     RowKind::NewDuplicate => {
-                        // Phase 1: Prepare data (mutable access)
-                        let (override_enabled, need_rebuild, ancestor_snapshot_opt) = if let Some(nr) = self.state.ai_new_row_reviews.get_mut(data_idx) {
-                            // Ensure ancestor_key_values is populated
-                            while nr.ancestor_key_values.len() <= key_idx {
-                                nr.ancestor_key_values.push(String::new());
-                            }
-                            // Initialize from context if empty
-                            if nr.ancestor_key_values[key_idx].is_empty() {
-                                nr.ancestor_key_values[key_idx] = context_value.clone();
-                            }
-
-                            let override_key = 1000 + key_idx;
-                            let override_enabled = *nr.key_overrides.get(&override_key).unwrap_or(&false);
-
-                            let (need_rebuild, snapshot_opt) = if override_enabled {
-                                let need_rebuild = if let Some((cached_ancestors, _)) = nr.ancestor_dropdown_cache.get(&key_idx) {
-                                    cached_ancestors.len() != key_idx ||
-                                    cached_ancestors.iter().enumerate().any(|(i, v)| {
-                                        nr.ancestor_key_values.get(i).map(|s| s.as_str()) != Some(v.as_str())
-                                    })
-                                } else {
-                                    true
-                                };
-
-                                let snapshot: Option<Vec<String>> = if need_rebuild {
-                                    Some(nr.ancestor_key_values.iter().take(key_idx).cloned().collect())
-                                } else {
-                                    None
-                                };
-
-                                (need_rebuild, snapshot)
+                        // Phase 1: Prepare data
+                        let (override_enabled, need_rebuild, ancestor_snapshot_opt) =
+                            if let Some(nr) = self.state.ai_new_row_reviews.get_mut(data_idx) {
+                                Self::prepare_ancestor_dropdown(nr, key_idx, context_value)
                             } else {
-                                (false, None)
+                                (false, false, None)
                             };
 
-                            (override_enabled, need_rebuild, snapshot_opt)
-                        } else {
-                            (false, false, None)
-                        };
-
-                        // Phase 2: Build options (immutable access to self)
+                        // Phase 2: Build options
                         if need_rebuild {
                             if let Some(ancestor_snapshot) = ancestor_snapshot_opt {
                                 let options = self.build_ancestor_options(key_idx, &ancestor_snapshot);

@@ -2,6 +2,7 @@
 // Insertion operations - adding new rows and grid data
 
 use super::super::error::DbResult;
+use super::helpers::{build_insert_sql, pad_params_with_empty_strings, append_string_params};
 use crate::sheets::definitions::{ColumnValidator, SheetMetadata};
 use rusqlite::{Connection, Transaction};
 use bevy::prelude::*;
@@ -24,34 +25,19 @@ pub fn insert_grid_data(
         return Ok(());
     }
 
-    let placeholders = (0..column_names.len())
-        .map(|_| "?")
-        .collect::<Vec<_>>()
-        .join(", ");
-    let cols_str = column_names
-        .iter()
-        .map(|name| format!("\"{}\"", name))
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    let insert_sql = format!(
-        "INSERT INTO \"{}\" (row_index, {}) VALUES (?, {})",
-        table_name, cols_str, placeholders
-    );
-
+    let insert_sql = build_insert_sql(table_name, &column_names);
     let mut stmt = tx.prepare(&insert_sql)?;
 
     for (row_idx, row_data) in grid.iter().enumerate() {
         let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(row_idx as i32)];
 
+        // Add cell values (up to column_names length)
         for cell in row_data.iter().take(column_names.len()) {
             params_vec.push(Box::new(cell.clone()));
         }
 
-        // Fill missing columns with empty strings
-        while params_vec.len() <= column_names.len() {
-            params_vec.push(Box::new(String::new()));
-        }
+        // Fill missing columns with empty strings (target: 1 + column_names.len())
+        pad_params_with_empty_strings(&mut params_vec, column_names.len() + 1);
 
         stmt.execute(rusqlite::params_from_iter(params_vec.iter()))?;
     }
@@ -78,31 +64,20 @@ pub fn insert_grid_data_with_progress<F: FnMut(usize)>(
         return Ok(());
     }
 
-    let placeholders = (0..column_names.len())
-        .map(|_| "?")
-        .collect::<Vec<_>>()
-        .join(", ");
-    let cols_str = column_names
-        .iter()
-        .map(|name| format!("\"{}\"", name))
-        .collect::<Vec<_>>()
-        .join(", ");
-
-    let insert_sql = format!(
-        "INSERT INTO \"{}\" (row_index, {}) VALUES (?, {})",
-        table_name, cols_str, placeholders
-    );
-
+    let insert_sql = build_insert_sql(table_name, &column_names);
     let mut stmt = tx.prepare(&insert_sql)?;
 
     for (row_idx, row_data) in grid.iter().enumerate() {
         let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(row_idx as i32)];
+        
+        // Add cell values (up to column_names length)
         for cell in row_data.iter().take(column_names.len()) {
             params_vec.push(Box::new(cell.clone()));
         }
-        while params_vec.len() <= column_names.len() {
-            params_vec.push(Box::new(String::new()));
-        }
+        
+        // Fill missing columns with empty strings (target: 1 + column_names.len())
+        pad_params_with_empty_strings(&mut params_vec, column_names.len() + 1);
+        
         stmt.execute(rusqlite::params_from_iter(params_vec.iter()))?;
 
         if row_idx > 0 && row_idx % 1000 == 0 {
@@ -132,28 +107,11 @@ pub fn insert_row(
 
     let new_row_index = max_row + 1;
 
-    let placeholders = (0..column_names.len())
-        .map(|_| "?")
-        .collect::<Vec<_>>()
-        .join(", ");
-    let cols_str = column_names
-        .iter()
-        .map(|name| format!("\"{}\"", name))
-        .collect::<Vec<_>>()
-        .join(", ");
-
+    let insert_sql = build_insert_sql(table_name, column_names);
     let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(new_row_index)];
-    for cell in row_data {
-        params_vec.push(Box::new(cell.clone()));
-    }
+    append_string_params(&mut params_vec, row_data);
 
-    conn.execute(
-        &format!(
-            "INSERT INTO \"{}\" (row_index, {}) VALUES (?, {})",
-            table_name, cols_str, placeholders
-        ),
-        rusqlite::params_from_iter(params_vec.iter()),
-    )?;
+    conn.execute(&insert_sql, rusqlite::params_from_iter(params_vec.iter()))?;
 
     Ok(conn.last_insert_rowid())
 }
@@ -167,28 +125,11 @@ pub fn insert_row_with_index(
     row_data: &[String],
     column_names: &[String],
 ) -> DbResult<i64> {
-    let placeholders = (0..column_names.len())
-        .map(|_| "?")
-        .collect::<Vec<_>>()
-        .join(", ");
-    let cols_str = column_names
-        .iter()
-        .map(|name| format!("\"{}\"", name))
-        .collect::<Vec<_>>()
-        .join(", ");
-
+    let insert_sql = build_insert_sql(table_name, column_names);
     let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(row_index)];
-    for cell in row_data {
-        params_vec.push(Box::new(cell.clone()));
-    }
+    append_string_params(&mut params_vec, row_data);
 
-    conn.execute(
-        &format!(
-            "INSERT INTO \"{}\" (row_index, {}) VALUES (?, {})",
-            table_name, cols_str, placeholders
-        ),
-        rusqlite::params_from_iter(params_vec.iter()),
-    )?;
+    conn.execute(&insert_sql, rusqlite::params_from_iter(params_vec.iter()))?;
 
     Ok(conn.last_insert_rowid())
 }

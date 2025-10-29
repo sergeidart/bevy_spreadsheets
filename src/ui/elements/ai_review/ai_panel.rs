@@ -11,14 +11,16 @@ use crate::{
             RequestSelectAiSchemaGroup, RequestToggleAiRowGeneration,
         },
         resources::SheetRegistry,
-        systems::logic::lineage_helpers::{walk_parent_lineage, gather_lineage_ai_contexts},
     },
     ui::elements::editor::state::{AiModeState, EditorWindowState},
     SessionApiKey,
 };
 
 use super::{
-    ai_context_utils::decorate_context_with_type, ai_control_left_panel::draw_left_panel_impl,
+    ai_context_utils::{
+        build_lineage_prefixes, collect_ai_included_columns,
+    },
+    ai_control_left_panel::draw_left_panel_impl,
     ai_group_panel::draw_group_panel,
 };
 use crate::sheets::systems::ai::control_handler::{
@@ -59,56 +61,16 @@ pub fn send_selected_rows(
 
     // Collect non-structure columns to include (influenced by schema groups) and
     // when in a structure sheet: exclude the technical columns (row_index, id), keep 'parent_key'.
-    let mut included_indices: Vec<usize> = Vec::new();
-    let mut column_contexts: Vec<Option<String>> = Vec::new();
     // Treat as structure context when either:
     // - Navigated into a virtual structure view (virtual_structure_stack), or
     // - The selected sheet's metadata marks it as a structure table
     let in_structure_sheet = !state.virtual_structure_stack.is_empty()
         || meta.is_structure_table();
-    for (idx, col) in meta.columns.iter().enumerate() {
-        info!(
-            "AI Column Filter: idx={}, header='{}', deleted={}, ai_include={:?}, validator={:?}",
-            idx, col.header, col.deleted, col.ai_include_in_send, col.validator
-        );
-        if col.deleted {
-            info!("  → SKIP: deleted");
-            continue; // Filter out deleted columns
-        }
-        if matches!(
-            col.validator,
-            Some(crate::sheets::definitions::ColumnValidator::Structure)
-        ) {
-            info!("  → SKIP: structure validator");
-            continue;
-        }
-        if matches!(col.ai_include_in_send, Some(false)) {
-            info!("  → SKIP: ai_include_in_send=false");
-            continue;
-        }
-        // Omit technical columns from payload to AI ALWAYS
-        // Skip: row_index, id, parent_key
-        if col.header.eq_ignore_ascii_case("row_index")
-            || col.header.eq_ignore_ascii_case("id")
-            || col.header.eq_ignore_ascii_case("parent_key")
-        {
-            info!("  → SKIP: technical column");
-            continue;
-        }
-        // Store actual grid column index expected by downstream processors
-        // Grid indexing offset applies when the underlying table is a structure table
-        let actual_grid_idx = if meta.is_structure_table() {
-            meta.metadata_index_to_grid_index(idx)
-        } else {
-            idx
-        };
-        info!("  → INCLUDE: grid_idx={}", actual_grid_idx);
-        included_indices.push(actual_grid_idx);
-        column_contexts.push(decorate_context_with_type(
-            col.ai_context.as_ref(),
-            col.data_type,
-        ));
-    }
+    
+    let inclusion = collect_ai_included_columns(meta, in_structure_sheet);
+    let included_indices = inclusion.included_indices;
+    let mut column_contexts = inclusion.column_contexts;
+    
     // Gather row data (only included non-structure columns)
     let mut rows_data: Vec<Vec<String>> = Vec::new();
     if let Some(sheet) = sheet_opt {
@@ -200,169 +162,37 @@ pub fn send_selected_rows(
         }
     }
 
-    // Helper to get first non-technical column index in metadata
-    fn first_data_col_idx(meta: &crate::sheets::definitions::SheetMetadata) -> Option<usize> {
-        meta.columns.iter().position(|col| {
-            let lower = col.header.to_lowercase();
-            lower != "row_index"
-                && lower != "parent_key"
-                && lower != "id"
-                && lower != "created_at"
-                && lower != "updated_at"
-        })
-    }
-
     // Build human-readable ancestor prefixes using programmatic lineage walking.
     // Prefer virtual structure context; fall back to legacy structure navigation if present.
-    let mut key_prefix_count = 0usize;
-    let mut key_prefix_headers: Option<Vec<String>> = None;
-    if !state.virtual_structure_stack.is_empty() {
-        let mut headers: Vec<String> = Vec::new();
-        let mut values: Vec<String> = Vec::new();
-        let mut prefix_contexts: Vec<Option<String>> = Vec::new();
-
-        // Iterate ancestors from oldest to nearest parent using virtual structure stack order
-        for vctx in &state.virtual_structure_stack {
-            if let Some(parent_sheet) = registry.get_sheet(&vctx.parent.parent_category, &vctx.parent.parent_sheet) {
-                if let (Some(parent_meta), Some(parent_row)) = (&parent_sheet.metadata, parent_sheet.grid.get(vctx.parent.parent_row)) {
-                    if let Some(di) = first_data_col_idx(parent_meta) {
-                        let header = parent_meta.columns.get(di).map(|c| c.header.clone()).unwrap_or_else(|| "Key".to_string());
-                        let display = parent_row.get(di).cloned().unwrap_or_default();
-                        if !display.is_empty() {
-                            headers.push(header.clone());
-                            values.push(display);
-                            let col_def = &parent_meta.columns[di];
-                            prefix_contexts.push(decorate_context_with_type(col_def.ai_context.as_ref(), col_def.data_type));
-                        }
-                    }
-                }
+    let lineage_prefixes = build_lineage_prefixes(state, registry, &selection);
+    
+    let key_prefix_count = lineage_prefixes.key_prefix_count;
+    
+    // Prepend lineage prefixes to column contexts and row data if present
+    if !lineage_prefixes.prefix_values.is_empty() {
+        // Prepend prefix contexts to column_contexts
+        let old_contexts_len = column_contexts.len();
+        let mut new_contexts: Vec<Option<String>> =
+            Vec::with_capacity(lineage_prefixes.key_prefix_count + old_contexts_len);
+        new_contexts.extend(lineage_prefixes.prefix_contexts.into_iter());
+        new_contexts.extend(column_contexts.into_iter());
+        info!(
+            "After prepending: new_contexts.len()={} (was {})",
+            new_contexts.len(), old_contexts_len
+        );
+        column_contexts = new_contexts;
+        
+        // Prepend values to each selected row
+        for row in rows_data.iter_mut() {
+            info!("Before prepending row: {:?}", row);
+            for (i, v) in lineage_prefixes.prefix_values.iter().enumerate() {
+                row.insert(i, v.clone());
             }
+            info!("After prepending row: {:?}", row);
         }
-
-        if !values.is_empty() {
-            // Prepend prefixes to column_contexts in the same order
-            key_prefix_count = values.len();
-            key_prefix_headers = Some(headers.clone());
-            let mut new_contexts: Vec<Option<String>> =
-                Vec::with_capacity(key_prefix_count + column_contexts.len());
-            new_contexts.extend(prefix_contexts.into_iter());
-            new_contexts.extend(column_contexts.into_iter());
-            column_contexts = new_contexts;
-            // Prepend values to each selected row
-            for row in rows_data.iter_mut() {
-                for (i, v) in values.iter().enumerate() {
-                    row.insert(i, v.clone());
-                }
-            }
-            // Also store these pairs for review UI fallback (keyed by row_index)
-            let pairs: Vec<(String, String)> = headers
-                .iter()
-                .cloned()
-                .zip(values.iter().cloned())
-                .collect();
-            for &row_index in &selection {
-                state.ai_context_prefix_by_row.insert(row_index, pairs.clone());
-            }
-        }
-    } else if !state.structure_navigation_stack.is_empty() {
-        // Real-structure navigation: use lineage walking instead of reading grand_N columns
-        if let Some(nav_ctx) = state.structure_navigation_stack.last() {
-            let mut headers: Vec<String> = Vec::new();
-            let mut values: Vec<String> = Vec::new();
-            let mut prefix_contexts: Vec<Option<String>> = Vec::new();
-
-            // Walk parent lineage to get full ancestry
-            // Build complete lineage including immediate parent + all ancestors
-            if let Some(parent_sheet) = registry.get_sheet(&nav_ctx.parent_category, &nav_ctx.parent_sheet_name) {
-                if let Some(parent_meta) = &parent_sheet.metadata {
-                    // Parse parent_row_key as row_index
-                    if let Ok(parent_row_idx) = nav_ctx.parent_row_key.parse::<usize>() {
-                        info!("🔍 DEBUG: Starting lineage walk for parent_sheet='{}', parent_row_idx={}", 
-                              nav_ctx.parent_sheet_name, parent_row_idx);
-                        
-                        // Get complete lineage starting from parent (includes parent itself + ancestors)
-                        let lineage = walk_parent_lineage(
-                            registry,
-                            &nav_ctx.parent_category,
-                            &nav_ctx.parent_sheet_name,
-                            parent_row_idx,
-                        );
-                        
-                        info!("🔍 DEBUG: walk_parent_lineage returned {} entries: {:?}", 
-                              lineage.len(), 
-                              lineage.iter().map(|(t, d, i)| format!("{}[{}]={}", t, i, d)).collect::<Vec<_>>());
-                        
-                        info!("🔍 DEBUG: Complete lineage has {} entries: {:?}", 
-                              lineage.len(), 
-                              lineage.iter().map(|(t, d, i)| format!("{}[{}]={}", t, i, d)).collect::<Vec<_>>());
-                        
-                        // Gather AI contexts from lineage for better AI understanding
-                        let lineage_contexts = gather_lineage_ai_contexts(registry, &lineage);
-                        
-                        // Add each lineage entry
-                        for ((table_name, display_value, row_idx), ai_ctx) in lineage.iter().zip(lineage_contexts.iter()) {
-                            // Get the first data column header from the table
-                            if let Some(tbl_sheet) = registry.get_sheet(&nav_ctx.parent_category, table_name) {
-                                if let Some(tbl_meta) = &tbl_sheet.metadata {
-                                    if let Some(di) = first_data_col_idx(tbl_meta) {
-                                        let header = tbl_meta.columns.get(di).map(|c| c.header.clone()).unwrap_or_else(|| "Key".to_string());
-                                        headers.push(header.clone());
-                                        values.push(display_value.clone());
-                                        let col_def = &tbl_meta.columns[di];
-                                        
-                                        // Use lineage context if available, otherwise fall back to column context
-                                        let context_to_use = if !ai_ctx.is_empty() {
-                                            Some(ai_ctx.clone())
-                                        } else {
-                                            col_def.ai_context.clone()
-                                        };
-                                        
-                                        prefix_contexts.push(decorate_context_with_type(context_to_use.as_ref(), col_def.data_type));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            if !values.is_empty() {
-                info!(
-                    "Lineage Prepending: headers={:?}, values={:?}, prefix_contexts.len()={}",
-                    headers, values, prefix_contexts.len()
-                );
-                key_prefix_count = values.len();
-                key_prefix_headers = Some(headers.clone());
-                // Prepend prefixes to column_contexts in the same order
-                let old_contexts_len = column_contexts.len();
-                let mut new_contexts: Vec<Option<String>> =
-                    Vec::with_capacity(key_prefix_count + old_contexts_len);
-                new_contexts.extend(prefix_contexts.into_iter());
-                new_contexts.extend(column_contexts.into_iter());
-                info!(
-                    "After prepending: new_contexts.len()={} (was {})",
-                    new_contexts.len(), old_contexts_len
-                );
-                column_contexts = new_contexts;
-                // Prepend values to each selected row
-                for row in rows_data.iter_mut() {
-                    info!("Before prepending row: {:?}", row);
-                    for (i, v) in values.iter().enumerate() {
-                        row.insert(i, v.clone());
-                    }
-                    info!("After prepending row: {:?}", row);
-                }
-                // Also store these pairs for review UI fallback
-                let pairs: Vec<(String, String)> = headers
-                    .iter()
-                    .cloned()
-                    .zip(values.iter().cloned())
-                    .collect();
-                for &row_index in &selection {
-                    state.ai_context_prefix_by_row.insert(row_index, pairs.clone());
-                }
-            }
-        }
+        
+        // Store pairs for review UI fallback
+        state.ai_context_prefix_by_row = lineage_prefixes.prefix_pairs_by_row;
     }
 
     // Build payload differently based on whether we're in a structure context
