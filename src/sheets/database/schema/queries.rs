@@ -71,6 +71,7 @@ pub fn create_global_metadata_table(conn: &Connection) -> DbResult<()> {
             parent_column TEXT,
             ai_allow_add_rows INTEGER DEFAULT 0,
             ai_table_context TEXT,
+            ai_model_id TEXT,
             ai_grounding_with_google_search INTEGER DEFAULT 0,
             ai_active_group TEXT,
             display_order INTEGER,

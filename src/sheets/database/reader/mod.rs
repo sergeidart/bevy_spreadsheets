@@ -459,7 +459,9 @@ impl DbReader {
             data_filename: format!("{}.json", table_name),
             columns,
             ai_general_rule: table_meta.ai_table_context,
-            ai_model_id: "gemini-flash-latest".to_string(),
+            ai_model_id: table_meta.ai_model_id.unwrap_or_else(|| {
+                crate::sheets::definitions::default_ai_model_id()
+            }),
             ai_temperature: None,
             requested_grounding_with_google_search: Some(
                 table_meta.ai_grounding.unwrap_or(0) != 0,

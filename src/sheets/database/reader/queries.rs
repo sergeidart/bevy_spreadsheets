@@ -137,23 +137,25 @@ pub fn read_table_metadata(
 ) -> DbResult<TableMetadataRow> {
     let row = conn
         .query_row(
-            "SELECT ai_allow_add_rows, ai_table_context, ai_active_group, category, hidden, ai_grounding_with_google_search
+            "SELECT ai_allow_add_rows, ai_table_context, ai_model_id, ai_active_group, category, hidden, ai_grounding_with_google_search
              FROM _Metadata WHERE table_name = ?",
             [table_name],
             |row| {
                 Ok(TableMetadataRow {
                     ai_allow_add_rows: row.get(0)?,
                     ai_table_context: row.get(1)?,
-                    ai_active_group: row.get(2)?,
-                    category: row.get(3)?,
-                    hidden: row.get(4).ok(),
-                    ai_grounding: row.get(5).ok(),
+                    ai_model_id: row.get(2).ok(),
+                    ai_active_group: row.get(3)?,
+                    category: row.get(4)?,
+                    hidden: row.get(5).ok(),
+                    ai_grounding: row.get(6).ok(),
                 })
             },
         )
         .unwrap_or_else(|_| TableMetadataRow {
             ai_allow_add_rows: 0,
             ai_table_context: None,
+            ai_model_id: None,
             ai_active_group: None,
             category: None,
             hidden: None,
@@ -287,6 +289,7 @@ pub struct MetadataColumnRow {
 pub struct TableMetadataRow {
     pub ai_allow_add_rows: i32,
     pub ai_table_context: Option<String>,
+    pub ai_model_id: Option<String>,
     pub ai_active_group: Option<String>,
     pub category: Option<String>,
     pub hidden: Option<i32>,

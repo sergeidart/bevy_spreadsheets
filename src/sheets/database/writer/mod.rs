@@ -212,6 +212,7 @@ impl DbWriter {
         table_name: &str,
         allow_add_rows: Option<bool>,
         table_context: Option<&str>,
+        model_id: Option<&str>,
         active_group: Option<&str>,
         grounding_with_google_search: Option<bool>,
     ) -> DbResult<()> {
@@ -220,6 +221,7 @@ impl DbWriter {
             table_name,
             allow_add_rows,
             table_context,
+            model_id,
             active_group,
             grounding_with_google_search,
         )

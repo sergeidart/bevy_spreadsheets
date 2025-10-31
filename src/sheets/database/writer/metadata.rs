@@ -23,6 +23,7 @@ pub fn update_table_ai_settings(
     table_name: &str,
     allow_add_rows: Option<bool>,
     table_context: Option<&str>,
+    model_id: Option<&str>,
     active_group: Option<&str>,
     grounding_with_google_search: Option<bool>,
 ) -> DbResult<()> {
@@ -33,6 +34,9 @@ pub fn update_table_ai_settings(
     }
     if table_context.is_some() {
         sets.push("ai_table_context = ?");
+    }
+    if model_id.is_some() {
+        sets.push("ai_model_id = ?");
     }
     if active_group.is_some() {
         sets.push("ai_active_group = ?");
@@ -52,6 +56,9 @@ pub fn update_table_ai_settings(
         params_vec.push(Box::new(v as i32));
     }
     if let Some(v) = table_context {
+        params_vec.push(Box::new(v.to_string()));
+    }
+    if let Some(v) = model_id {
         params_vec.push(Box::new(v.to_string()));
     }
     if let Some(v) = active_group {

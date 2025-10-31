@@ -23,6 +23,11 @@ pub fn ensure_global_metadata_table(conn: &Connection) -> DbResult<()> {
         mark_migration_applied(conn, 1, "Added hidden and grounding columns to _Metadata")?;
     }
 
+    if !is_migration_applied(conn, 2)? {
+        add_ai_model_id_column_migration(conn)?;
+        mark_migration_applied(conn, 2, "Added ai_model_id column to _Metadata")?;
+    }
+
     Ok(())
 }
 
@@ -46,6 +51,18 @@ fn add_metadata_columns_migration(conn: &Connection) -> DbResult<()> {
             "ai_grounding_with_google_search",
             "INTEGER DEFAULT 0",
         )?;
+    }
+
+    Ok(())
+}
+
+/// Migration 2: Add ai_model_id column
+fn add_ai_model_id_column_migration(conn: &Connection) -> DbResult<()> {
+    let existing_cols = queries::get_table_columns(conn, "_Metadata")?;
+
+    if !existing_cols.iter().any(|c| c.eq_ignore_ascii_case("ai_model_id")) {
+        queries::add_column_if_missing(conn, "_Metadata", "ai_model_id", "TEXT")?;
+        info!("Added ai_model_id column to _Metadata table");
     }
 
     Ok(())

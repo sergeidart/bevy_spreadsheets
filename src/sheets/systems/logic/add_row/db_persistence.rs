@@ -360,6 +360,7 @@ pub(super) fn update_table_ai_settings_db(
         None,
         None,
         None,
+        None,
     )
     .map_err(|e| format!("Failed to update AI settings: {:?}", e))?;
 
