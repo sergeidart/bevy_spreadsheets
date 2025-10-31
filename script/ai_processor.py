@@ -29,13 +29,7 @@ Repair notes appended to raw_response inside [Repairs: ...] tag for UI visibilit
 from typing import Any, Dict, List, Tuple, Optional
 
 from google import genai
-from google.genai.types import (
-    GenerateContentConfig,
-    GenerationConfig,  # for completeness; used for type hints only
-    GoogleSearch,
-    HttpOptions,
-    Tool,
-)
+from google.genai import types
 
 # ---------------------------------------------------------------------------
 # Public API (exposed to Rust)
@@ -258,23 +252,44 @@ def execute_ai_query(api_key: str, payload_json: str) -> str:  # noqa: D401
         )
 
         contents = [
-            genai.types.Content(role="model", parts=[genai.types.Part.from_text(text=system_full)]),
-            genai.types.Content(role="user", parts=[genai.types.Part.from_text(text=user_text)]),
+            types.Content(role="model", parts=[types.Part.from_text(text=system_full)]),
+            types.Content(role="user", parts=[types.Part.from_text(text=user_text)]),
         ]
-        cfg: Dict[str, Any] = {}
+        
+        # Build tools configuration using dictionary format per Gemini docs
+        # This enables both URL context retrieval and Google Search grounding
+        tools = [
+            {"url_context": {}},
+            {"google_search": {}}
+        ]
+        
+        # Build generation config
+        cfg: Dict[str, Any] = {
+            "tools": tools,
+            "system_instruction": types.Content(
+                role="model", parts=[types.Part.from_text(text=system_full)]
+            ),
+        }
         if payload.get("ai_temperature") is not None:
             cfg["temperature"] = payload["ai_temperature"]
-        cfg["tools"] = [Tool(google_search=GoogleSearch())]
-        cfg["system_instruction"] = genai.types.Content(
-            role="model", parts=[genai.types.Part.from_text(text=system_full)]
-        )
 
-        client = genai.Client(api_key=api_key, http_options=HttpOptions())
+        client = genai.Client(api_key=api_key)
         response = client.models.generate_content(
             model=model_id,
             contents=contents,
-            config=GenerateContentConfig(**cfg),
+            config=types.GenerateContentConfig(**cfg),
         )
+        
+        # Extract URL context metadata if available (from url_context tool)
+        url_context_metadata = None
+        try:
+            if response.candidates and len(response.candidates) > 0:
+                candidate = response.candidates[0]
+                if hasattr(candidate, 'url_context_metadata') and candidate.url_context_metadata:
+                    url_context_metadata = candidate.url_context_metadata
+        except (AttributeError, IndexError):
+            pass  # URL context metadata not available
+        
         raw_text = (response.text or "").strip()
         if raw_text.startswith("```json"):
             raw_text = raw_text[7:].strip()
@@ -409,6 +424,8 @@ def execute_ai_query(api_key: str, payload_json: str) -> str:  # noqa: D401
                 "data": norm_groups,  # Array of group arrays
                 "raw_response": original_raw + (f"\n[Repairs: {'; '.join(repair_notes)}]" if repair_notes else "")
             }
+            if url_context_metadata:
+                payload_out["url_context_metadata"] = str(url_context_metadata)
             return json.dumps(payload_out, ensure_ascii=False)
         
         # Regular (non-grouped) processing
@@ -446,6 +463,11 @@ def execute_ai_query(api_key: str, payload_json: str) -> str:  # noqa: D401
             payload_out["data"] = norm_rows[0] if norm_rows else []
         else:
             payload_out["data"] = norm_rows
+        
+        # Include URL context metadata if available
+        if url_context_metadata:
+            payload_out["url_context_metadata"] = str(url_context_metadata)
+        
         return json.dumps(payload_out, ensure_ascii=False)
     except Exception as e:  # pragma: no cover
         return make_err(f"Unhandled exception: {e}")
