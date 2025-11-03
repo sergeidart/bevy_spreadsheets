@@ -30,7 +30,21 @@ use std::path::Path;
 
 /// Force a WAL checkpoint on a database connection
 /// This ensures all pending changes in the WAL file are written to the main database
+/// 
+/// Note: Only performs checkpoint if database is actually in WAL mode
 pub fn checkpoint_database(conn: &Connection) -> DbResult<()> {
+    // Check if database is in WAL mode first
+    let journal_mode: String = conn.query_row(
+        "PRAGMA journal_mode",
+        [],
+        |row| row.get(0)
+    )?;
+    
+    if journal_mode.to_uppercase() != "WAL" {
+        trace!("Database is not in WAL mode (mode: {}), skipping checkpoint", journal_mode);
+        return Ok(());
+    }
+    
     // RESTART mode: Checkpoint and restart the WAL file
     // This ensures maximum durability
     conn.execute_batch("PRAGMA wal_checkpoint(RESTART);")?;
@@ -39,22 +53,50 @@ pub fn checkpoint_database(conn: &Connection) -> DbResult<()> {
 }
 
 /// Checkpoint a database file by path
-pub fn checkpoint_database_file(db_path: &Path) -> DbResult<()> {
+/// Returns Ok(true) if checkpoint was performed, Ok(false) if skipped (no work needed)
+pub fn checkpoint_database_file(db_path: &Path) -> DbResult<bool> {
     if !db_path.exists() {
-        return Ok(()); // Nothing to checkpoint
+        return Ok(false); // Nothing to checkpoint
+    }
+    
+    // Check if WAL file exists before opening the database
+    // WAL file is named as: database.db-wal (appended, not replaced)
+    let mut wal_path = db_path.as_os_str().to_os_string();
+    wal_path.push("-wal");
+    let wal_path = Path::new(&wal_path);
+    
+    if !wal_path.exists() {
+        trace!("No WAL file found for {:?}, skipping checkpoint", db_path.file_name());
+        return Ok(false); // No WAL file, nothing to checkpoint
+    }
+    
+    // Check if WAL file has data (size > 0)
+    // Empty or very small WAL files don't need checkpointing
+    if let Ok(metadata) = std::fs::metadata(&wal_path) {
+        let size = metadata.len();
+        if size == 0 {
+            trace!("WAL file for {:?} is empty (0 bytes), skipping checkpoint", db_path.file_name());
+            return Ok(false); // Empty WAL, nothing to checkpoint
+        }
+        // WAL files smaller than typical header (32 bytes) are likely empty/invalid
+        if size < 32 {
+            trace!("WAL file for {:?} is too small ({} bytes), skipping checkpoint", db_path.file_name(), size);
+            return Ok(false); // Too small, nothing meaningful to checkpoint
+        }
     }
     
     let conn = Connection::open(db_path)?;
     checkpoint_database(&conn)?;
-    Ok(())
+    Ok(true) // Successfully checkpointed
 }
 
 /// Checkpoint all database files in the SkylineDB directory
-pub fn checkpoint_all_databases() -> DbResult<()> {
+/// Returns the number of databases actually checkpointed (where work was done)
+pub fn checkpoint_all_databases() -> DbResult<usize> {
     let base_path = crate::sheets::systems::io::get_default_data_base_path();
     
     if !base_path.exists() {
-        return Ok(());
+        return Ok(0);
     }
     
     let entries = std::fs::read_dir(&base_path)?;
@@ -66,9 +108,14 @@ pub fn checkpoint_all_databases() -> DbResult<()> {
         
         if path.is_file() && path.extension().map_or(false, |ext| ext == "db") {
             match checkpoint_database_file(&path) {
-                Ok(()) => {
-                    info!("Checkpointed database: {:?}", path.file_name());
+                Ok(true) => {
+                    // Checkpoint was actually performed
                     checkpointed_count += 1;
+                    info!("Checkpointed database: {:?}", path.file_name());
+                }
+                Ok(false) => {
+                    // Skipped - no WAL file or empty WAL file (normal when idle)
+                    trace!("Skipped checkpoint for {:?} (no pending WAL data)", path.file_name());
                 }
                 Err(e) => {
                     error!("Failed to checkpoint {:?}: {}", path, e);
@@ -81,7 +128,7 @@ pub fn checkpoint_all_databases() -> DbResult<()> {
         info!("Successfully checkpointed {} database(s)", checkpointed_count);
     }
     
-    Ok(())
+    Ok(checkpointed_count)
 }
 
 /// Bevy system to checkpoint all databases on app exit
@@ -93,7 +140,13 @@ pub fn checkpoint_on_exit(app_exit: EventReader<bevy::app::AppExit>) {
     info!("App exit detected, checkpointing all databases...");
     
     match checkpoint_all_databases() {
-        Ok(()) => info!("All databases checkpointed successfully before exit"),
+        Ok(count) => {
+            if count > 0 {
+                info!("Checkpointed {} database(s) successfully before exit", count);
+            } else {
+                info!("All databases already synchronized before exit (no pending WAL data)");
+            }
+        }
         Err(e) => error!("Failed to checkpoint databases on exit: {}", e),
     }
 }
@@ -118,10 +171,15 @@ pub fn periodic_checkpoint(
     mut timer: ResMut<CheckpointTimer>,
 ) {
     if timer.timer.tick(time.delta()).just_finished() {
-        trace!("Running periodic WAL checkpoint...");
+        trace!("Running periodic WAL checkpoint check...");
         
         match checkpoint_all_databases() {
-            Ok(()) => trace!("Periodic checkpoint completed"),
+            Ok(count) if count > 0 => {
+                info!("Periodic checkpoint: flushed {} database(s)", count);
+            }
+            Ok(_) => {
+                trace!("Periodic checkpoint: all databases already synchronized (no pending WAL data)");
+            }
             Err(e) => warn!("Periodic checkpoint failed: {}", e),
         }
     }

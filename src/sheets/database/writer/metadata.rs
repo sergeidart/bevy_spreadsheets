@@ -372,19 +372,32 @@ pub fn add_column_with_metadata(
     ai_enable_row_generation: Option<bool>,
     ai_include_in_send: Option<bool>,
 ) -> DbResult<()> {
-    // Convert runtime column index to persisted index
-    let persisted_index = match runtime_to_persisted_column_index(conn, table_name, column_index)? {
-        Some(idx) => idx,
-        None => {
-            // This is a technical column, skip the add
-            bevy::log::debug!(
-                "Skipping add for technical column {} in table '{}'",
-                column_index,
-                table_name
-            );
-            return Ok(());
-        }
-    };
+    // For NEW columns, we need to calculate the next available persisted index
+    // We can't use runtime_to_persisted_column_index because the column doesn't exist yet!
+    // Instead, we count existing non-deleted columns in the metadata table
+    let meta_table = metadata_table_name(table_name);
+    
+    // Determine how many technical columns this table has
+    let table_type = crate::sheets::database::schema::queries::get_table_type(conn, table_name)?;
+    let is_structure = matches!(table_type.as_deref(), Some("structure"));
+    let technical_column_count = if is_structure { 2 } else { 1 }; // structure: row_index + parent_key, regular: row_index
+    
+    // Calculate persisted index by counting existing data columns in metadata
+    let persisted_index: i32 = conn
+        .query_row(
+            &format!(
+                "SELECT COUNT(*) FROM \"{}\" WHERE deleted IS NULL OR deleted = 0",
+                meta_table
+            ),
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    
+    bevy::log::info!(
+        "SQL add_column_with_metadata: table='{}' runtime_idx={} -> calculated persisted_idx={} col_name='{}' (tech_cols={})",
+        table_name, column_index, persisted_index, column_name, technical_column_count
+    );
     // Check if column exists physically; if not, add it
     let mut exists_stmt = conn.prepare(&format!("PRAGMA table_info(\"{}\")", table_name))?;
     let mut col_exists = false;
