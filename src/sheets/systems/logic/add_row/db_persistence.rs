@@ -24,17 +24,8 @@ pub(super) fn persist_row_to_db(
         return Err(format!("Database file not found: {:?}", db_path));
     }
 
-    let conn = rusqlite::Connection::open(&db_path)
+    let conn = crate::sheets::database::connection::DbConnection::open_existing(&db_path)
         .map_err(|e| format!("Failed to open database: {}", e))?;
-
-    // Configure connection for better concurrency and consistency
-    conn.execute_batch(
-        "PRAGMA journal_mode=WAL;
-         PRAGMA synchronous=NORMAL;
-         PRAGMA foreign_keys=ON;
-         PRAGMA busy_timeout=5000;",
-    )
-    .map_err(|e| format!("Failed to configure database: {}", e))?;
 
     // Get the first row from grid_data
     let row0 = grid_data.get(0).ok_or("No data to insert")?;
@@ -177,17 +168,8 @@ pub(super) fn persist_rows_batch_to_db(
         return Err(format!("Database file not found: {:?}", db_path));
     }
 
-    let conn = rusqlite::Connection::open(&db_path)
+    let conn = crate::sheets::database::connection::DbConnection::open_existing(&db_path)
         .map_err(|e| format!("Failed to open database: {}", e))?;
-
-    // Configure connection
-    conn.execute_batch(
-        "PRAGMA journal_mode=WAL;
-         PRAGMA synchronous=NORMAL;
-         PRAGMA foreign_keys=ON;
-         PRAGMA busy_timeout=5000;",
-    )
-    .map_err(|e| format!("Failed to configure database: {}", e))?;
 
     // Detect if this is a structure sheet
     let is_structure_sheet = metadata.columns.len() >= 2
@@ -339,17 +321,8 @@ pub(super) fn update_table_ai_settings_db(
         return Err(format!("Database file not found: {:?}", db_path));
     }
 
-    let conn = rusqlite::Connection::open(&db_path)
+    let conn = crate::sheets::database::connection::DbConnection::open_existing(&db_path)
         .map_err(|e| format!("Failed to open database: {}", e))?;
-
-    // Configure connection for better concurrency
-    conn.execute_batch(
-        "PRAGMA journal_mode=WAL;
-         PRAGMA synchronous=NORMAL;
-         PRAGMA foreign_keys=ON;
-         PRAGMA busy_timeout=5000;",
-    )
-    .map_err(|e| format!("Failed to configure database: {}", e))?;
 
     let _ = crate::sheets::database::schema::ensure_global_metadata_table(&conn);
     
@@ -385,17 +358,8 @@ pub(super) fn update_column_ai_include_db(
         return Err(format!("Database file not found: {:?}", db_path));
     }
 
-    let conn = rusqlite::Connection::open(&db_path)
+    let conn = crate::sheets::database::connection::DbConnection::open_existing(&db_path)
         .map_err(|e| format!("Failed to open database: {}", e))?;
-
-    // Configure connection for better concurrency
-    conn.execute_batch(
-        "PRAGMA journal_mode=WAL;
-         PRAGMA synchronous=NORMAL;
-         PRAGMA foreign_keys=ON;
-         PRAGMA busy_timeout=5000;",
-    )
-    .map_err(|e| format!("Failed to configure database: {}", e))?;
 
     let _ = crate::sheets::database::schema::ensure_global_metadata_table(&conn);
     
@@ -428,17 +392,8 @@ pub(super) fn update_column_metadata_db(
         return Err(format!("Database file not found: {:?}", db_path));
     }
 
-    let conn = rusqlite::Connection::open(&db_path)
+    let conn = crate::sheets::database::connection::DbConnection::open_existing(&db_path)
         .map_err(|e| format!("Failed to open database: {}", e))?;
-
-    // Configure connection for better concurrency
-    conn.execute_batch(
-        "PRAGMA journal_mode=WAL;
-         PRAGMA synchronous=NORMAL;
-         PRAGMA foreign_keys=ON;
-         PRAGMA busy_timeout=5000;",
-    )
-    .map_err(|e| format!("Failed to configure database: {}", e))?;
 
     let _ = crate::sheets::database::schema::ensure_global_metadata_table(&conn);
     

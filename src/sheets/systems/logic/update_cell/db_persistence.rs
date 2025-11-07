@@ -284,7 +284,7 @@ pub fn persist_cell_to_database(
         return Ok(()); // No database, skip persistence
     }
     
-    let conn = Connection::open(&db_path)
+    let conn = crate::sheets::database::connection::DbConnection::open_existing(&db_path)
         .map_err(|e| format!("Failed to open database: {}", e))?;
     
     if looks_like_real_structure {

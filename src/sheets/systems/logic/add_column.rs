@@ -66,7 +66,7 @@ pub fn handle_add_column_request(
                     let base = crate::sheets::systems::io::get_default_data_base_path();
                     let db_path = base.join(format!("{}.db", cat));
                     if db_path.exists() {
-                        if let Ok(conn) = rusqlite::Connection::open(&db_path) {
+                        if let Ok(conn) = crate::sheets::database::connection::DbConnection::open_existing(&db_path) {
                             let last_index = metadata.columns.len().saturating_sub(1);
                             let new_def = metadata.columns.last().cloned().unwrap();
                             let _ =

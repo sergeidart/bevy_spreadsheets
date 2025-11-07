@@ -285,12 +285,9 @@ pub fn handle_delete_rows_request(
                 let base = crate::sheets::systems::io::get_default_data_base_path();
                 let db_path = base.join(format!("{}.db", db_name));
                 if db_path.exists() {
-                    match rusqlite::Connection::open(&db_path) {
+                    match crate::sheets::database::connection::DbConnection::open_existing(&db_path) {
                         Ok(conn) => {
-                            // Ensure foreign keys for cascade
-                            if let Err(e) = conn.execute("PRAGMA foreign_keys = ON;", []) {
-                                warn!("Failed to enable foreign keys: {}", e);
-                            }
+                            // Foreign keys already enabled by open_existing
                             
                             // Both structure and regular tables use row_index for deletion
                             let table_type = if is_structure { "structure" } else { "regular" };

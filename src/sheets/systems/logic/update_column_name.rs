@@ -142,7 +142,7 @@ pub fn handle_update_column_name(
             let cat = meta_snapshot.and_then(|m| m.category.clone()).unwrap();
             let base = crate::sheets::systems::io::get_default_data_base_path();
             let db_path = base.join(format!("{}.db", &cat));
-            let conn = match rusqlite::Connection::open(&db_path) {
+            let conn = match crate::sheets::database::connection::DbConnection::open_existing(&db_path) {
                 Ok(c) => c,
                 Err(e) => {
                     feedback_writer.write(SheetOperationFeedback {
@@ -299,7 +299,7 @@ pub fn handle_update_column_name(
                         let base = crate::sheets::systems::io::get_default_data_base_path();
                         let db_path = base.join(format!("{}.db", cat_name));
                         if db_path.exists() {
-                            match rusqlite::Connection::open(&db_path) {
+                            match crate::sheets::database::connection::DbConnection::open_existing(&db_path) {
                                 Ok(conn2) => match crate::sheets::database::reader::DbReader::read_sheet(&conn2, &child_new) {
                                     Ok(child_data) => {
                                         registry.add_or_replace_sheet(category.clone(), child_new.clone(), child_data);

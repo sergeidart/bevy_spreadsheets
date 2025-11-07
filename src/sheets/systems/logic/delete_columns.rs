@@ -197,7 +197,7 @@ pub fn handle_delete_columns_request(
                     let base = crate::sheets::systems::io::get_default_data_base_path();
                     let db_path = base.join(format!("{}.db", cat));
                     if db_path.exists() {
-                        if let Ok(conn) = rusqlite::Connection::open(&db_path) {
+                        if let Ok(conn) = crate::sheets::database::connection::DbConnection::open_existing(&db_path) {
                             // Drop the structure data table if exists
                             let drop_sql = format!("DROP TABLE IF EXISTS \"{}\"", struct_sheet_name);
                             if let Err(e) = conn.execute(&drop_sql, []) {
