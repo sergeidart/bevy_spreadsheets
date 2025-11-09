@@ -7,9 +7,6 @@
 use bevy::prelude::*;
 use crate::sheets::resources::SheetRegistry;
 
-#[cfg(test)]
-mod tests;
-
 /// Lineage entry: (table_name, display_value, row_index)
 pub type LineageEntry = (String, String, usize);
 

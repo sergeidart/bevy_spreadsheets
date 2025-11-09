@@ -43,6 +43,7 @@ pub fn cascade_key_change_if_needed(
     col_header: &str,
     old_value: &str,
     new_value: &str,
+    daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
 ) {
     if is_key_column(metadata, col_idx) && old_value != new_value {
         info!(
@@ -55,6 +56,7 @@ pub fn cascade_key_change_if_needed(
             col_header,
             old_value,
             new_value,
+            daemon_client,
         );
     }
 }

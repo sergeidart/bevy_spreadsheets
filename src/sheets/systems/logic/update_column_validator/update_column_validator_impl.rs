@@ -9,6 +9,7 @@ use crate::sheets::{
     },
     resources::SheetRegistry,
     systems::io::save::save_single_sheet,
+    database::daemon_resource::SharedDaemonClient,
 };
 use bevy::prelude::*;
 use std::collections::HashMap;
@@ -31,6 +32,7 @@ pub fn handle_update_column_validator(
     mut revalidation_writer: EventWriter<RequestSheetRevalidation>,
     mut data_modified_writer: EventWriter<SheetDataModifiedInRegistryEvent>,
     mut editor_state: Option<ResMut<crate::ui::elements::editor::state::EditorWindowState>>,
+    daemon_client: Res<SharedDaemonClient>,
 ) {
     // Track sheets whose metadata changed so we can save after loop with immutable borrow
     let mut sheets_to_save: HashMap<(Option<String>, String), SheetMetadata> = HashMap::new();
@@ -321,6 +323,7 @@ pub fn handle_update_column_validator(
                         &meta_mut.columns[col_index].validator,
                         meta_mut.columns[col_index].ai_include_in_send,
                         meta_mut.columns[col_index].ai_enable_row_generation,
+                        daemon_client.client(),
                     )
                     .map_err(|e| error!("Persist column validator failed: {}", e));
                 }
@@ -407,15 +410,16 @@ pub fn handle_update_column_validator(
                                 &parent_sheet_name,
                                 &parent_col_def,
                                 Some(&struct_columns),
+                                daemon_client.client(),
                             ) {
                                 error!("Failed to create structure table '{}': {}", struct_sheet_name, e);
                             } else {
                                 info!("Successfully created DB structure table: {}", struct_sheet_name);
                                 // Ensure per-table metadata exists for the structure sheet so later renames find it
                                 if let Err(e) = crate::sheets::database::schema::create_metadata_table(
-                                    &conn,
                                     &struct_sheet_name,
                                     &structure_metadata,
+                                    daemon_client.client(),
                                 ) {
                                     warn!(
                                         "Failed to create metadata table for structure '{}': {} (will continue)",
@@ -431,6 +435,7 @@ pub fn handle_update_column_validator(
                                     &conn,
                                     &parent_sheet_name,
                                     &parent_col_def.header,
+                                    daemon_client.client(),
                                 );
                                 
                                 // Copy content from parent table to structure table
@@ -440,6 +445,7 @@ pub fn handle_update_column_validator(
                                     &struct_sheet_name,
                                     &parent_col_def,
                                     &struct_columns,
+                                    daemon_client.client(),
                                 ) {
                                     error!("Failed to copy content to structure table '{}': {}", struct_sheet_name, e);
                                 } else {

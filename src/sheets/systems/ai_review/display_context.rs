@@ -5,8 +5,6 @@ use crate::ui::elements::editor::state::EditorWindowState;
 
 /// Contains all the display context needed for rendering the AI batch review UI
 pub struct ReviewDisplayContext {
-    pub in_structure_detail_mode: bool,
-    pub in_virtual_structure_review: bool,
     pub in_structure_mode: bool,
     pub active_sheet_name: String,
     pub merged_columns: Vec<ColumnEntry>,
@@ -29,8 +27,7 @@ pub fn prepare_display_context(
 
     // Detect which of the three AI review modes we're in
     let in_structure_detail_mode = state.ai_structure_detail_context.is_some();
-    let in_virtual_structure_review =
-        !in_structure_detail_mode && !state.virtual_structure_stack.is_empty();
+    let in_virtual_structure_review = false; // Virtual structure system deprecated
     let in_structure_mode = in_structure_detail_mode;
 
     // Resolve active sheet name
@@ -66,8 +63,6 @@ pub fn prepare_display_context(
     let show_pending_structures = !in_structure_mode && undecided_structures;
 
     Some(ReviewDisplayContext {
-        in_structure_detail_mode,
-        in_virtual_structure_review,
         in_structure_mode,
         active_sheet_name,
         merged_columns,

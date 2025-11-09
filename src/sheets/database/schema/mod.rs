@@ -3,6 +3,7 @@
 mod helpers;
 mod migrations;
 pub mod queries;
+pub mod writer;  // Schema write operations through daemon
 mod table_creation;
 
 // Re-export everything for backward compatibility

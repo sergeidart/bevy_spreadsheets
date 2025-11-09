@@ -69,15 +69,13 @@ pub fn should_auto_exit(state: &EditorWindowState, in_structure_mode: bool) -> b
         && !has_undecided_structures
 }
 
-/// Resolves the active sheet name from state, considering virtual structure stack
+/// Resolves the active sheet name from state
 pub fn resolve_active_sheet_name(
     state: &mut EditorWindowState,
     selected_sheet_name_clone: &Option<String>,
     in_structure_mode: bool,
 ) -> Option<String> {
-    if let Some(vctx) = state.virtual_structure_stack.last() {
-        Some(vctx.virtual_sheet_name.clone())
-    } else if let Some(s) = selected_sheet_name_clone {
+    if let Some(s) = selected_sheet_name_clone {
         Some(s.clone())
     } else {
         if in_structure_mode {
@@ -190,7 +188,7 @@ pub fn build_merged_columns(
 pub fn gather_ancestor_key_columns(
     state: &EditorWindowState,
     in_structure_mode: bool,
-    active_sheet_name: &str,
+    _active_sheet_name: &str,
     selected_category_clone: &Option<String>,
     registry: &SheetRegistry,
 ) -> Vec<(String, String)> {
@@ -206,43 +204,6 @@ pub fn gather_ancestor_key_columns(
                 &detail_ctx.saved_row_reviews,
                 &detail_ctx.saved_new_row_reviews,
             );
-        }
-    } else if let Some(last_ctx) = state.virtual_structure_stack.last() {
-        // Normal virtual structure stack logic
-        if last_ctx.virtual_sheet_name == active_sheet_name {
-            for vctx in &state.virtual_structure_stack {
-                if let Some(parent_sheet) =
-                    registry.get_sheet(&vctx.parent.parent_category, &vctx.parent.parent_sheet)
-                {
-                    if let (Some(parent_meta), Some(parent_row)) = (
-                        &parent_sheet.metadata,
-                        parent_sheet.grid.get(vctx.parent.parent_row),
-                    ) {
-                        if let Some(struct_col_def) =
-                            parent_meta.columns.get(vctx.parent.parent_col)
-                        {
-                            // Prefer parent-selected key; fallback to first non-technical data column
-                            let key_col_idx = struct_col_def.structure_key_parent_column_index
-                                .or_else(|| {
-                                    // Fall back to first data column (skip row_index at 0, and parent_key at 1 if structure table)
-                                    if parent_meta.is_structure_table() {
-                                        Some(2) // First data column in structure table
-                                    } else {
-                                        Some(1) // First data column in regular table (skip row_index at 0)
-                                    }
-                                });
-                            
-                            if let Some(key_idx) = key_col_idx {
-                                if let Some(key_col_def) = parent_meta.columns.get(key_idx) {
-                                    let value =
-                                        parent_row.get(key_idx).cloned().unwrap_or_default();
-                                    ancestor_key_columns.push((key_col_def.header.clone(), value));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
         }
     } else {
         // Fallback: if we have stored context prefixes for the current reviews, use them

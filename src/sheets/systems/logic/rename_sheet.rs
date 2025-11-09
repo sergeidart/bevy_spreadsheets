@@ -19,6 +19,7 @@ pub fn handle_rename_request(
     // Emit cache rename requests for children (forwarded later to RequestRenameSheet)
     mut cache_rename_writer: EventWriter<RequestRenameCacheEntry>,
     mut data_modified_writer: EventWriter<SheetDataModifiedInRegistryEvent>,
+    daemon_client: Res<crate::sheets::database::daemon_resource::SharedDaemonClient>,
 ) {
     for event in events.read() {
         let category = &event.category; // <<< Get category
@@ -102,6 +103,7 @@ pub fn handle_rename_request(
                                         &conn,
                                         old_name,
                                         new_name,
+                                        daemon_client.client(),
                                     ) {
                                         error!("DB cascade rename failed for '{:?}/{}': {}", category, new_name, e);
                                         feedback_writer.write(SheetOperationFeedback {
@@ -145,13 +147,26 @@ pub fn handle_rename_request(
                                                     };
 
                                                     // Update parent's metadata column name in DB by old name
-                                                    match crate::sheets::database::writer::DbWriter::update_metadata_column_name_by_name(&conn, &parent_table, &parent_col_old, &new_header) {
+                                                    match crate::sheets::database::writer::DbWriter::update_metadata_column_name_by_name(&conn, &parent_table, &parent_col_old, &new_header, daemon_client.client()) {
                                                         Ok(_) => {
-                                                            // Update child _Metadata parent_column to reflect new header
-                                                            let _ = conn.execute(
-                                                                "UPDATE _Metadata SET parent_column = ? WHERE table_name = ?",
-                                                                rusqlite::params![&new_header, new_name],
-                                                            );
+                                                            // Update child _Metadata parent_column to reflect new header using daemon
+                                                            let statements = vec![
+                                                                crate::sheets::database::daemon_client::Statement {
+                                                                    sql: "UPDATE _Metadata SET parent_column = ? WHERE table_name = ?".to_string(),
+                                                                    params: vec![serde_json::json!(new_header), serde_json::json!(new_name)],
+                                                                },
+                                                            ];
+                                                            
+                                                            match daemon_client.client().exec_batch(statements) {
+                                                                Ok(response) => {
+                                                                    if response.error.is_some() {
+                                                                        warn!("Daemon error updating _Metadata parent_column for '{}': {:?}", new_name, response.error);
+                                                                    }
+                                                                }
+                                                                Err(e) => {
+                                                                    warn!("Failed to update _Metadata parent_column via daemon for '{}': {:?}", new_name, e);
+                                                                }
+                                                            }
 
                                                             // Update in-memory parent column header/display and notify cache rebuild
                                                             if let Some(parent_data) = registry.get_sheet_mut(category, &parent_table) {

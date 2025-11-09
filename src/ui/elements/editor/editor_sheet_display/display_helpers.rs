@@ -5,67 +5,27 @@ use crate::sheets::resources::SheetRegistry;
 use crate::ui::elements::editor::state::EditorWindowState;
 use bevy::prelude::*;
 
-/// Validates and clears virtual structure stack if user switched to a different sheet
-pub fn validate_virtual_structure_stack(state: &mut EditorWindowState) {
-    if !state.virtual_structure_stack.is_empty() {
-        if let Some(current_sel) = &state.selected_sheet_name {
-            // Root parent sheet is the parent sheet of the first (oldest) virtual context
-            let root_parent_sheet = state
-                .virtual_structure_stack
-                .first()
-                .map(|v| v.parent.parent_sheet.clone());
-            let root_parent_category_opt = state
-                .virtual_structure_stack
-                .first()
-                .and_then(|v| v.parent.parent_category.clone());
-            // If user changed either sheet name or category away from the root parent, clear stack
-            let category_changed = root_parent_category_opt != state.selected_category;
-            if root_parent_sheet.as_ref() != Some(current_sel) || category_changed {
-                state.virtual_structure_stack.clear();
-            }
-        } else {
-            // No sheet selected anymore -> clear
-            state.virtual_structure_stack.clear();
-        }
-    }
+/// No-op function (virtual structure stack removed)
+pub fn validate_virtual_structure_stack(_state: &mut EditorWindowState) {
+    // Virtual structure stack no longer used - navigation via structure_navigation_stack only
 }
 
-/// Attempts to override selected sheet with virtual sheet if active
-/// Returns true if override was applied
+/// No longer applies virtual override (removed virtual structure system)
+/// Returns false as no override is ever applied
 pub fn try_apply_virtual_override(
-    state: &mut EditorWindowState,
-    registry: &SheetRegistry,
+    _state: &mut EditorWindowState,
+    _registry: &SheetRegistry,
 ) -> bool {
-    if let Some(vctx) = state.virtual_structure_stack.last() {
-        if let Some(vsheet) = registry.get_sheet(&state.selected_category, &vctx.virtual_sheet_name)
-        {
-            if vsheet.metadata.is_some() {
-                state.selected_sheet_name = Some(vctx.virtual_sheet_name.clone());
-                return true;
-            }
-        }
-    }
     false
 }
 
 /// Restores original sheet selection after virtual override
 pub fn restore_original_selection(
-    state: &mut EditorWindowState,
-    backup_sheet: Option<String>,
-    used_virtual_override: bool,
+    _state: &mut EditorWindowState,
+    _backup_sheet: Option<String>,
+    _used_virtual_override: bool,
 ) {
-    if used_virtual_override {
-        if let Some(vctx) = state.virtual_structure_stack.last() {
-            if let Some(orig_sheet) = &backup_sheet {
-                if *orig_sheet != vctx.virtual_sheet_name {
-                    state.selected_sheet_name = backup_sheet;
-                }
-            }
-        } else {
-            // No virtual sheet active anymore, restore previous selection
-            state.selected_sheet_name = backup_sheet;
-        }
-    }
+    // Virtual structures deprecated; no-op
 }
 
 /// Computes visible columns for the sheet, filtering out deleted and hidden columns
@@ -179,7 +139,6 @@ pub fn render_data_cell(
     c_idx: usize,
     validators: &[Option<crate::sheets::definitions::ColumnValidator>],
     cell_update_writer: &mut bevy::ecs::event::EventWriter<crate::sheets::events::UpdateCellEvent>,
-    open_structure_writer: &mut bevy::ecs::event::EventWriter<crate::sheets::events::OpenStructureViewEvent>,
     toggle_add_rows_writer: &mut bevy::ecs::event::EventWriter<crate::sheets::events::RequestToggleAiRowGeneration>,
     copy_writer: &mut bevy::ecs::event::EventWriter<crate::sheets::events::RequestCopyCell>,
     paste_writer: &mut bevy::ecs::event::EventWriter<crate::sheets::events::RequestPasteCell>,
@@ -206,7 +165,6 @@ pub fn render_data_cell(
         registry,
         render_cache,
         state,
-        open_structure_writer,
         toggle_add_rows_writer,
         copy_writer,
         paste_writer,

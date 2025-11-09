@@ -1,6 +1,7 @@
 // src/sheets/systems/io/startup/scan_handlers/schema_handlers.rs
 //! Handlers for schema inference from SQLite tables.
 
+use crate::sheets::database::schema::sql_type_to_column_data_type;
 use crate::sheets::definitions::{ColumnDataType, ColumnDefinition, ColumnValidator, SheetMetadata};
 use bevy::prelude::*;
 
@@ -36,14 +37,13 @@ pub fn infer_schema_and_load_table(
         .iter()
         .filter(|(name, _)| name != "row_index")
         .map(|(name, sqlite_type)| {
-            // Map SQLite types to our data types
-            let data_type = match sqlite_type.to_uppercase().as_str() {
-                t if t.contains("INT") => ColumnDataType::I64,
-                t if t.contains("REAL") || t.contains("FLOAT") || t.contains("DOUBLE") => {
-                    ColumnDataType::F64
-                }
-                t if t.contains("BOOL") => ColumnDataType::Bool,
-                _ => ColumnDataType::String,
+            // Map SQLite types to our data types using shared helper
+            // Note: This handles fuzzy matches (e.g., "INT" in "INTEGER") but falls back to String
+            let data_type = if sqlite_type.to_uppercase().contains("BOOL") {
+                ColumnDataType::Bool
+            } else {
+                // Use standard helper for exact type matching
+                sql_type_to_column_data_type(sqlite_type)
             };
 
             ColumnDefinition {

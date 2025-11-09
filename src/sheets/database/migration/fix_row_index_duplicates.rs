@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use rusqlite::Connection;
 
 use super::occasional_fixes::MigrationFix;
-use super::super::error::DbResult;
+use super::super::error::{DbError, DbResult};
 
 /// Fix for duplicate row_index values caused by per-parent indexing bug
 /// 
@@ -24,7 +24,9 @@ impl MigrationFix for FixRowIndexDuplicates {
         "Reassign row_index sequentially to fix duplicates from migration bug"
     }
 
-    fn apply(&self, conn: &mut Connection) -> DbResult<()> {
+    fn apply(&self, conn: &mut Connection, daemon_client: &super::super::daemon_client::DaemonClient) -> DbResult<()> {
+        use super::super::daemon_client::Statement;
+        
         info!("Starting row_index deduplication fix...");
         
         // Get all table names from global metadata
@@ -98,31 +100,36 @@ impl MigrationFix for FixRowIndexDuplicates {
 
             // Reassign row_index sequentially based on id order
             // Use a temporary column to avoid conflicts during update
-            conn.execute(
-                &format!("ALTER TABLE \"{}\" ADD COLUMN temp_new_row_index INTEGER", table_name),
-                [],
-            ).ok(); // Ignore error if column already exists
+            let alter_stmt = Statement {
+                sql: format!("ALTER TABLE \"{}\" ADD COLUMN temp_new_row_index INTEGER", table_name),
+                params: vec![],
+            };
+            let _ = daemon_client.exec_batch(vec![alter_stmt]); // Ignore error if column already exists
 
             // Calculate new row_index values using ROW_NUMBER() window function
-            conn.execute(
-                &format!(
+            let update_temp_stmt = Statement {
+                sql: format!(
                     "UPDATE \"{}\" SET temp_new_row_index = (
                         SELECT COUNT(*) - 1 FROM \"{}\" AS t2 
                         WHERE t2.id <= \"{}\".id
                     )",
                     table_name, table_name, table_name
                 ),
-                [],
-            )?;
+                params: vec![],
+            };
+            daemon_client.exec_batch(vec![update_temp_stmt])
+                .map_err(|e| DbError::MigrationFailed(format!("Failed to calculate new row_index: {}", e)))?;
 
             // Copy temp values to actual row_index
-            conn.execute(
-                &format!(
+            let copy_stmt = Statement {
+                sql: format!(
                     "UPDATE \"{}\" SET row_index = temp_new_row_index",
                     table_name
                 ),
-                [],
-            )?;
+                params: vec![],
+            };
+            daemon_client.exec_batch(vec![copy_stmt])
+                .map_err(|e| DbError::MigrationFailed(format!("Failed to copy row_index: {}", e)))?;
 
             // Drop temporary column
             // Note: SQLite doesn't support DROP COLUMN directly, so we leave it

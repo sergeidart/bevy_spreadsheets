@@ -21,6 +21,7 @@ pub fn handle_add_row_request(
     mut feedback_writer: EventWriter<SheetOperationFeedback>,
     mut data_modified_writer: EventWriter<SheetDataModifiedInRegistryEvent>,
     mut editor_state: Option<ResMut<EditorWindowState>>,
+    daemon_client: Res<crate::sheets::database::daemon_resource::SharedDaemonClient>,
 ) {
     for event in events.read() {
         // Resolve virtual context if active
@@ -119,7 +120,7 @@ pub fn handle_add_row_request(
                     if meta.category.is_some() {
                         // DB-backed: prepend row in database too
                         let persist_start = std::time::Instant::now();
-                        match persist_row_to_db(meta, &sheet_name, &category, &sheet_data.grid) {
+                        match persist_row_to_db(meta, &sheet_name, &category, &sheet_data.grid, daemon_client.client()) {
                             Ok(_) => {
                                 let duration = persist_start.elapsed();
                                 if duration.as_millis() > 100 {

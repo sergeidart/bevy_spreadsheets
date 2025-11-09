@@ -5,71 +5,156 @@ use super::super::error::DbResult;
 use super::super::schema::{sql_type_for_column, runtime_to_persisted_column_index};
 use super::helpers::metadata_table_name;
 use crate::sheets::definitions::{ColumnDataType, ColumnValidator};
-use rusqlite::{params, Connection};
+use crate::sheets::database::daemon_client::{DaemonClient, Statement};
+use rusqlite::Connection;
+
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
+/// Execute a daemon statement with error handling
+fn exec_daemon_stmt(sql: String, params: Vec<serde_json::Value>, daemon_client: &DaemonClient) -> DbResult<()> {
+    let stmt = Statement { sql, params };
+    daemon_client.exec_batch(vec![stmt])
+        .map(|_| ())
+        .map_err(|e| {
+            super::super::error::DbError::Other(e)
+        })
+}
+
+/// Get persisted index or return Ok(()) if technical column (with early return)
+fn get_persisted_index_or_skip(
+    conn: &Connection,
+    table_name: &str,
+    runtime_idx: usize,
+    daemon_client: &DaemonClient,
+) -> DbResult<Option<i32>> {
+    match runtime_to_persisted_column_index(conn, table_name, runtime_idx, daemon_client)? {
+        Some(idx) => Ok(Some(idx)),
+        None => {
+            bevy::log::debug!("Skipping technical column {} in '{}'", runtime_idx, table_name);
+            Ok(None)
+        }
+    }
+}
+
+/// Convert validator to metadata tuple (type, config)
+fn validator_to_metadata(
+    validator: &Option<ColumnValidator>,
+    table_name: &str,
+    column_name: &str,
+) -> (Option<String>, Option<String>) {
+    match validator {
+        Some(ColumnValidator::Basic(_)) => (Some("Basic".to_string()), None),
+        Some(ColumnValidator::Linked { target_sheet_name, target_column_index }) => {
+            let cfg = serde_json::json!({
+                "target_table": target_sheet_name,
+                "target_column_index": target_column_index
+            }).to_string();
+            (Some("Linked".to_string()), Some(cfg))
+        }
+        Some(ColumnValidator::Structure) => {
+            let cfg = serde_json::json!({
+                "structure_table": format!("{}_{}", table_name, column_name)
+            }).to_string();
+            (Some("Structure".to_string()), Some(cfg))
+        }
+        None => (None, None),
+    }
+}
+
+/// Convert string option to JSON value, treating empty strings as NULL
+fn string_to_json(s: Option<&str>) -> serde_json::Value {
+    match s {
+        Some(v) if !v.trim().is_empty() => serde_json::Value::String(v.to_string()),
+        _ => serde_json::Value::Null,
+    }
+}
+
+/// Convert bool to JSON number (0 or 1)
+#[inline]
+fn bool_to_json(b: bool) -> serde_json::Value {
+    serde_json::Value::Number((b as i32).into())
+}
+
+/// Convert optional string to JSON value
+fn opt_string_to_json(s: Option<String>) -> serde_json::Value {
+    match s {
+        Some(v) => serde_json::Value::String(v),
+        None => serde_json::Value::Null,
+    }
+}
+
+// ============================================================================
+// Public API Functions
+// ============================================================================
+
+// ============================================================================
+// Public API Functions
+// ============================================================================
 
 /// Update a table's hidden flag in the global _Metadata table
-pub fn update_table_hidden(conn: &Connection, table_name: &str, hidden: bool) -> DbResult<()> {
-    conn.execute(
-        "INSERT INTO _Metadata (table_name, hidden) VALUES (?, ?) \
-         ON CONFLICT(table_name) DO UPDATE SET hidden = excluded.hidden, updated_at = CURRENT_TIMESTAMP",
-        params![table_name, hidden as i32],
-    )?;
-    Ok(())
+pub fn update_table_hidden(
+    _conn: &Connection,
+    table_name: &str,
+    hidden: bool,
+    daemon_client: &DaemonClient,
+) -> DbResult<()> {
+    let sql = "INSERT INTO _Metadata (table_name, hidden) VALUES (?, ?) \
+              ON CONFLICT(table_name) DO UPDATE SET hidden = excluded.hidden, updated_at = CURRENT_TIMESTAMP".to_string();
+    let params = vec![
+        serde_json::Value::String(table_name.to_string()),
+        bool_to_json(hidden),
+    ];
+    exec_daemon_stmt(sql, params, daemon_client)
 }
 
 /// Update table-level flags in _Metadata
 pub fn update_table_ai_settings(
-    conn: &Connection,
+    _conn: &Connection,
     table_name: &str,
     allow_add_rows: Option<bool>,
     table_context: Option<&str>,
     model_id: Option<&str>,
     active_group: Option<&str>,
     grounding_with_google_search: Option<bool>,
+    daemon_client: &DaemonClient,
 ) -> DbResult<()> {
-    // Build dynamic SQL to only update provided fields
     let mut sets: Vec<&str> = Vec::new();
-    if allow_add_rows.is_some() {
+    let mut params: Vec<serde_json::Value> = Vec::new();
+    
+    if let Some(v) = allow_add_rows {
         sets.push("ai_allow_add_rows = ?");
+        params.push(bool_to_json(v));
     }
-    if table_context.is_some() {
+    if let Some(v) = table_context {
         sets.push("ai_table_context = ?");
+        params.push(serde_json::Value::String(v.to_string()));
     }
-    if model_id.is_some() {
+    if let Some(v) = model_id {
         sets.push("ai_model_id = ?");
+        params.push(serde_json::Value::String(v.to_string()));
     }
-    if active_group.is_some() {
+    if let Some(v) = active_group {
         sets.push("ai_active_group = ?");
+        params.push(serde_json::Value::String(v.to_string()));
     }
-    if grounding_with_google_search.is_some() {
+    if let Some(v) = grounding_with_google_search {
         sets.push("ai_grounding_with_google_search = ?");
+        params.push(bool_to_json(v));
     }
+    
     if sets.is_empty() {
         return Ok(());
     }
+    
     let sql = format!(
-        "UPDATE _Metadata SET {} , updated_at = CURRENT_TIMESTAMP WHERE table_name = ?",
+        "UPDATE _Metadata SET {}, updated_at = CURRENT_TIMESTAMP WHERE table_name = ?",
         sets.join(", ")
     );
-    let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-    if let Some(v) = allow_add_rows {
-        params_vec.push(Box::new(v as i32));
-    }
-    if let Some(v) = table_context {
-        params_vec.push(Box::new(v.to_string()));
-    }
-    if let Some(v) = model_id {
-        params_vec.push(Box::new(v.to_string()));
-    }
-    if let Some(v) = active_group {
-        params_vec.push(Box::new(v.to_string()));
-    }
-    if let Some(v) = grounding_with_google_search {
-        params_vec.push(Box::new(v as i32));
-    }
-    params_vec.push(Box::new(table_name.to_string()));
-    conn.execute(&sql, rusqlite::params_from_iter(params_vec.iter()))?;
-    Ok(())
+    params.push(serde_json::Value::String(table_name.to_string()));
+    
+    exec_daemon_stmt(sql, params, daemon_client)
 }
 
 /// Update a column's filter, ai_context, and include flag in the table's metadata table
@@ -81,90 +166,52 @@ pub fn update_column_metadata(
     filter_expr: Option<&str>,
     ai_context: Option<&str>,
     ai_include_in_send: Option<bool>,
+    daemon_client: &DaemonClient,
 ) -> DbResult<()> {
-    // Convert runtime column index to persisted index
-    let persisted_index = match runtime_to_persisted_column_index(conn, table_name, column_index)? {
+    let persisted_index = match get_persisted_index_or_skip(conn, table_name, column_index, daemon_client)? {
         Some(idx) => idx,
-        None => {
-            // This is a technical column, skip the update
-            bevy::log::debug!(
-                "Skipping metadata update for technical column {} in table '{}'",
-                column_index,
-                table_name
-            );
-            return Ok(());
-        }
+        None => return Ok(()),
     };
     
-    // Defensive: ensure per-table metadata table structure and rows exist
-    // We don't know the full metadata here; construct a minimal synthetic one from DB if needed.
-    // Call global _Metadata ensure first (no-op if exists)
-    let _ = crate::sheets::database::schema::ensure_global_metadata_table(conn);
-    // Try to read current metadata; if that fails, synthesize minimal using existing table columns
-    let inferred_meta =
-        match crate::sheets::database::reader::DbReader::read_metadata(conn, table_name) {
-            Ok(m) => m,
-            Err(_) => {
-                // If we cannot read, build a placeholder with a single String column for safety
-                crate::sheets::definitions::SheetMetadata::create_generic(
-                    table_name.to_string(),
-                    format!("{}.json", table_name),
-                    (column_index + 1).max(1),
-                    None,
-                )
-            }
-        };
-    let _ = crate::sheets::database::schema::ensure_table_metadata_schema(
-        conn,
-        table_name,
-        &inferred_meta,
-    );
-    let meta_table = metadata_table_name(table_name);
+    // Defensive: ensure metadata tables exist
+    let _ = crate::sheets::database::schema::ensure_global_metadata_table(conn, daemon_client);
+    let inferred_meta = match crate::sheets::database::reader::DbReader::read_metadata(conn, table_name, daemon_client) {
+        Ok(m) => m,
+        Err(_) => crate::sheets::definitions::SheetMetadata::create_generic(
+            table_name.to_string(),
+            format!("{}.json", table_name),
+            (column_index + 1).max(1),
+            None,
+        ),
+    };
+    let _ = crate::sheets::database::schema::ensure_table_metadata_schema(conn, table_name, &inferred_meta, daemon_client);
+    
     let mut sets: Vec<&str> = Vec::new();
+    let mut params: Vec<serde_json::Value> = Vec::new();
+    
     if filter_expr.is_some() {
         sets.push("filter_expr = ?");
+        params.push(string_to_json(filter_expr));
     }
     if ai_context.is_some() {
         sets.push("ai_context = ?");
+        params.push(string_to_json(ai_context));
     }
-    if ai_include_in_send.is_some() {
+    if let Some(v) = ai_include_in_send {
         sets.push("ai_include_in_send = ?");
+        params.push(bool_to_json(v));
     }
+    
     if sets.is_empty() {
         return Ok(());
     }
-    let sql = format!(
-        "UPDATE \"{}\" SET {} WHERE column_index = ?",
-        meta_table,
-        sets.join(", ")
-    );
-    let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-    // For textual fields, treat an explicitly provided empty string as a request to clear (set to NULL)
-    if let Some(v) = filter_expr {
-        if v.trim().is_empty() {
-            params_vec.push(Box::new(rusqlite::types::Null));
-        } else {
-            params_vec.push(Box::new(v.to_string()));
-        }
-    }
-    if let Some(v) = ai_context {
-        if v.trim().is_empty() {
-            params_vec.push(Box::new(rusqlite::types::Null));
-        } else {
-            params_vec.push(Box::new(v.to_string()));
-        }
-    }
-    if let Some(v) = ai_include_in_send {
-        params_vec.push(Box::new(v as i32));
-    }
-    params_vec.push(Box::new(persisted_index));
-    // Log SQL and high-level params for debugging visibility
-    bevy::log::info!(
-        "SQL update_column_metadata: {} ; params_count={} ; runtime_idx={} -> column_index={}",
-        sql, params_vec.len(), column_index, persisted_index
-    );
-    conn.execute(&sql, rusqlite::params_from_iter(params_vec.iter()))?;
-    Ok(())
+    
+    let meta_table = metadata_table_name(table_name);
+    let sql = format!("UPDATE \"{}\" SET {} WHERE column_index = ?", meta_table, sets.join(", "));
+    params.push(serde_json::Value::Number(persisted_index.into()));
+    
+    bevy::log::info!("update_column_metadata: runtime={} -> persisted={}", column_index, persisted_index);
+    exec_daemon_stmt(sql, params, daemon_client)
 }
 
 /// Explicitly set the AI include flag for a column in the metadata table (true = 1, false = 0)
@@ -174,34 +221,20 @@ pub fn update_column_ai_include(
     table_name: &str,
     column_index: usize,
     include: bool,
+    daemon_client: &DaemonClient,
 ) -> DbResult<()> {
-    // Convert runtime column index to persisted index
-    let persisted_index = match runtime_to_persisted_column_index(conn, table_name, column_index)? {
+    let persisted_index = match get_persisted_index_or_skip(conn, table_name, column_index, daemon_client)? {
         Some(idx) => idx,
-        None => {
-            // This is a technical column, skip the update
-            bevy::log::debug!(
-                "Skipping AI include update for technical column {} in table '{}'",
-                column_index,
-                table_name
-            );
-            return Ok(());
-        }
+        None => return Ok(()),
     };
     
     let meta_table = metadata_table_name(table_name);
-    bevy::log::info!(
-        "SQL update_column_ai_include: table='{}' runtime_idx={} -> column_index={} include={}",
-        table_name, column_index, persisted_index, include
-    );
-    conn.execute(
-        &format!(
-            "UPDATE \"{}\" SET ai_include_in_send = ? WHERE column_index = ?",
-            meta_table
-        ),
-        params![include as i32, persisted_index],
-    )?;
-    Ok(())
+    bevy::log::info!("update_column_ai_include: runtime={} -> persisted={} include={}", column_index, persisted_index, include);
+    
+    let sql = format!("UPDATE \"{}\" SET ai_include_in_send = ? WHERE column_index = ?", meta_table);
+    let params = vec![bool_to_json(include), serde_json::Value::Number(persisted_index.into())];
+    
+    exec_daemon_stmt(sql, params, daemon_client)
 }
 
 /// Update a column's validator (data_type, validator_type, validator_config) and optional AI flags in metadata
@@ -214,116 +247,51 @@ pub fn update_column_validator(
     validator: &Option<ColumnValidator>,
     ai_include_in_send: Option<bool>,
     ai_enable_row_generation: Option<bool>,
+    daemon_client: &DaemonClient,
 ) -> DbResult<()> {
-    // Convert runtime column index to persisted index
-    let persisted_index = match runtime_to_persisted_column_index(conn, table_name, column_index)? {
+    let persisted_index = match get_persisted_index_or_skip(conn, table_name, column_index, daemon_client)? {
         Some(idx) => idx,
-        None => {
-            // This is a technical column, skip the update
-            bevy::log::debug!(
-                "Skipping validator update for technical column {} in table '{}'",
-                column_index,
-                table_name
-            );
-            return Ok(());
-        }
+        None => return Ok(()),
     };
     
-    // Defensive: ensure per-table metadata table structure and rows exist
-    let _ = crate::sheets::database::schema::ensure_global_metadata_table(conn);
-    let inferred_meta =
-        match crate::sheets::database::reader::DbReader::read_metadata(conn, table_name) {
-            Ok(m) => m,
-            Err(_) => crate::sheets::definitions::SheetMetadata::create_generic(
-                table_name.to_string(),
-                format!("{}.json", table_name),
-                (column_index + 1).max(1),
-                None,
-            ),
-        };
-    let _ = crate::sheets::database::schema::ensure_table_metadata_schema(
-        conn,
-        table_name,
-        &inferred_meta,
-    );
-    let meta_table = metadata_table_name(table_name);
-    let (validator_type, validator_config): (Option<String>, Option<String>) = match validator {
-        Some(ColumnValidator::Basic(_)) => (Some("Basic".to_string()), None),
-        Some(ColumnValidator::Linked {
-            target_sheet_name,
-            target_column_index,
-        }) => {
-            let cfg = serde_json::json!({
-                "target_table": target_sheet_name,
-                "target_column_index": target_column_index
-            })
-            .to_string();
-            (Some("Linked".to_string()), Some(cfg))
-        }
-        Some(ColumnValidator::Structure) => {
-            // Persist structure reference for completeness
-            let cfg = serde_json::json!({
-                "structure_table": format!("{}_{}", table_name, "")
-            })
-            .to_string();
-            (Some("Structure".to_string()), Some(cfg))
-        }
-        None => (None, None),
+    // Defensive: ensure metadata tables exist
+    let _ = crate::sheets::database::schema::ensure_global_metadata_table(conn, daemon_client);
+    let inferred_meta = match crate::sheets::database::reader::DbReader::read_metadata(conn, table_name, daemon_client) {
+        Ok(m) => m,
+        Err(_) => crate::sheets::definitions::SheetMetadata::create_generic(
+            table_name.to_string(),
+            format!("{}.json", table_name),
+            (column_index + 1).max(1),
+            None,
+        ),
     };
-
-    // Build dynamic SQL to include optional AI flags only when provided
-    // Note: Metadata tables don't have an updated_at column; only main data tables do.
-    // Keep the payload updates minimal and valid for the metadata schema.
-    let mut sets = vec![
-        "data_type = ?",
-        "validator_type = ?",
-        "validator_config = ?",
+    let _ = crate::sheets::database::schema::ensure_table_metadata_schema(conn, table_name, &inferred_meta, daemon_client);
+    
+    let meta_table = metadata_table_name(table_name);
+    let (validator_type, validator_config) = validator_to_metadata(validator, table_name, "");
+    
+    let mut sets = vec!["data_type = ?", "validator_type = ?", "validator_config = ?"];
+    let mut params = vec![
+        serde_json::Value::String(format!("{:?}", data_type)),
+        opt_string_to_json(validator_type),
+        opt_string_to_json(validator_config),
     ];
-    if ai_include_in_send.is_some() {
+    
+    if let Some(v) = ai_include_in_send {
         sets.push("ai_include_in_send = ?");
+        params.push(bool_to_json(v));
     }
-    if ai_enable_row_generation.is_some() {
+    if let Some(v) = ai_enable_row_generation {
         sets.push("ai_enable_row_generation = ?");
+        params.push(bool_to_json(v));
     }
-    let sql = format!(
-        "UPDATE \"{}\" SET {} WHERE column_index = ?",
-        meta_table,
-        sets.join(", ")
-    );
-
-    let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-    params_vec.push(Box::new(format!("{:?}", data_type)));
-    params_vec.push(Box::new(validator_type.clone()));
-    params_vec.push(Box::new(validator_config.clone()));
-    if let Some(v) = ai_include_in_send {
-        params_vec.push(Box::new(v as i32));
-    }
-    if let Some(v) = ai_enable_row_generation {
-        params_vec.push(Box::new(v as i32));
-    }
-    params_vec.push(Box::new(persisted_index as i32));
-
-    // Log SQL and parameter summary before executing (show param values derived from known locals)
-    let mut param_preview: Vec<String> = Vec::new();
-    param_preview.push(format!("data_type={:?}", data_type));
-    param_preview.push(format!("validator_type={:?}", validator_type.clone()));
-    param_preview.push(format!("validator_config={:?}", validator_config.clone()));
-    if let Some(v) = ai_include_in_send {
-        param_preview.push(format!("ai_include_in_send={}", v));
-    }
-    if let Some(v) = ai_enable_row_generation {
-        param_preview.push(format!("ai_enable_row_generation={}", v));
-    }
-    param_preview.push(format!("runtime_idx={} -> persisted_idx={}", column_index, persisted_index));
-    bevy::log::info!(
-        "SQL update_column_validator: {} ; params_count={} ; params={:?}",
-        sql,
-        params_vec.len(),
-        param_preview
-    );
-
-    conn.execute(&sql, rusqlite::params_from_iter(params_vec.iter()))?;
-    Ok(())
+    
+    params.push(serde_json::Value::Number((persisted_index as i32).into()));
+    
+    let sql = format!("UPDATE \"{}\" SET {} WHERE column_index = ?", meta_table, sets.join(", "));
+    bevy::log::info!("update_column_validator: runtime={} -> persisted={}", column_index, persisted_index);
+    
+    exec_daemon_stmt(sql, params, daemon_client)
 }
 
 /// Update a column's display name (UI-only) in the table's metadata table
@@ -333,29 +301,23 @@ pub fn update_column_display_name(
     table_name: &str,
     column_index: usize,
     display_name: &str,
+    daemon_client: &DaemonClient,
 ) -> DbResult<()> {
-    // Convert runtime column index to persisted index
-    let persisted_index = match runtime_to_persisted_column_index(conn, table_name, column_index)? {
+    let persisted_index = match get_persisted_index_or_skip(conn, table_name, column_index, daemon_client)? {
         Some(idx) => idx,
-        None => {
-            // Technical column, ignore
-            return Ok(());
-        }
+        None => return Ok(()),
     };
 
     let meta_table = metadata_table_name(table_name);
-    bevy::log::info!(
-        "SQL update_column_display_name: table='{}' runtime_idx={} -> persisted_idx={} display_name='{}'",
-        table_name, column_index, persisted_index, display_name
-    );
-    conn.execute(
-        &format!(
-            "UPDATE \"{}\" SET display_name = ? WHERE column_index = ?",
-            meta_table
-        ),
-        params![display_name, persisted_index as i32],
-    )?;
-    Ok(())
+    bevy::log::info!("update_column_display_name: runtime={} -> persisted={}", column_index, persisted_index);
+    
+    let sql = format!("UPDATE \"{}\" SET display_name = ? WHERE column_index = ?", meta_table);
+    let params = vec![
+        serde_json::Value::String(display_name.to_string()),
+        serde_json::Value::Number((persisted_index as i32).into()),
+    ];
+    
+    exec_daemon_stmt(sql, params, daemon_client)
 }
 
 /// Add a new column to a table (main or structure) and insert its metadata row with given index.
@@ -364,40 +326,28 @@ pub fn add_column_with_metadata(
     conn: &Connection,
     table_name: &str,
     column_name: &str,
-    data_type: crate::sheets::definitions::ColumnDataType,
-    validator: Option<crate::sheets::definitions::ColumnValidator>,
+    data_type: ColumnDataType,
+    validator: Option<ColumnValidator>,
     column_index: usize,
     ai_context: Option<&str>,
     filter_expr: Option<&str>,
     ai_enable_row_generation: Option<bool>,
     ai_include_in_send: Option<bool>,
+    daemon_client: &DaemonClient,
 ) -> DbResult<()> {
-    // For NEW columns, we need to calculate the next available persisted index
-    // We can't use runtime_to_persisted_column_index because the column doesn't exist yet!
-    // Instead, we count existing non-deleted columns in the metadata table
     let meta_table = metadata_table_name(table_name);
     
-    // Determine how many technical columns this table has
-    let table_type = crate::sheets::database::schema::queries::get_table_type(conn, table_name)?;
-    let is_structure = matches!(table_type.as_deref(), Some("structure"));
-    let technical_column_count = if is_structure { 2 } else { 1 }; // structure: row_index + parent_key, regular: row_index
-    
     // Calculate persisted index by counting existing data columns in metadata
-    let persisted_index: i32 = conn
+    let persisted_index: usize = conn
         .query_row(
-            &format!(
-                "SELECT COUNT(*) FROM \"{}\" WHERE deleted IS NULL OR deleted = 0",
-                meta_table
-            ),
+            &format!("SELECT COUNT(*) FROM \"{}\" WHERE deleted IS NULL OR deleted = 0", meta_table),
             [],
-            |row| row.get(0),
+            |row| row.get::<_, i32>(0).map(|v| v as usize),
         )
         .unwrap_or(0);
     
-    bevy::log::info!(
-        "SQL add_column_with_metadata: table='{}' runtime_idx={} -> calculated persisted_idx={} col_name='{}' (tech_cols={})",
-        table_name, column_index, persisted_index, column_name, technical_column_count
-    );
+    bevy::log::info!("add_column_with_metadata: runtime={} -> persisted={} col='{}'", column_index, persisted_index, column_name);
+    
     // Check if column exists physically; if not, add it
     let mut exists_stmt = conn.prepare(&format!("PRAGMA table_info(\"{}\")", table_name))?;
     let mut col_exists = false;
@@ -407,80 +357,50 @@ pub fn add_column_with_metadata(
             break;
         }
     }
+    
     if !col_exists {
         let sql_type = sql_type_for_column(data_type);
-        conn.execute(
-            &format!(
-                "ALTER TABLE \"{}\" ADD COLUMN \"{}\" {}",
-                table_name, column_name, sql_type
-            ),
-            [],
-        )?;
-        bevy::log::info!("SQL add_column: ALTER TABLE '{}' ADD COLUMN '{}' {}", table_name, column_name, sql_type);
-    } else {
-        bevy::log::info!("SQL add_column: column '{}' already exists on '{}', skipping ALTER TABLE", column_name, table_name);
+        let sql = format!("ALTER TABLE \"{}\" ADD COLUMN \"{}\" {}", table_name, column_name, sql_type);
+        exec_daemon_stmt(sql, vec![], daemon_client)?;
     }
 
-    // Compute validator metadata for both reuse and insert
-    let (validator_type, validator_config): (Option<String>, Option<String>) = match &validator {
-        Some(ColumnValidator::Basic(_)) => (Some("Basic".to_string()), None),
-        Some(ColumnValidator::Linked { target_sheet_name, target_column_index }) => {
-            let cfg = serde_json::json!({
-                "target_table": target_sheet_name,
-                "target_column_index": target_column_index
-            }).to_string();
-            (Some("Linked".to_string()), Some(cfg))
-        }
-        Some(ColumnValidator::Structure) => (Some("Structure".to_string()), Some(serde_json::json!({"structure_table": format!("{}_{}", table_name, column_name)}).to_string())),
-        None => (None, None),
-    };
+    let (validator_type, validator_config) = validator_to_metadata(&validator, table_name, column_name);
+    
     // Try to reuse a deleted metadata slot before inserting
-    let meta_table = metadata_table_name(table_name);
     let reuse_sql = format!(
-        "UPDATE \"{}\" SET column_name = ?, data_type = ?, validator_type = ?, validator_config = ?, ai_context = ?, filter_expr = ?, ai_enable_row_generation = ?, ai_include_in_send = ?, deleted = 0 WHERE column_index = ? AND deleted = 1",
+        "UPDATE \"{}\" SET column_name = ?, data_type = ?, validator_type = ?, validator_config = ?, \
+         ai_context = ?, filter_expr = ?, ai_enable_row_generation = ?, ai_include_in_send = ?, deleted = 0 \
+         WHERE column_index = ? AND deleted = 1",
         meta_table
     );
-    bevy::log::info!(
-        "SQL add_column_with_metadata: table='{}' runtime_idx={} -> persisted_idx={} col_name='{}'",
-        table_name, column_index, persisted_index, column_name
-    );
-    let reused = conn.execute(&reuse_sql, params![
-        column_name,
-        format!("{:?}", data_type),
-        validator_type.clone(),
-        validator_config.clone(),
-        ai_context,
-        filter_expr,
-        ai_enable_row_generation.unwrap_or(false) as i32,
-        ai_include_in_send.unwrap_or(true) as i32,
-        persisted_index as i32,
-    ])?;
-    if reused > 0 {
-        bevy::log::info!(
-            "Reused deleted metadata slot for persisted_index={} (runtime={}) in '{}'.",
-            persisted_index,
-            column_index,
-            meta_table
-        );
+    
+    let params = vec![
+        serde_json::Value::String(column_name.to_string()),
+        serde_json::Value::String(format!("{:?}", data_type)),
+        opt_string_to_json(validator_type.clone()),
+        opt_string_to_json(validator_config.clone()),
+        string_to_json(ai_context),
+        string_to_json(filter_expr),
+        bool_to_json(ai_enable_row_generation.unwrap_or(false)),
+        bool_to_json(ai_include_in_send.unwrap_or(true)),
+        serde_json::Value::Number((persisted_index as i32).into()),
+    ];
+    
+    let stmt = Statement { sql: reuse_sql, params: params.clone() };
+    let response = daemon_client.exec_batch(vec![stmt])
+        .map_err(|e| super::super::error::DbError::Other(e))?;
+    
+    if response.rows_affected.unwrap_or(0) > 0 {
+        bevy::log::info!("Reused deleted metadata slot persisted={}", persisted_index);
         return Ok(());
     }
-    conn.execute(
-        &format!(
-            "INSERT OR REPLACE INTO \"{}\" (column_index, column_name, data_type, validator_type, validator_config, ai_context, filter_expr, ai_enable_row_generation, ai_include_in_send) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            meta_table
-        ),
-        params![
-            persisted_index as i32,
-            column_name,
-            format!("{:?}", data_type),
-            validator_type,
-            validator_config,
-            ai_context,
-            filter_expr,
-            ai_enable_row_generation.unwrap_or(false) as i32,
-            ai_include_in_send.unwrap_or(true) as i32
-        ],
-    )?;
-    bevy::log::info!("SQL add_column metadata: INSERT OR REPLACE INTO '{}' (column_index={}, column_name='{}')", meta_table, persisted_index, column_name);
-    Ok(())
+    
+    // Insert new metadata row
+    let insert_sql = format!(
+        "INSERT OR REPLACE INTO \"{}\" (column_index, column_name, data_type, validator_type, validator_config, \
+         ai_context, filter_expr, ai_enable_row_generation, ai_include_in_send) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        meta_table
+    );
+    
+    exec_daemon_stmt(insert_sql, params, daemon_client)
 }

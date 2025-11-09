@@ -5,7 +5,6 @@ use crate::sheets::{
     resources::SheetRegistry,
     systems::io::save::save_single_sheet,
 };
-use crate::ui::elements::editor::state::EditorWindowState;
 use bevy::prelude::*;
 // ADDED: Import HashSet (was missing in my previous response)
 use std::collections::{HashMap, HashSet};
@@ -15,24 +14,14 @@ pub fn handle_add_column_request(
     mut registry: ResMut<SheetRegistry>,
     mut feedback_writer: EventWriter<SheetOperationFeedback>,
     mut data_modified_writer: EventWriter<SheetDataModifiedInRegistryEvent>,
-    editor_state: Option<Res<EditorWindowState>>,
+    // Virtual structure system removed - editor_state no longer needed
+    daemon_client: Res<crate::sheets::database::daemon_resource::SharedDaemonClient>,
 ) {
     let mut sheets_to_save: HashMap<(Option<String>, String), SheetMetadata> = HashMap::new();
 
     for event in events.read() {
-        // Determine actual target (virtual sheet if inside structure view)
-        let (category, sheet_name) = if let Some(state) = editor_state.as_ref() {
-            if let Some(vctx) = state.virtual_structure_stack.last() {
-                (
-                    vctx.parent.parent_category.clone(),
-                    vctx.virtual_sheet_name.clone(),
-                )
-            } else {
-                (event.category.clone(), event.sheet_name.clone())
-            }
-        } else {
-            (event.category.clone(), event.sheet_name.clone())
-        };
+        // Use event target directly (navigation stack handled elsewhere)
+        let (category, sheet_name) = (event.category.clone(), event.sheet_name.clone());
 
         let mut operation_successful = false;
         let mut error_message: Option<String> = None;
@@ -81,6 +70,7 @@ pub fn handle_add_column_request(
                                     new_def.filter.as_deref(),
                                     new_def.ai_enable_row_generation,
                                     new_def.ai_include_in_send,
+                                    &daemon_client.client(),
                                 );
                         }
                     }

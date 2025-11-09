@@ -1,7 +1,11 @@
 // src/sheets/database/reader/mod.rs
-mod queries;
+pub mod queries;
+mod column_parser;
 
 use super::error::DbResult;
+use super::schema::{
+    is_technical_column, sql_type_to_column_data_type,
+};
 use crate::sheets::definitions::{
     ColumnDataType, ColumnDefinition, ColumnValidator, SheetGridData, SheetMetadata,
 };
@@ -11,23 +15,30 @@ pub struct DbReader;
 
 impl DbReader {
     /// Read sheet metadata from database
-    pub fn read_metadata(conn: &Connection, table_name: &str) -> DbResult<SheetMetadata> {
+    pub fn read_metadata(conn: &Connection, table_name: &str, daemon_client: &super::daemon_client::DaemonClient) -> DbResult<SheetMetadata> {
         let meta_table = format!("{}_Metadata", table_name);
 
         // Ensure metadata table exists
-        if !queries::table_exists(conn, &meta_table)? {
-            Self::create_metadata_from_physical_table(conn, table_name)?;
+        if !super::schema::queries::table_exists(conn, &meta_table)? {
+            Self::create_metadata_from_physical_table(conn, table_name, daemon_client)?;
         }
 
-        // Ensure 'deleted' and 'display_name' columns exist in metadata table
-        queries::add_column_if_missing(conn, &meta_table, "deleted", "INTEGER", "0")?;
-        queries::add_column_if_missing(conn, &meta_table, "display_name", "TEXT", "NULL")?;
+        // NOTE: These add_column_if_missing calls are ARCHITECTURE VIOLATIONS
+        // Readers should not write! This needs to be fixed in a separate refactor.
+        // For now, these go through daemon (proper write path)
+        queries::add_column_if_missing(daemon_client, &meta_table, "deleted", "INTEGER", "0")?;
+        queries::add_column_if_missing(daemon_client, &meta_table, "display_name", "TEXT", "NULL")?;
 
-        let table_type = queries::get_table_type(conn, table_name);
+        let table_type = super::schema::queries::get_table_type(conn, table_name)?;
         let is_structure = matches!(table_type.as_deref(), Some("structure"));
 
         // Read column definitions from metadata table
         let meta_rows = queries::read_metadata_columns(conn, &meta_table)?;
+        
+        // Validate physical/metadata alignment (diagnostic)
+        if !meta_rows.is_empty() {
+            Self::validate_physical_metadata_alignment(conn, table_name, &meta_rows)?;
+        }
         bevy::log::info!(
             "read_metadata: '{}' -> {} metadata rows from {}_Metadata",
             table_name,
@@ -36,13 +47,13 @@ impl DbReader {
         );
 
         // Convert to ColumnDefinition objects
-        let mut columns = Self::parse_metadata_columns(meta_rows)?;
+        let mut columns = column_parser::parse_metadata_columns(meta_rows)?;
 
         // Prepend technical columns based on table type
         columns = Self::prepend_technical_columns(columns, is_structure)?;
 
         // Auto-recover orphaned columns
-        columns = Self::recover_orphaned_columns(conn, table_name, &meta_table, columns)?;
+        columns = Self::recover_orphaned_columns(conn, table_name, &meta_table, columns, daemon_client)?;
 
         // Read table-level metadata
         let table_meta = queries::read_table_metadata(conn, table_name)?;
@@ -110,8 +121,8 @@ impl DbReader {
         Ok((grid, row_indices))
     }
 
-    pub fn read_sheet(conn: &Connection, table_name: &str) -> DbResult<SheetGridData> {
-        let metadata = Self::read_metadata(conn, table_name)?;
+    pub fn read_sheet(conn: &Connection, table_name: &str, daemon_client: &super::daemon_client::DaemonClient) -> DbResult<SheetGridData> {
+        let metadata = Self::read_metadata(conn, table_name, daemon_client)?;
         let (grid, row_indices) = Self::read_grid_data(conn, table_name, &metadata)?;
 
         Ok(SheetGridData {
@@ -129,9 +140,68 @@ impl DbReader {
     // Private helper methods
     // ========================================================================
 
+    /// Validate that metadata columns have corresponding physical columns (diagnostic)
+    /// Uses get_physical_index to verify alignment between metadata and actual DB schema
+    fn validate_physical_metadata_alignment(
+        conn: &Connection,
+        table_name: &str,
+        meta_rows: &[queries::MetadataColumnRow],
+    ) -> DbResult<()> {
+        let mut misaligned = Vec::new();
+        
+        for meta_row in meta_rows {
+            // Skip deleted columns
+            if matches!(meta_row.deleted, Some(1)) {
+                continue;
+            }
+            
+            // Check if this column has a physical counterpart
+            match meta_row.get_physical_index(conn, table_name) {
+                Ok(Some(phys_idx)) => {
+                    // Column exists in physical schema - validate position
+                    bevy::log::trace!(
+                        "Column '{}' (metadata idx: {}) found at physical position {}",
+                        meta_row.column_name,
+                        meta_row.column_index,
+                        phys_idx
+                    );
+                }
+                Ok(None) => {
+                    // Column exists in metadata but not in physical schema
+                    // This is OK for Structure columns which don't have physical columns
+                    bevy::log::trace!(
+                        "Column '{}' (metadata idx: {}) has no physical column (likely Structure type)",
+                        meta_row.column_name,
+                        meta_row.column_index
+                    );
+                }
+                Err(e) => {
+                    bevy::log::warn!(
+                        "Failed to check physical index for column '{}': {}",
+                        meta_row.column_name,
+                        e
+                    );
+                    misaligned.push(meta_row.column_name.clone());
+                }
+            }
+        }
+        
+        if !misaligned.is_empty() {
+            bevy::log::warn!(
+                "Table '{}' has {} metadata columns that couldn't be validated: {:?}",
+                table_name,
+                misaligned.len(),
+                misaligned
+            );
+        }
+        
+        Ok(())
+    }
+
     fn create_metadata_from_physical_table(
         conn: &Connection,
         table_name: &str,
+        daemon_client: &super::daemon_client::DaemonClient,
     ) -> DbResult<()> {
         use crate::sheets::database::schema::create_metadata_table;
 
@@ -144,12 +214,7 @@ impl DbReader {
         let mut columns = Vec::new();
 
         for (name, type_str) in physical_cols {
-            let data_type = match type_str.as_str() {
-                "TEXT" => ColumnDataType::String,
-                "INTEGER" => ColumnDataType::I64,
-                "REAL" => ColumnDataType::F64,
-                _ => ColumnDataType::String,
-            };
+            let data_type = sql_type_to_column_data_type(&type_str);
 
             columns.push(ColumnDefinition {
                 header: name,
@@ -188,80 +253,8 @@ impl DbReader {
             hidden: false,
         };
 
-        create_metadata_table(conn, table_name, &sheet_meta)?;
+        create_metadata_table(table_name, &sheet_meta, daemon_client)?;
         Ok(())
-    }
-
-    fn parse_metadata_columns(
-        meta_rows: Vec<queries::MetadataColumnRow>,
-    ) -> DbResult<Vec<ColumnDefinition>> {
-        let mut columns = Vec::new();
-
-        for row in meta_rows {
-            let data_type = match row.data_type.as_str() {
-                "String" => ColumnDataType::String,
-                "Bool" => ColumnDataType::Bool,
-                "I64" => ColumnDataType::I64,
-                "F64" => ColumnDataType::F64,
-                _ => ColumnDataType::String,
-            };
-
-            let validator = match row.validator_type.as_deref() {
-                Some("Basic") => Some(ColumnValidator::Basic(data_type)),
-                Some("Linked") => {
-                    if let Some(config_json) = row.validator_config {
-                        let config: serde_json::Value =
-                            serde_json::from_str(&config_json).map_err(|e| {
-                                rusqlite::Error::FromSqlConversionFailure(
-                                    0,
-                                    rusqlite::types::Type::Text,
-                                    Box::new(e),
-                                )
-                            })?;
-                        Some(ColumnValidator::Linked {
-                            target_sheet_name: config["target_table"]
-                                .as_str()
-                                .unwrap_or_default()
-                                .to_string(),
-                            target_column_index: config["target_column_index"]
-                                .as_u64()
-                                .unwrap_or(0) as usize,
-                        })
-                    } else {
-                        None
-                    }
-                }
-                Some("Structure") => Some(ColumnValidator::Structure),
-                _ => None,
-            };
-
-            let deleted = row.deleted.map(|v| v != 0).unwrap_or(false);
-
-            // Skip deleted columns
-            if deleted {
-                continue;
-            }
-
-            columns.push(ColumnDefinition {
-                header: row.column_name,
-                display_header: row.display_name,
-                validator,
-                data_type,
-                filter: row.filter_expr,
-                ai_context: row.ai_context,
-                ai_enable_row_generation: row.ai_enable_row_generation.map(|v| v != 0),
-                ai_include_in_send: row.ai_include_in_send.map(|v| v != 0),
-                width: None,
-                structure_schema: None,
-                structure_column_order: None,
-                structure_key_parent_column_index: None,
-                structure_ancestor_key_parent_column_indices: None,
-                deleted: false,
-                hidden: false,
-            });
-        }
-
-        Ok(columns)
     }
 
     fn prepend_technical_columns(
@@ -271,9 +264,7 @@ impl DbReader {
         // Filter out technical columns from persisted metadata
         // NOTE: grand_N_parent columns are NO LONGER technical columns - they are regular persisted data
         columns.retain(|c| {
-            c.header != "id"
-                && c.header != "parent_key"
-                && c.header != "row_index"
+            !is_technical_column(&c.header)
                 && c.header != "temp_new_row_index"
                 && c.header != "_obsolete_temp_new_row_index"
         });
@@ -318,23 +309,9 @@ impl DbReader {
         data_type: ColumnDataType,
         hidden: bool,
     ) -> ColumnDefinition {
-        ColumnDefinition {
-            header: name.to_string(),
-            display_header: None,
-            validator: Some(ColumnValidator::Basic(data_type)),
-            data_type,
-            filter: None,
-            ai_context: None,
-            ai_enable_row_generation: None,
-            ai_include_in_send: None,
-            width: None,
-            structure_schema: None,
-            structure_column_order: None,
-            structure_key_parent_column_index: None,
-            structure_ancestor_key_parent_column_indices: None,
-            deleted: false,
-            hidden,
-        }
+        let mut col = ColumnDefinition::new_basic(name.to_string(), data_type);
+        col.hidden = hidden;
+        col
     }
 
     fn recover_orphaned_columns(
@@ -342,6 +319,7 @@ impl DbReader {
         table_name: &str,
         meta_table: &str,
         mut columns: Vec<ColumnDefinition>,
+        daemon_client: &super::daemon_client::DaemonClient,
     ) -> DbResult<Vec<ColumnDefinition>> {
         let physical_columns = queries::get_physical_columns(conn, table_name)?;
 
@@ -350,10 +328,8 @@ impl DbReader {
             .iter()
             .filter(|(phys_col, _)| {
                 // Skip system columns
-                if phys_col == "id"
+                if is_technical_column(phys_col)
                     || phys_col == "parent_id"
-                    || phys_col == "row_index"
-                    || phys_col == "parent_key"
                     || phys_col == "temp_new_row_index"
                     || phys_col == "_obsolete_temp_new_row_index"
                     || phys_col == "created_at"
@@ -398,28 +374,39 @@ impl DbReader {
 
         // Recover each orphaned column
         for (idx, (col_name, sql_type)) in orphaned.iter().enumerate() {
-            let data_type = match sql_type.to_uppercase().as_str() {
-                "INTEGER" => ColumnDataType::I64,
-                "REAL" | "FLOAT" | "DOUBLE" => ColumnDataType::F64,
-                _ => ColumnDataType::String,
-            };
+            let data_type = sql_type_to_column_data_type(sql_type);
 
             let insert_index = next_index + idx as i32;
+            
+            // Get physical position for diagnostic purposes
+            let physical_position = queries::get_physical_column_names(conn, table_name)
+                .ok()
+                .and_then(|cols| cols.iter().position(|c| c.eq_ignore_ascii_case(col_name)));
 
             match queries::insert_orphaned_column_metadata(
-                conn,
+                daemon_client,
                 meta_table,
                 insert_index,
                 col_name,
                 &format!("{:?}", data_type),
             ) {
                 Ok(_) => {
-                    bevy::log::info!(
-                        "  ✓ Recovered '{}' as {:?} at index {}",
-                        col_name,
-                        data_type,
-                        insert_index
-                    );
+                    if let Some(phys_idx) = physical_position {
+                        bevy::log::info!(
+                            "  ✓ Recovered '{}' as {:?} at metadata index {} (physical position: {})",
+                            col_name,
+                            data_type,
+                            insert_index,
+                            phys_idx
+                        );
+                    } else {
+                        bevy::log::info!(
+                            "  ✓ Recovered '{}' as {:?} at metadata index {}",
+                            col_name,
+                            data_type,
+                            insert_index
+                        );
+                    }
 
                     columns.push(ColumnDefinition {
                         header: col_name.clone(),

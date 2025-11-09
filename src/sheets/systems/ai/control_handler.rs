@@ -8,7 +8,6 @@ use std::ffi::CString;
 
 use crate::{
     sheets::{
-        definitions::SheetMetadata,
         events::{AiBatchResultKind, AiBatchTaskResult},
     },
     ui::systems::SendEvent,
@@ -240,21 +239,3 @@ pub fn spawn_batch_task(
     });
 }
 
-/// Utility: resolve a structure override along a structure path.
-pub fn resolve_structure_override(meta: &SheetMetadata, path: &[usize]) -> Option<bool> {
-    if path.is_empty() {
-        return None;
-    }
-    let column = meta.columns.get(path[0])?;
-    if path.len() == 1 {
-        return column.ai_enable_row_generation;
-    }
-    let mut field = column.structure_schema.as_ref()?.get(path[1])?;
-    if path.len() == 2 {
-        return field.ai_enable_row_generation;
-    }
-    for idx in path.iter().skip(2) {
-        field = field.structure_schema.as_ref()?.get(*idx)?;
-    }
-    field.ai_enable_row_generation
-}

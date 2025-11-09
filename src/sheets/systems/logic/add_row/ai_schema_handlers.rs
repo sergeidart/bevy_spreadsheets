@@ -2,6 +2,7 @@
 // AI send schema and structure send handlers
 
 use crate::sheets::{
+    database::daemon_resource::SharedDaemonClient,
     definitions::ColumnValidator,
     events::{
         RequestBatchUpdateColumnAiInclude, RequestToggleAiRowGeneration,
@@ -11,15 +12,15 @@ use crate::sheets::{
     resources::SheetRegistry,
 };
 use bevy::prelude::*;
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 
 use super::{
     common::{
-        apply_send_schema_to_root, apply_send_schema_to_structure, set_structure_send_flag,
-        update_general_row_generation, update_structure_row_generation,
+        apply_ai_include_updates, apply_send_schema_to_root, apply_send_schema_to_structure,
+        set_structure_send_flag, update_general_row_generation, update_structure_row_generation,
         update_virtual_sheets_from_parent_structure,
     },
-    db_persistence::{update_column_ai_include_db, update_column_metadata_db, update_table_ai_settings_db},
+    db_persistence::{update_column_metadata_db, update_table_ai_settings_db},
     json_persistence::save_to_json,
 };
 
@@ -29,6 +30,7 @@ pub fn handle_toggle_ai_row_generation(
     mut registry: ResMut<SheetRegistry>,
     mut feedback: EventWriter<SheetOperationFeedback>,
     mut data_modified_writer: EventWriter<SheetDataModifiedInRegistryEvent>,
+    daemon_client: Res<SharedDaemonClient>,
 ) {
     for e in ev.read() {
         let Some(sheet) = registry.get_sheet_mut(&e.category, &e.sheet_name) else {
@@ -128,7 +130,7 @@ pub fn handle_toggle_ai_row_generation(
             }
             // Persist to DB if this is a DB-backed sheet and we're toggling the root table-level flag
             if meta_clone.category.is_some() && e.structure_path.is_none() {
-                let _ = update_table_ai_settings_db(&e.category, &e.sheet_name, Some(e.enabled));
+                let _ = update_table_ai_settings_db(&e.category, &e.sheet_name, Some(e.enabled), daemon_client.client());
             } else if meta_clone.category.is_none() {
                 // Legacy JSON
                 save_to_json(registry.as_ref(), &meta_clone);
@@ -158,6 +160,7 @@ pub fn handle_update_column_ai_include(
     mut registry: ResMut<SheetRegistry>,
     mut feedback: EventWriter<SheetOperationFeedback>,
     mut data_modified_writer: EventWriter<SheetDataModifiedInRegistryEvent>,
+    daemon_client: Res<SharedDaemonClient>,
 ) {
     for event in single_events.read() {
         apply_ai_include_updates(
@@ -167,6 +170,7 @@ pub fn handle_update_column_ai_include(
             &event.category,
             &event.sheet_name,
             &[(event.column_index, event.include)],
+            daemon_client.client(),
         );
     }
 
@@ -181,121 +185,9 @@ pub fn handle_update_column_ai_include(
             &event.category,
             &event.sheet_name,
             &event.updates,
+            daemon_client.client(),
         );
     }
-}
-
-fn apply_ai_include_updates(
-    registry: &mut SheetRegistry,
-    feedback: &mut EventWriter<SheetOperationFeedback>,
-    data_modified_writer: &mut EventWriter<SheetDataModifiedInRegistryEvent>,
-    category: &Option<String>,
-    sheet_name: &str,
-    updates: &[(usize, bool)],
-) {
-    if updates.is_empty() {
-        return;
-    }
-
-    let (meta_snapshot, changed_indices) = {
-        let Some(sheet) = registry.get_sheet_mut(category, sheet_name) else {
-            feedback.write(SheetOperationFeedback {
-                message: format!(
-                    "Sheet {:?}/{} not found for AI include update",
-                    category, sheet_name
-                ),
-                is_error: true,
-            });
-            return;
-        };
-
-        let Some(meta) = sheet.metadata.as_mut() else {
-            feedback.write(SheetOperationFeedback {
-                message: format!(
-                    "Metadata missing for {:?}/{} when updating AI include",
-                    category, sheet_name
-                ),
-                is_error: true,
-            });
-            return;
-        };
-
-        meta.ensure_ai_schema_groups_initialized();
-
-        let mut dedup: BTreeMap<usize, bool> = BTreeMap::new();
-        for (idx, include) in updates.iter().copied() {
-            dedup.insert(idx, include);
-        }
-
-        let mut changed_indices: Vec<usize> = Vec::new();
-        for (idx, include) in dedup {
-            if let Some(column) = meta.columns.get_mut(idx) {
-                let previously_included = !matches!(column.ai_include_in_send, Some(false));
-                if include != previously_included {
-                    column.ai_include_in_send = if include { None } else { Some(false) };
-                    changed_indices.push(idx);
-                }
-            } else {
-                feedback.write(SheetOperationFeedback {
-                    message: format!(
-                        "Column index {} out of bounds for {:?}/{}",
-                        idx + 1,
-                        category,
-                        sheet_name
-                    ),
-                    is_error: true,
-                });
-            }
-        }
-
-        if changed_indices.is_empty() {
-            return;
-        }
-
-        let included_indices: Vec<usize> = meta
-            .columns
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, column)| {
-                if matches!(column.validator, Some(ColumnValidator::Structure)) {
-                    return None;
-                }
-                if matches!(column.ai_include_in_send, Some(false)) {
-                    None
-                } else {
-                    Some(idx)
-                }
-            })
-            .collect();
-        let _ = meta.set_active_ai_schema_group_included_columns(&included_indices);
-
-        (meta.clone(), changed_indices)
-    };
-
-    if meta_snapshot.category.is_none() {
-        save_to_json(&*registry, &meta_snapshot);
-    } else {
-        for idx in &changed_indices {
-            let include_flag =
-                !matches!(meta_snapshot.columns[*idx].ai_include_in_send, Some(false));
-            let _ = update_column_ai_include_db(category, sheet_name, *idx, include_flag);
-        }
-    }
-
-    data_modified_writer.write(SheetDataModifiedInRegistryEvent {
-        category: category.clone(),
-        sheet_name: sheet_name.to_string(),
-    });
-
-    feedback.write(SheetOperationFeedback {
-        message: format!(
-            "Updated AI send for {} column(s) in {:?}/{}",
-            changed_indices.len(),
-            category,
-            sheet_name
-        ),
-        is_error: false,
-    });
 }
 
 /// Handles AI send schema update requests
@@ -304,6 +196,7 @@ pub fn handle_update_ai_send_schema(
     mut registry: ResMut<SheetRegistry>,
     mut feedback: EventWriter<SheetOperationFeedback>,
     mut data_modified_writer: EventWriter<SheetDataModifiedInRegistryEvent>,
+    daemon_client: Res<SharedDaemonClient>,
 ) {
     for e in ev.read() {
         let Some(sheet) = registry.get_sheet_mut(&e.category, &e.sheet_name) else {
@@ -378,6 +271,7 @@ pub fn handle_update_ai_send_schema(
                                 &e.sheet_name,
                                 idx,
                                 c.ai_include_in_send,
+                                daemon_client.client(),
                             );
                         }
                     }
@@ -429,6 +323,7 @@ pub fn handle_update_ai_structure_send(
     mut registry: ResMut<SheetRegistry>,
     mut feedback: EventWriter<SheetOperationFeedback>,
     mut data_modified_writer: EventWriter<SheetDataModifiedInRegistryEvent>,
+    daemon_client: Res<SharedDaemonClient>,
 ) {
     for e in ev.read() {
         let Some(sheet) = registry.get_sheet_mut(&e.category, &e.sheet_name) else {
@@ -490,6 +385,7 @@ pub fn handle_update_ai_structure_send(
                                     &e.sheet_name,
                                     idx,
                                     col.ai_include_in_send,
+                                    daemon_client.client(),
                                 );
                             }
                         }

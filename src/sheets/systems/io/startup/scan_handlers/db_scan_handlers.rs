@@ -3,6 +3,7 @@
 
 use crate::sheets::events::RequestSheetRevalidation;
 use crate::sheets::resources::SheetRegistry;
+use crate::sheets::database::daemon_client::DaemonClient;
 use bevy::prelude::*;
 use std::path::Path;
 use walkdir::WalkDir;
@@ -14,6 +15,7 @@ use crate::sheets::systems::io::get_default_data_base_path;
 pub fn scan_and_load_database_files(
     registry: &mut SheetRegistry,
     revalidate_writer: &mut EventWriter<RequestSheetRevalidation>,
+    daemon_client: &DaemonClient,
 ) {
     let base_path = get_default_data_base_path();
     info!(
@@ -52,7 +54,7 @@ pub fn scan_and_load_database_files(
 
     // Load tables from each database
     for db_path in db_files {
-        load_database_tables(registry, revalidate_writer, &db_path);
+        load_database_tables(registry, revalidate_writer, &db_path, daemon_client);
     }
 }
 
@@ -61,6 +63,7 @@ fn load_database_tables(
     registry: &mut SheetRegistry,
     revalidate_writer: &mut EventWriter<RequestSheetRevalidation>,
     db_path: &Path,
+    daemon_client: &DaemonClient,
 ) {
     let db_name = db_path
         .file_stem()
@@ -72,7 +75,7 @@ fn load_database_tables(
         db_path.display()
     );
 
-    let mut conn = match rusqlite::Connection::open(db_path) {
+    let mut conn = match crate::sheets::database::connection::DbConnection::open_existing(db_path) {
         Ok(conn) => conn,
         Err(e) => {
             error!(
@@ -84,21 +87,12 @@ fn load_database_tables(
         }
     };
 
-    // Configure connection for better concurrency
-    if let Err(e) = conn.execute_batch(
-        "PRAGMA journal_mode=WAL;
-         PRAGMA synchronous=NORMAL;
-         PRAGMA foreign_keys=ON;",
-    ) {
-        warn!("Startup DB Scan: Failed to configure database: {}", e);
-    }
-
     // Check if this is a SkylineDB database (has _Metadata table)
     let has_metadata_table = check_has_metadata_table(&conn);
 
     // If SkylineDB metadata exists, ensure it's migrated to latest schema
     if has_metadata_table {
-        if let Err(e) = crate::sheets::database::schema::ensure_global_metadata_table(&conn) {
+        if let Err(e) = crate::sheets::database::schema::ensure_global_metadata_table(&conn, daemon_client) {
             error!(
                 "Startup DB Scan: Failed to ensure _Metadata schema in '{}': {}",
                 db_name, e
@@ -124,7 +118,7 @@ fn load_database_tables(
             crate::sheets::database::migration::remove_grand_parent_columns::RemoveGrandParentColumns
         ));
 
-        match fix_manager.apply_all_fixes(&mut conn) {
+        match fix_manager.apply_all_fixes(&mut conn, &daemon_client) {
             Ok(applied) => {
                 if !applied.is_empty() {
                     info!("Startup DB Scan: Applied migration fixes to '{}': {:?}", db_name, applied);
@@ -165,6 +159,7 @@ fn load_database_tables(
             &table_name,
             &db_name,
             has_metadata_table,
+            daemon_client,
         );
     }
 }
@@ -234,11 +229,12 @@ fn load_single_table(
     table_name: &str,
     db_name: &str,
     has_metadata_table: bool,
+    daemon_client: &DaemonClient,
 ) {
     // Try to load with metadata first
     let (metadata, grid, row_indices) = if has_metadata_table {
         // Load from SkylineDB metadata
-        match crate::sheets::database::reader::DbReader::read_metadata(conn, table_name) {
+        match crate::sheets::database::reader::DbReader::read_metadata(conn, table_name, daemon_client) {
             Ok(metadata) => {
                 // Load grid data
                 match crate::sheets::database::reader::DbReader::read_grid_data(

@@ -85,7 +85,7 @@ pub fn checkpoint_database_file(db_path: &Path) -> DbResult<bool> {
         }
     }
     
-    let conn = Connection::open(db_path)?;
+    let conn = super::connection::DbConnection::open_existing(db_path)?;
     checkpoint_database(&conn)?;
     Ok(true) // Successfully checkpointed
 }

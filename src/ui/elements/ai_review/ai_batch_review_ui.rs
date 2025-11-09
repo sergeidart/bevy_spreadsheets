@@ -1,5 +1,5 @@
 use crate::sheets::definitions::ColumnValidator;
-use crate::sheets::events::{AddSheetRowRequest, OpenStructureViewEvent, UpdateCellEvent};
+use crate::sheets::events::{AddSheetRowRequest, UpdateCellEvent};
 use crate::sheets::resources::SheetRegistry;
 use crate::sheets::systems::ai_review::cache_handlers::cancel_batch;
 use crate::sheets::systems::ai_review::display_context::prepare_display_context;
@@ -17,16 +17,16 @@ use crate::ui::elements::ai_review::handlers::{
 };
 use crate::ui::elements::ai_review::header_actions::draw_header_actions;
 use crate::ui::elements::ai_review::render::row_render::{build_blocks, render_rows, RowContext};
+use crate::ui::elements::ai_review::table_headers::render_table_headers;
 use crate::ui::elements::editor::state::EditorWindowState;
 use bevy::prelude::*;
-use bevy_egui::egui::{self, RichText};
+use bevy_egui::egui;
 pub(crate) fn draw_ai_batch_review_panel(
     ui: &mut egui::Ui,
     state: &mut EditorWindowState,
     selected_category_clone: &Option<String>,
     selected_sheet_name_clone: &Option<String>,
     registry: &SheetRegistry,
-    _open_structure_writer: &mut EventWriter<OpenStructureViewEvent>,
     cell_update_writer: &mut EventWriter<UpdateCellEvent>,
     add_row_writer: &mut EventWriter<AddSheetRowRequest>,
 ) {
@@ -123,95 +123,12 @@ pub(crate) fn draw_ai_batch_review_panel(
             let row_height = 25.0;
             builder
                 .header(row_height, |mut header_row| {
-                    // First column: Action/Status header
-                    header_row.col(|ui| {
-                        ui.label(RichText::new("Action").strong());
-                        let rect = ui.max_rect();
-                        let y = rect.bottom();
-                        ui.painter().hline(
-                            rect.x_range(),
-                            y,
-                            ui.visuals().widgets.noninteractive.bg_stroke,
-                        );
-                    });
-
-                    // Ancestor key columns (green)
-                    for (key_header, value) in &display_ctx.ancestor_key_columns {
-                        header_row.col(|ui| {
-                            let r = ui.colored_label(
-                                egui::Color32::from_rgb(0, 170, 0),
-                                RichText::new(key_header).strong(),
-                            );
-                            if !value.is_empty() {
-                                r.on_hover_text(format!("Key value: {}", value));
-                            } else {
-                                r.on_hover_text(format!("Key column: {}", key_header));
-                            }
-                            let rect = ui.max_rect();
-                            let y = rect.bottom();
-                            ui.painter().hline(
-                                rect.x_range(),
-                                y,
-                                ui.visuals().widgets.noninteractive.bg_stroke,
-                            );
-                        });
-                    }
-
-                    // Regular and structure columns
-                    let sheet_metadata = registry
-                        .get_sheet(selected_category_clone, &display_ctx.active_sheet_name)
-                        .and_then(|sheet| sheet.metadata.as_ref());
-
-                    for col_entry in &display_ctx.merged_columns {
-                        header_row.col(|ui| {
-                            let header_text = match col_entry {
-                                ColumnEntry::Regular(col_idx) => {
-                                    if display_ctx.in_structure_mode {
-                                        // In structure mode, use structure schema
-                                        display_ctx.structure_schema
-                                            .get(*col_idx)
-                                            .map(|field| field.header.as_str())
-                                            .unwrap_or("?")
-                                    } else {
-                                        // In normal mode, use sheet metadata
-                                        sheet_metadata
-                                            .and_then(|meta| meta.columns.get(*col_idx))
-                                            .map(|col| col.header.as_str())
-                                            .unwrap_or("?")
-                                    }
-                                }
-                                ColumnEntry::Structure(col_idx) => {
-                                    if display_ctx.in_structure_mode {
-                                        // In structure mode, use structure schema
-                                        display_ctx.structure_schema
-                                            .get(*col_idx)
-                                            .map(|field| field.header.as_str())
-                                            .unwrap_or("Structure")
-                                    } else {
-                                        // In normal mode, use sheet metadata
-                                        sheet_metadata
-                                            .and_then(|meta| meta.columns.get(*col_idx))
-                                            .map(|col| col.header.as_str())
-                                            .unwrap_or("Structure")
-                                    }
-                                }
-                            };
-
-                            // Color parent_key header green to indicate non-interactable key column
-                            if header_text.eq_ignore_ascii_case("parent_key") {
-                                ui.label(RichText::new(header_text).color(egui::Color32::from_rgb(0, 170, 0)).strong());
-                            } else {
-                                ui.label(RichText::new(header_text).strong());
-                            }
-                            let rect = ui.max_rect();
-                            let y = rect.bottom();
-                            ui.painter().hline(
-                                rect.x_range(),
-                                y,
-                                ui.visuals().widgets.noninteractive.bg_stroke,
-                            );
-                        });
-                    }
+                    render_table_headers(
+                        &mut header_row,
+                        &display_ctx,
+                        registry,
+                        selected_category_clone,
+                    );
                 })
                 .body(|mut body| {
                     let mut existing_accept = Vec::new();

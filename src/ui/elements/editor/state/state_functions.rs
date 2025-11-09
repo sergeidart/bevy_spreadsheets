@@ -5,16 +5,9 @@ use super::state_definitions::*;
 use crate::sheets::definitions::ColumnValidator;
 
 impl EditorWindowState {
-    /// Returns the currently active sheet context considering virtual structure navigation.
-    /// If inside a virtual structure view, returns that virtual sheet name and its parent category.
-    /// Otherwise returns the user's selected (category, sheet) pair.
+    /// Returns the currently active sheet context.
+    /// Returns the user's selected (category, sheet) pair.
     pub fn current_sheet_context(&self) -> (Option<String>, Option<String>) {
-        if let Some(vctx) = self.virtual_structure_stack.last() {
-            return (
-                vctx.parent.parent_category.clone(),
-                Some(vctx.virtual_sheet_name.clone()),
-            );
-        }
         (
             self.selected_category.clone(),
             self.selected_sheet_name.clone(),
@@ -33,7 +26,6 @@ impl EditorWindowState {
             status,
             response,
             request,
-            timestamp: std::time::SystemTime::now(),
             is_error,
         };
         // Insert at front (newest first)
@@ -56,18 +48,9 @@ impl EditorWindowState {
         category: &Option<String>,
         sheet_name: &str,
     ) {
-        let path_matches = self.ai_cached_included_columns_path.len()
-            == self.virtual_structure_stack.len()
-            && self
-                .virtual_structure_stack
-                .iter()
-                .zip(self.ai_cached_included_columns_path.iter())
-                .all(|(ctx, cached)| ctx.parent.parent_col == *cached);
-
         let needs_rebuild = self.ai_cached_included_columns_dirty
             || self.ai_cached_included_columns_category.as_ref() != category.as_ref()
             || self.ai_cached_included_columns_sheet.as_deref() != Some(sheet_name)
-            || !path_matches
             || !self.ai_cached_included_columns_valid;
 
         if !needs_rebuild {
@@ -78,11 +61,6 @@ impl EditorWindowState {
         self.ai_cached_included_columns_category = category.clone();
         self.ai_cached_included_columns_sheet = Some(sheet_name.to_string());
         self.ai_cached_included_columns_path.clear();
-        self.ai_cached_included_columns_path.extend(
-            self.virtual_structure_stack
-                .iter()
-                .map(|ctx| ctx.parent.parent_col),
-        );
         self.ai_cached_included_columns_dirty = false;
         self.ai_cached_included_columns_valid = false;
 
@@ -144,28 +122,8 @@ impl EditorWindowState {
     /// Resolve ultimate root sheet (category, sheet) for current view (following structure parents).
     pub fn resolve_root_sheet(
         &self,
-        registry: &crate::sheets::resources::SheetRegistry,
+        _registry: &crate::sheets::resources::SheetRegistry,
     ) -> (Option<String>, Option<String>) {
-        if let Some(vctx) = self.virtual_structure_stack.last() {
-            let mut current_category = self.selected_category.clone();
-            let mut current_sheet = vctx.virtual_sheet_name.clone();
-            let mut safety = 0;
-            while safety < 32 {
-                safety += 1;
-                if let Some(meta) = registry
-                    .get_sheet(&current_category, &current_sheet)
-                    .and_then(|s| s.metadata.as_ref())
-                {
-                    if let Some(parent) = &meta.structure_parent {
-                        current_category = parent.parent_category.clone();
-                        current_sheet = parent.parent_sheet.clone();
-                        continue;
-                    }
-                }
-                break;
-            }
-            return (current_category, Some(current_sheet));
-        }
         (
             self.selected_category.clone(),
             self.selected_sheet_name.clone(),

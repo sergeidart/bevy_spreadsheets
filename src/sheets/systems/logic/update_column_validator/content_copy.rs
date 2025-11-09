@@ -23,7 +23,10 @@ pub fn copy_parent_content_to_structure_table(
     structure_table_name: &str,
     parent_col_def: &ColumnDefinition,
     structure_columns: &[ColumnDefinition],
+    daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
 ) -> Result<(), String> {
+    use crate::sheets::database::daemon_client::Statement;
+    
     // Use structure_columns which includes ALL columns (technical + data)
     // Filter out row_index (index 0) since it's auto-generated
     let columns_to_copy: Vec<&ColumnDefinition> = structure_columns.iter()
@@ -92,11 +95,8 @@ pub fn copy_parent_content_to_structure_table(
     
     info!("Found {} parent rows to copy", parent_rows.len());
     
-    // Start transaction
-    let tx = conn.unchecked_transaction()
-        .map_err(|e| format!("Failed to start transaction: {}", e))?;
-    
     let mut child_row_index = 0i64;
+    let mut insert_statements = Vec::new();
     
     for parent_row in parent_rows {
         // Get parent_key value from parent row (key column + 2 for id, row_index)
@@ -201,10 +201,8 @@ pub fn copy_parent_content_to_structure_table(
         }
         
         if insert_columns.is_empty() {
-            warn!("No columns to insert for parent_key='{}
-
-', skipping", parent_key);
-           continue;
+            warn!("No columns to insert for parent_key='{}', skipping", parent_key);
+            continue;
         }
         
         // Build INSERT statement: row_index first, then all insert_columns in order
@@ -225,20 +223,40 @@ pub fn copy_parent_content_to_structure_table(
             );
         }
         
-        // Prepare parameters: row_index first, then all insert_values (already as Value types)
-        let mut params: Vec<rusqlite::types::Value> = Vec::with_capacity(1 + insert_values.len());
-        params.push(rusqlite::types::Value::Integer(child_row_index));
-        params.extend(insert_values); // insert_values is already Vec<Value>
+        // Prepare parameters: row_index first, then all insert_values (convert to JSON)
+        let mut params: Vec<serde_json::Value> = Vec::with_capacity(1 + insert_values.len());
+        params.push(serde_json::Value::Number(child_row_index.into()));
         
-        // Execute insert
-        tx.execute(&insert_sql, rusqlite::params_from_iter(params.iter()))
-            .map_err(|e| format!("Failed to insert child row: {}", e))?;
+        // Convert rusqlite::types::Value to serde_json::Value
+        for val in insert_values {
+            let json_val = match val {
+                rusqlite::types::Value::Null => serde_json::Value::Null,
+                rusqlite::types::Value::Integer(i) => serde_json::Value::Number(i.into()),
+                rusqlite::types::Value::Real(r) => serde_json::Number::from_f64(r)
+                    .map(serde_json::Value::Number)
+                    .unwrap_or(serde_json::Value::Null),
+                rusqlite::types::Value::Text(s) => serde_json::Value::String(s),
+                rusqlite::types::Value::Blob(b) => {
+                    // Convert blob to base64 string
+                    serde_json::Value::String(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &b))
+                }
+            };
+            params.push(json_val);
+        }
+        
+        insert_statements.push(Statement {
+            sql: insert_sql,
+            params,
+        });
         
         child_row_index += 1;
     }
     
-    // Commit transaction
-    tx.commit().map_err(|e| format!("Failed to commit transaction: {}", e))?;
+    // Execute all inserts through daemon
+    if !insert_statements.is_empty() {
+        daemon_client.exec_batch(insert_statements)
+            .map_err(|e| format!("Failed to insert child rows: {}", e))?;
+    }
     
     info!("Successfully copied {} rows to structure table", child_row_index);
     Ok(())

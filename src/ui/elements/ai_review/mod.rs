@@ -17,3 +17,4 @@ pub mod render {
 pub mod handlers;
 pub mod header_actions;
 pub mod serialization_helpers; // Shared helpers for structure serialization and parent key resolution
+pub mod table_headers;

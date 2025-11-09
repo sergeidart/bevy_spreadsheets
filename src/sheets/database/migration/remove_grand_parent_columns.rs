@@ -48,7 +48,7 @@ impl MigrationFix for RemoveGrandParentColumns {
         "Remove redundant grand_N_parent columns from structure tables, keeping only parent_key"
     }
 
-    fn apply(&self, conn: &mut Connection) -> DbResult<()> {
+    fn apply(&self, conn: &mut Connection, daemon_client: &super::super::daemon_client::DaemonClient) -> DbResult<()> {
         info!("=== Starting grand_N_parent column removal migration ===");
 
         // Find all structure tables (those with parent_key column)
@@ -92,7 +92,7 @@ impl MigrationFix for RemoveGrandParentColumns {
             )?;
 
             // Migrate the table
-            migrate_table_remove_grands(conn, &table_name, &grand_columns)?;
+            migrate_table_remove_grands(conn, &table_name, &grand_columns, daemon_client)?;
 
             // Verify row count unchanged
             let row_count_after: i64 = conn.query_row(
@@ -113,7 +113,7 @@ impl MigrationFix for RemoveGrandParentColumns {
             }
 
             // Update metadata to remove grand column definitions
-            update_metadata_remove_grand_columns(conn, &table_name, &grand_columns)?;
+            update_metadata_remove_grand_columns(conn, &table_name, &grand_columns, daemon_client)?;
 
             tables_processed += 1;
             total_columns_removed += grand_columns.len();
@@ -244,7 +244,10 @@ fn migrate_table_remove_grands(
     conn: &Connection,
     table_name: &str,
     grand_columns: &[String],
+    daemon_client: &super::super::daemon_client::DaemonClient,
 ) -> DbResult<()> {
+    use super::super::daemon_client::Statement;
+    
     // Get all columns except grand_*_parent
     let all_columns = get_all_columns(conn, table_name)?;
     let keep_columns: Vec<String> = all_columns
@@ -258,7 +261,11 @@ fn migrate_table_remove_grands(
     let temp_table = format!("{}_temp_no_grands", table_name);
 
     // Clean up any leftover temp table from previous failed run
-    let _ = conn.execute(&format!("DROP TABLE IF EXISTS \"{}\"", temp_table), []);
+    let drop_temp_stmt = Statement {
+        sql: format!("DROP TABLE IF EXISTS \"{}\"", temp_table),
+        params: vec![],
+    };
+    let _ = daemon_client.exec_batch(vec![drop_temp_stmt]);
 
     // Build CREATE TABLE statement for new table
     let create_sql = build_create_table_sql(conn, table_name, &keep_columns)?;
@@ -268,7 +275,12 @@ fn migrate_table_remove_grands(
     );
 
     info!("  Creating temporary table: {}", temp_table);
-    conn.execute(&create_sql_temp, [])?;
+    let create_stmt = Statement {
+        sql: create_sql_temp,
+        params: vec![],
+    };
+    daemon_client.exec_batch(vec![create_stmt])
+        .map_err(|e| DbError::MigrationFailed(format!("Failed to create temp table: {}", e)))?;
 
     // Copy data from old table to new table (excluding grand columns)
     let columns_list = keep_columns
@@ -283,19 +295,38 @@ fn migrate_table_remove_grands(
     );
 
     info!("  Copying data to temporary table...");
-    let rows_copied = conn.execute(&copy_sql, [])?;
+    let copy_stmt = Statement {
+        sql: copy_sql,
+        params: vec![],
+    };
+    daemon_client.exec_batch(vec![copy_stmt])
+        .map_err(|e| DbError::MigrationFailed(format!("Failed to copy data: {}", e)))?;
+    
+    // Query row count for verification (READ - stays direct)
+    let rows_copied: i64 = conn.query_row(
+        &format!("SELECT COUNT(*) FROM \"{}\"", temp_table),
+        [],
+        |row| row.get(0),
+    )?;
     info!("  Copied {} rows", rows_copied);
 
     // Drop old table
     info!("  Dropping old table...");
-    conn.execute(&format!("DROP TABLE \"{}\"", table_name), [])?;
+    let drop_old_stmt = Statement {
+        sql: format!("DROP TABLE \"{}\"", table_name),
+        params: vec![],
+    };
+    daemon_client.exec_batch(vec![drop_old_stmt])
+        .map_err(|e| DbError::MigrationFailed(format!("Failed to drop old table: {}", e)))?;
 
     // Rename temp table to original name
     info!("  Renaming temporary table to original name...");
-    conn.execute(
-        &format!("ALTER TABLE \"{}\" RENAME TO \"{}\"", temp_table, table_name),
-        [],
-    )?;
+    let rename_stmt = Statement {
+        sql: format!("ALTER TABLE \"{}\" RENAME TO \"{}\"", temp_table, table_name),
+        params: vec![],
+    };
+    daemon_client.exec_batch(vec![rename_stmt])
+        .map_err(|e| DbError::MigrationFailed(format!("Failed to rename temp table: {}", e)))?;
 
     // Recreate unique index (if it doesn't exist)
     let index_name = format!("idx_{}_parent_row", table_name.replace(" ", "_"));
@@ -303,7 +334,12 @@ fn migrate_table_remove_grands(
         "CREATE UNIQUE INDEX IF NOT EXISTS \"{}\" ON \"{}\"(parent_key, row_index)",
         index_name, table_name
     );
-    conn.execute(&create_index_sql, [])?;
+    let index_stmt = Statement {
+        sql: create_index_sql,
+        params: vec![],
+    };
+    daemon_client.exec_batch(vec![index_stmt])
+        .map_err(|e| DbError::MigrationFailed(format!("Failed to create index: {}", e)))?;
     info!("  Recreated unique index: {}", index_name);
 
     Ok(())
@@ -386,7 +422,10 @@ fn update_metadata_remove_grand_columns(
     conn: &Connection,
     table_name: &str,
     grand_columns: &[String],
+    daemon_client: &super::super::daemon_client::DaemonClient,
 ) -> DbResult<()> {
+    use super::super::daemon_client::Statement;
+    
     let metadata_table = format!("{}_Metadata", table_name);
     
     // Check if metadata table exists
@@ -425,22 +464,18 @@ fn update_metadata_remove_grand_columns(
         info!("Attempting to physically delete metadata rows for grand_*_parent columns from '{}'", metadata_table);
         
         for grand_col in grand_columns {
-            let delete_result = conn.execute(
-                &format!("DELETE FROM \"{}\" WHERE column_name = ?", metadata_table),
-                params![grand_col],
-            );
-
-            match delete_result {
-                Ok(rows_deleted) => {
-                    if rows_deleted > 0 {
-                        info!("  Deleted metadata row for column '{}'", grand_col);
-                    } else {
-                        warn!("  Column '{}' not found in metadata (may have been removed already)", grand_col);
-                    }
+            let delete_stmt = Statement {
+                sql: format!("DELETE FROM \"{}\" WHERE column_name = ?", metadata_table),
+                params: vec![serde_json::Value::String(grand_col.clone())],
+            };
+            
+            match daemon_client.exec_batch(vec![delete_stmt]) {
+                Ok(_) => {
+                    info!("  Deleted metadata row for column '{}'", grand_col);
                 }
                 Err(e) => {
                     error!("  Failed to delete metadata row for column '{}': {}", grand_col, e);
-                    return Err(DbError::from(e));
+                    return Err(DbError::MigrationFailed(format!("Failed to delete metadata: {}", e)));
                 }
             }
         }
@@ -452,23 +487,19 @@ fn update_metadata_remove_grand_columns(
     // Mark each grand_*_parent column as deleted in metadata
     let mut marked_count = 0;
     for grand_col in grand_columns {
-        let update_result = conn.execute(
-            &format!("UPDATE \"{}\" SET deleted = 1 WHERE column_name = ?", metadata_table),
-            params![grand_col],
-        );
+        let update_stmt = Statement {
+            sql: format!("UPDATE \"{}\" SET deleted = 1 WHERE column_name = ?", metadata_table),
+            params: vec![serde_json::Value::String(grand_col.clone())],
+        };
 
-        match update_result {
-            Ok(rows_updated) => {
-                if rows_updated > 0 {
-                    info!("  Marked column '{}' as deleted in metadata", grand_col);
-                    marked_count += 1;
-                } else {
-                    warn!("  Column '{}' not found in metadata (may have been removed already)", grand_col);
-                }
+        match daemon_client.exec_batch(vec![update_stmt]) {
+            Ok(_) => {
+                info!("  Marked column '{}' as deleted in metadata", grand_col);
+                marked_count += 1;
             }
             Err(e) => {
                 error!("  Failed to mark column '{}' as deleted: {}", grand_col, e);
-                return Err(DbError::from(e));
+                return Err(DbError::MigrationFailed(format!("Failed to update metadata: {}", e)));
             }
         }
     }
@@ -481,3 +512,4 @@ fn update_metadata_remove_grand_columns(
 
     Ok(())
 }
+

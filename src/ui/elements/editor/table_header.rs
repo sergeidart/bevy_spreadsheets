@@ -94,8 +94,7 @@ pub fn sheet_table_header(
                                             ui_h.add_enabled(false, egui::Checkbox::new(&mut dummy, ""));
                                         ui_h.add_space(2.0);
                                     } else {
-                                        let in_structure_context =
-                                            !state.virtual_structure_stack.is_empty();
+                                        let in_structure_context = false; // Virtual structures deprecated
                                         let mut is_included =
                                             !matches!(col_def.ai_include_in_send, Some(false));
                                         let checkbox_resp = ui_h.checkbox(&mut is_included, "");

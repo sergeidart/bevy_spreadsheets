@@ -43,37 +43,11 @@ pub(super) fn get_structure_context(
     editor_state: &Option<bevy::prelude::ResMut<EditorWindowState>>,
     sheet_name: &str,
     category: &Option<String>,
-    registry: &crate::sheets::resources::SheetRegistry,
+    _registry: &crate::sheets::resources::SheetRegistry,
 ) -> Option<StructureContext> {
     let state = editor_state.as_ref()?;
     
-    // First check virtual_structure_stack (for AI operations in virtual sheets)
-    if let Some(vctx) = state.virtual_structure_stack.last() {
-        if &vctx.virtual_sheet_name == sheet_name {
-            // Extract parent_key from the parent context
-            // For virtual structure sheets, we need to get the parent row's key value
-            if let Some(parent_sheet) = registry.get_sheet(&vctx.parent.parent_category, &vctx.parent.parent_sheet) {
-                if let Some(parent_row) = parent_sheet.grid.get(vctx.parent.parent_row) {
-                    if let Some(meta) = &parent_sheet.metadata {
-                        // Find the key column index for the structure column
-                        if let Some(struct_col) = meta.columns.get(vctx.parent.parent_col) {
-                            if let Some(key_col_idx) = struct_col.structure_key_parent_column_index {
-                                if let Some(_key_value) = parent_row.get(key_col_idx) {
-                                    // For virtual sheets, ancestor_row_indices would need to be extracted from parent row
-                                    // TODO: Extract ancestor row indices from parent row
-                                    return Some(StructureContext {
-                                        ancestor_row_indices: Vec::new(), // TODO: populate from parent row
-                                    });
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    
-    // Fall back to structure_navigation_stack (for regular structure navigation)
+    // Use structure_navigation_stack for structure navigation
     let nav_ctx = state.structure_navigation_stack.last()?;
     
     if &nav_ctx.structure_sheet_name == sheet_name && &nav_ctx.parent_category == category {
@@ -85,17 +59,11 @@ pub(super) fn get_structure_context(
     }
 }
 
-/// Resolves the target sheet name and category from virtual structure context if active
+/// Resolves the target sheet name and category (no longer using virtual context)
 pub(super) fn resolve_virtual_context(
-    editor_state: &Option<bevy::prelude::ResMut<EditorWindowState>>,
-    mut category: Option<String>,
-    mut sheet_name: String,
+    _editor_state: &Option<bevy::prelude::ResMut<EditorWindowState>>,
+    category: Option<String>,
+    sheet_name: String,
 ) -> (Option<String>, String) {
-    if let Some(state) = editor_state.as_ref() {
-        if let Some(vctx) = state.virtual_structure_stack.last() {
-            sheet_name = vctx.virtual_sheet_name.clone();
-            category = vctx.parent.parent_category.clone();
-        }
-    }
     (category, sheet_name)
 }

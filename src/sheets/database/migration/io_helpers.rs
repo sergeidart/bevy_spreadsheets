@@ -12,11 +12,9 @@ use crate::sheets::definitions::SheetMetadata;
 
 #[derive(Debug, Clone)]
 pub struct JsonSheetPair {
-    pub name: String,
     pub data_path: PathBuf,
     pub meta_path: PathBuf,
     pub dependencies: Vec<String>,
-    pub category: Option<String>,
 }
 
 pub struct IoHelpers;
@@ -59,11 +57,9 @@ impl IoHelpers {
                             sheets.insert(
                                 sheet_name.clone(),
                                 JsonSheetPair {
-                                    name: sheet_name,
                                     data_path: path,
                                     meta_path,
                                     dependencies,
-                                    category: metadata.category.clone(),
                                 },
                             );
                         }
@@ -80,8 +76,9 @@ impl IoHelpers {
         conn: &Connection,
         table_name: &str,
         output_folder: &Path,
+        daemon_client: &super::super::daemon_client::DaemonClient,
     ) -> DbResult<()> {
-        let sheet_data = DbReader::read_sheet(conn, table_name)?;
+        let sheet_data = DbReader::read_sheet(conn, table_name, daemon_client)?;
 
         let metadata = sheet_data
             .metadata

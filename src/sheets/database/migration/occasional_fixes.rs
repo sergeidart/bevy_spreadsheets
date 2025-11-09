@@ -18,7 +18,7 @@ pub trait MigrationFix {
     fn description(&self) -> &str;
 
     /// Apply the fix to the database
-    fn apply(&self, conn: &mut Connection) -> DbResult<()>;
+    fn apply(&self, conn: &mut Connection, daemon_client: &super::super::daemon_client::DaemonClient) -> DbResult<()>;
 
     /// Check if this fix has already been applied
     fn is_applied(&self, conn: &Connection) -> DbResult<bool> {
@@ -40,22 +40,33 @@ pub trait MigrationFix {
     }
 
     /// Mark this fix as applied
-    fn mark_applied(&self, conn: &mut Connection) -> DbResult<()> {
+    fn mark_applied(&self, _conn: &mut Connection, daemon_client: &super::super::daemon_client::DaemonClient) -> DbResult<()> {
+        use super::super::daemon_client::Statement;
+        
         // Ensure the migration_fixes table exists
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS migration_fixes (
+        let create_stmt = Statement {
+            sql: "CREATE TABLE IF NOT EXISTS migration_fixes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 fix_id TEXT UNIQUE NOT NULL,
                 description TEXT,
                 applied_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            )",
-            [],
-        )?;
+            )".to_string(),
+            params: vec![],
+        };
+        daemon_client.exec_batch(vec![create_stmt])
+            .map_err(|e| DbError::MigrationFailed(format!("Failed to create migration_fixes table: {}", e)))?;
 
-        conn.execute(
-            "INSERT OR IGNORE INTO migration_fixes (fix_id, description) VALUES (?1, ?2)",
-            [self.id(), self.description()],
-        )?;
+        // Write through daemon (no direct DB writes)
+        let insert_stmt = Statement {
+            sql: "INSERT OR IGNORE INTO migration_fixes (fix_id, description) VALUES (?, ?)".to_string(),
+            params: vec![
+                serde_json::Value::String(self.id().to_string()),
+                serde_json::Value::String(self.description().to_string()),
+            ],
+        };
+        daemon_client
+            .exec_batch(vec![insert_stmt])
+            .map_err(|e| DbError::MigrationFailed(format!("Failed to mark migration fix as applied: {}", e)))?;
 
         Ok(())
     }
@@ -77,7 +88,7 @@ impl OccasionalFixManager {
     }
 
     /// Apply all unapplied fixes to the database
-    pub fn apply_all_fixes(&self, conn: &mut Connection) -> DbResult<Vec<String>> {
+    pub fn apply_all_fixes(&self, conn: &mut Connection, daemon_client: &super::super::daemon_client::DaemonClient) -> DbResult<Vec<String>> {
         let mut applied = Vec::new();
 
         info!("Checking {} registered migrations...", self.fixes.len());
@@ -86,9 +97,9 @@ impl OccasionalFixManager {
             if !fix.is_applied(conn)? {
                 info!("Migration '{}' not yet applied, running: {}", fix.id(), fix.description());
 
-                match fix.apply(conn) {
+                match fix.apply(conn, daemon_client) {
                     Ok(_) => {
-                        fix.mark_applied(conn)?;
+                        fix.mark_applied(conn, daemon_client)?;
                         applied.push(fix.id().to_string());
                         info!("✓ Successfully applied migration: {}", fix.id());
                     }
@@ -108,42 +119,6 @@ impl OccasionalFixManager {
 
         Ok(applied)
     }
-
-    /// Apply a specific fix by ID
-    pub fn apply_fix_by_id(&self, conn: &mut Connection, fix_id: &str) -> DbResult<bool> {
-        for fix in &self.fixes {
-            if fix.id() == fix_id {
-                if fix.is_applied(conn)? {
-                    info!("Fix {} already applied", fix_id);
-                    return Ok(false);
-                }
-
-                info!("Applying migration fix: {} - {}", fix.id(), fix.description());
-                fix.apply(conn)?;
-                fix.mark_applied(conn)?;
-                info!("Successfully applied fix: {}", fix.id());
-                return Ok(true);
-            }
-        }
-
-        Err(DbError::MigrationFailed(format!("Fix not found: {}", fix_id)))
-    }
-
-    /// List all registered fixes and their status
-    pub fn list_fixes(&self, conn: &Connection) -> DbResult<Vec<(String, String, bool)>> {
-        let mut result = Vec::new();
-
-        for fix in &self.fixes {
-            let applied = fix.is_applied(conn)?;
-            result.push((
-                fix.id().to_string(),
-                fix.description().to_string(),
-                applied,
-            ));
-        }
-
-        Ok(result)
-    }
 }
 
 impl Default for OccasionalFixManager {
@@ -152,30 +127,4 @@ impl Default for OccasionalFixManager {
     }
 }
 
-// Example fix implementation (commented out for reference)
-/*
-pub struct ExampleArrayOfPrimitivesFix;
-
-impl MigrationFix for ExampleArrayOfPrimitivesFix {
-    fn id(&self) -> &str {
-        "fix_array_of_primitives_2024_10"
-    }
-
-    fn description(&self) -> &str {
-        "Fix array-of-primitives handling in structure columns"
-    }
-
-    fn apply(&self, conn: &mut Connection) -> DbResult<()> {
-        // Implementation of the fix
-        info!("Applying array-of-primitives fix...");
-        
-        // Example: update specific tables or data
-        conn.execute(
-            "UPDATE some_table SET some_column = ? WHERE condition",
-            [],
-        )?;
-
-        Ok(())
-    }
-}
-*/
+// Example fix implementation (removed to avoid direct write pattern in guards).

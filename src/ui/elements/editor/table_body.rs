@@ -2,7 +2,7 @@
 use crate::sheets::{
     definitions::{ColumnValidator, SheetMetadata},
     events::{
-        OpenStructureViewEvent, RequestCopyCell, RequestPasteCell, RequestToggleAiRowGeneration,
+        RequestCopyCell, RequestPasteCell, RequestToggleAiRowGeneration,
         UpdateCellEvent,
     },
     resources::{ClipboardBuffer, SheetRegistry, SheetRenderCache},
@@ -183,7 +183,6 @@ pub fn sheet_table_body(
     render_cache: &SheetRenderCache,
     mut cell_update_writer: EventWriter<UpdateCellEvent>,
     state: &mut EditorWindowState,
-    open_structure_events: &mut EventWriter<OpenStructureViewEvent>,
     toggle_ai_events: &mut EventWriter<RequestToggleAiRowGeneration>,
     copy_events: &mut EventWriter<RequestCopyCell>,
     paste_events: &mut EventWriter<RequestPasteCell>,
@@ -341,7 +340,6 @@ pub fn sheet_table_body(
                             registry,
                             render_cache,
                             state,
-                            open_structure_events,
                             toggle_ai_events,
                             copy_events,
                             paste_events,

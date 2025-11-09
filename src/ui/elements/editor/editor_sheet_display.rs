@@ -8,7 +8,7 @@ pub mod display_table;
 
 use crate::sheets::{
     events::{
-        AddSheetRowRequest, OpenStructureViewEvent, RequestAddColumn,
+        AddSheetRowRequest, RequestAddColumn,
         RequestBatchUpdateColumnAiInclude, RequestCopyCell, RequestPasteCell, RequestReorderColumn,
         RequestToggleAiRowGeneration, RequestUpdateAiSendSchema, RequestUpdateAiStructureSend,
         RequestUpdateColumnAiInclude, UpdateCellEvent,
@@ -37,7 +37,6 @@ pub(super) fn show_sheet_table(
     render_cache: &SheetRenderCache,
     reorder_column_writer: EventWriter<RequestReorderColumn>,
     cell_update_writer: EventWriter<UpdateCellEvent>,
-    open_structure_writer: EventWriter<OpenStructureViewEvent>,
     toggle_add_rows_writer: EventWriter<RequestToggleAiRowGeneration>,
     column_include_writer: EventWriter<RequestUpdateColumnAiInclude>,
     batch_include_writer: EventWriter<RequestBatchUpdateColumnAiInclude>,
@@ -84,7 +83,6 @@ pub(super) fn show_sheet_table(
                     &current_category,
                     reorder_column_writer,
                     cell_update_writer,
-                    open_structure_writer,
                     toggle_add_rows_writer,
                     column_include_writer,
                     batch_include_writer,
@@ -147,7 +145,6 @@ fn render_sheet_with_metadata(
     current_category: &Option<String>,
     reorder_column_writer: EventWriter<RequestReorderColumn>,
     cell_update_writer: EventWriter<UpdateCellEvent>,
-    open_structure_writer: EventWriter<OpenStructureViewEvent>,
     toggle_add_rows_writer: EventWriter<RequestToggleAiRowGeneration>,
     column_include_writer: EventWriter<RequestUpdateColumnAiInclude>,
     batch_include_writer: EventWriter<RequestBatchUpdateColumnAiInclude>,
@@ -198,7 +195,6 @@ fn render_sheet_with_metadata(
         &ancestor_key_columns,
         reorder_column_writer,
         cell_update_writer,
-        open_structure_writer,
         toggle_add_rows_writer,
         column_include_writer,
         batch_include_writer,

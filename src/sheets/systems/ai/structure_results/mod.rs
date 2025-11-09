@@ -237,7 +237,6 @@ pub fn process_structure_partition(
         ai_rows,
         merged_rows,
         differences,
-        row_operations: Vec::new(),
         schema_headers,
         // Use original_count, not original_rows_aligned.len() which includes AI-added rows
         original_rows_count: original_count,
@@ -333,7 +332,6 @@ pub fn handle_structure_error(
             ai_rows: Vec::new(),
             merged_rows: Vec::new(),
             differences: Vec::new(),
-            row_operations: Vec::new(),
             schema_headers: Vec::new(),
             original_rows_count: original_count,
         });

@@ -1,7 +1,8 @@
 // src/sheets/systems/ui_handlers/sheet_handlers.rs
 use bevy::prelude::*;
 use crate::sheets::resources::SheetRegistry;
-use crate::ui::elements::editor::state::{EditorWindowState, SheetInteractionState};
+use crate::sheets::database::daemon_client::DaemonClient;
+use crate::ui::elements::editor::state::EditorWindowState;
 
 /// Handle sheet selection change
 /// NOTE: This function only updates UI state. Cache reload happens in the system that has access to SheetRegistry.
@@ -30,6 +31,7 @@ pub fn handle_sheet_selection(
 pub fn reload_sheet_cache_from_db(
     state: &mut EditorWindowState,
     registry: &mut SheetRegistry,
+    daemon_client: &DaemonClient,
 ) {
     if !state.force_cache_reload {
         return;
@@ -71,7 +73,7 @@ pub fn reload_sheet_cache_from_db(
     
     match rusqlite::Connection::open(&db_path) {
         Ok(conn) => {
-            match crate::sheets::database::reader::DbReader::read_sheet(&conn, sheet_name) {
+            match crate::sheets::database::reader::DbReader::read_sheet(&conn, sheet_name, daemon_client) {
                 Ok(sheet_data) => {
                     info!("Successfully reloaded {} rows from DB for sheet '{}'", sheet_data.grid.len(), sheet_name);
                     registry.add_or_replace_sheet(
@@ -146,12 +148,6 @@ pub fn handle_sheet_picker_toggle(
     state: &mut EditorWindowState,
 ) {
     state.sheet_picker_expanded = !state.sheet_picker_expanded;
-}
-
-/// Check if sheet management operations are allowed
-pub fn can_manage_sheet(state: &EditorWindowState) -> bool {
-    state.selected_sheet_name.is_some()
-        && state.current_interaction_mode == SheetInteractionState::Idle
 }
 
 /// Handle sheet drag start

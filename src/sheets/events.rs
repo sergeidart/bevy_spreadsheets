@@ -182,13 +182,6 @@ pub enum AiBatchResultKind {
         // Optional structure context for nested processing
         structure_context: Option<StructureProcessingContext>,
     },
-    /// Phase 2 deep review call - all rows treated as existing, automatic after Phase 1
-    DeepReview {
-        /// Indices of rows that are duplicates (marked for merge UI)
-        duplicate_indices: Vec<usize>,
-        /// Number of original + duplicate rows (remaining are AI-added with minimal data)
-        established_row_count: usize,
-    },
 }
 
 #[derive(Debug, Clone)]
@@ -290,18 +283,6 @@ pub struct RequestSheetRevalidation {
     pub category: Option<String>,
     pub sheet_name: String,
 }
-
-// --- NEW: Events for structure navigation ---
-#[derive(Event, Debug, Clone)]
-pub struct OpenStructureViewEvent {
-    pub parent_category: Option<String>,
-    pub parent_sheet: String,
-    pub row_index: usize,
-    pub col_index: usize,
-}
-
-#[derive(Event, Debug, Clone)]
-pub struct CloseStructureViewEvent;
 
 // --- Category (Folder) management events ---
 #[derive(Event, Debug, Clone)]

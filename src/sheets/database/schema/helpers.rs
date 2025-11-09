@@ -26,9 +26,10 @@ pub fn runtime_to_persisted_column_index(
     conn: &Connection,
     table_name: &str,
     runtime_column_index: usize,
+    daemon_client: &super::super::daemon_client::DaemonClient,
 ) -> DbResult<Option<i32>> {
     // Read the full metadata to get the visual column list
-    let metadata = crate::sheets::database::reader::DbReader::read_metadata(conn, table_name)?;
+    let metadata = crate::sheets::database::reader::DbReader::read_metadata(conn, table_name, daemon_client)?;
     
     // Get the column at the runtime index
     let Some(column) = metadata.columns.get(runtime_column_index) else {
@@ -76,13 +77,35 @@ pub fn runtime_to_persisted_column_index(
     Ok(column_index)
 }
 
-/// SQL type mapping for column data types
+/// SQL type mapping for column data types (ColumnDataType → SQL type string)
 pub fn sql_type_for_column(data_type: ColumnDataType) -> &'static str {
     match data_type {
         ColumnDataType::String => "TEXT",
         ColumnDataType::Bool => "INTEGER",
         ColumnDataType::I64 => "INTEGER",
         ColumnDataType::F64 => "REAL",
+    }
+}
+
+/// Convert SQL type string to ColumnDataType (inverse of sql_type_for_column)
+/// Used when reading physical table schema from SQLite
+pub fn sql_type_to_column_data_type(sql_type: &str) -> ColumnDataType {
+    match sql_type.to_uppercase().as_str() {
+        "INTEGER" => ColumnDataType::I64,
+        "REAL" | "FLOAT" | "DOUBLE" => ColumnDataType::F64,
+        _ => ColumnDataType::String,
+    }
+}
+
+/// Convert metadata type string to ColumnDataType
+/// Used when reading column definitions from metadata tables
+pub fn metadata_type_to_column_data_type(type_str: &str) -> ColumnDataType {
+    match type_str {
+        "String" => ColumnDataType::String,
+        "Bool" => ColumnDataType::Bool,
+        "I64" => ColumnDataType::I64,
+        "F64" => ColumnDataType::F64,
+        _ => ColumnDataType::String,
     }
 }
 

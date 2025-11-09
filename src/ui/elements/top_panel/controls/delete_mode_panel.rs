@@ -48,12 +48,8 @@ pub fn show_delete_mode_active_controls<'a, 'w>(
             .add_enabled(can_delete_anything, egui::Button::new(button_text))
             .clicked()
         {
-            // Determine effective target sheet (virtual if structure view active)
-            let effective_sheet_name = if let Some(vctx) = state.virtual_structure_stack.last() {
-                &vctx.virtual_sheet_name
-            } else {
-                state.selected_sheet_name.as_ref().unwrap()
-            };
+            // Use selected sheet directly (virtual structures deprecated)
+            let effective_sheet_name = state.selected_sheet_name.as_ref().unwrap();
             if state.selected_sheet_name.is_some() {
                 if rows_selected_count > 0 {
                     event_writers

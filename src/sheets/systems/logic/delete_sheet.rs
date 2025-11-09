@@ -15,6 +15,7 @@ pub fn handle_delete_request(
     mut file_delete_writer: EventWriter<RequestDeleteSheetFile>,
     mut feedback_writer: EventWriter<SheetOperationFeedback>,
     mut data_modified_writer: EventWriter<crate::sheets::events::SheetDataModifiedInRegistryEvent>,
+    daemon_client: Res<crate::sheets::database::daemon_resource::SharedDaemonClient>,
 ) {
     for event in events.read() {
         let category = &event.category; // <<< Get category
@@ -148,43 +149,47 @@ pub fn handle_delete_request(
                             let db_path = base_path.join(format!("{}.db", db_name));
                             if db_path.exists() {
                                 match rusqlite::Connection::open(&db_path) {
-                                    Ok(conn) => {
-                                        let drop_table_sql =
-                                            format!("DROP TABLE IF EXISTS \"{}\"", child_name);
-                                        let _ = conn.execute(&drop_table_sql, []);
+                                    Ok(_conn) => {
                                         let meta_table = format!("{}_Metadata", child_name);
-                                        let _ = conn.execute(
-                                            &format!("DROP TABLE IF EXISTS \"{}\"", meta_table),
-                                            [],
-                                        );
                                         let ai_groups_table = format!("{}_AIGroups", child_name);
-                                        let _ = conn.execute(
-                                            &format!(
-                                                "DROP TABLE IF EXISTS \"{}\"",
-                                                ai_groups_table
-                                            ),
-                                            [],
-                                        );
-                                        let _ = conn.execute(
-                                            "DELETE FROM _Metadata WHERE table_name = ?",
-                                            [child_name.as_str()],
-                                        );
-                                        info!(
-                                            "Cascade: cleaned DB objects for child '{:?}/{}'",
-                                            child_cat, child_name
-                                        );
-
-                                        // Reclaim space after cascade operations
-                                        if let Err(e) = conn.execute("VACUUM", []) {
-                                            warn!(
-                                                "VACUUM failed after cascade deleting child '{}': {}",
-                                                child_name, e
-                                            );
-                                        } else {
-                                            info!(
-                                                "VACUUM completed after cascade deleting child '{}'",
-                                                child_name
-                                            );
+                                        
+                                        let statements = vec![
+                                            crate::sheets::database::daemon_client::Statement {
+                                                sql: format!("DROP TABLE IF EXISTS \"{}\"", child_name),
+                                                params: vec![],
+                                            },
+                                            crate::sheets::database::daemon_client::Statement {
+                                                sql: format!("DROP TABLE IF EXISTS \"{}\"", meta_table),
+                                                params: vec![],
+                                            },
+                                            crate::sheets::database::daemon_client::Statement {
+                                                sql: format!("DROP TABLE IF EXISTS \"{}\"", ai_groups_table),
+                                                params: vec![],
+                                            },
+                                            crate::sheets::database::daemon_client::Statement {
+                                                sql: "DELETE FROM _Metadata WHERE table_name = ?".to_string(),
+                                                params: vec![serde_json::json!(child_name)],
+                                            },
+                                            crate::sheets::database::daemon_client::Statement {
+                                                sql: "VACUUM".to_string(),
+                                                params: vec![],
+                                            },
+                                        ];
+                                        
+                                        match daemon_client.client().exec_batch(statements) {
+                                            Ok(response) => {
+                                                if response.error.is_some() {
+                                                    warn!("Daemon error cascade deleting child '{:?}/{}': {:?}", 
+                                                          child_cat, child_name, response.error);
+                                                } else {
+                                                    info!("Cascade: cleaned DB objects and vacuumed for child '{:?}/{}'", 
+                                                          child_cat, child_name);
+                                                }
+                                            }
+                                            Err(e) => {
+                                                warn!("Failed to execute cascade delete batch via daemon for '{:?}/{}': {:?}", 
+                                                      child_cat, child_name, e);
+                                            }
                                         }
                                     }
                                     Err(e) => {
@@ -261,63 +266,46 @@ pub fn handle_delete_request(
 
                     if db_path.exists() {
                         match rusqlite::Connection::open(&db_path) {
-                            Ok(conn) => {
-                                // Drop the main data table
-                                let drop_table_sql =
-                                    format!("DROP TABLE IF EXISTS \"{}\"", sheet_name);
-                                match conn.execute(&drop_table_sql, []) {
-                                    Ok(_) => {
-                                        info!(
-                                            "Successfully dropped table '{}' from database '{}'",
-                                            sheet_name, db_name
-                                        );
-
-                                        // Also drop associated metadata tables
-                                        let meta_table = format!("{}_Metadata", sheet_name);
-                                        let _ = conn.execute(
-                                            &format!("DROP TABLE IF EXISTS \"{}\"", meta_table),
-                                            [],
-                                        );
-
-                                        let ai_groups_table = format!("{}_AIGroups", sheet_name);
-                                        let _ = conn.execute(
-                                            &format!(
-                                                "DROP TABLE IF EXISTS \"{}\"",
-                                                ai_groups_table
-                                            ),
-                                            [],
-                                        );
-
-                                        // Remove from global _Metadata table
-                                        let _ = conn.execute(
-                                            "DELETE FROM _Metadata WHERE table_name = ?",
-                                            [sheet_name],
-                                        );
-
-                                        info!("Cleaned up all metadata for table '{}'", sheet_name);
-
-                                        // Reclaim disk space after table and metadata drops
-                                        if let Err(e) = conn.execute("VACUUM", []) {
-                                            warn!(
-                                                "VACUUM failed after deleting table '{}': {}",
-                                                sheet_name, e
-                                            );
+                            Ok(_conn) => {
+                                let meta_table = format!("{}_Metadata", sheet_name);
+                                let ai_groups_table = format!("{}_AIGroups", sheet_name);
+                                
+                                let statements = vec![
+                                    crate::sheets::database::daemon_client::Statement {
+                                        sql: format!("DROP TABLE IF EXISTS \"{}\"", sheet_name),
+                                        params: vec![],
+                                    },
+                                    crate::sheets::database::daemon_client::Statement {
+                                        sql: format!("DROP TABLE IF EXISTS \"{}\"", meta_table),
+                                        params: vec![],
+                                    },
+                                    crate::sheets::database::daemon_client::Statement {
+                                        sql: format!("DROP TABLE IF EXISTS \"{}\"", ai_groups_table),
+                                        params: vec![],
+                                    },
+                                    crate::sheets::database::daemon_client::Statement {
+                                        sql: "DELETE FROM _Metadata WHERE table_name = ?".to_string(),
+                                        params: vec![serde_json::json!(sheet_name)],
+                                    },
+                                    crate::sheets::database::daemon_client::Statement {
+                                        sql: "VACUUM".to_string(),
+                                        params: vec![],
+                                    },
+                                ];
+                                
+                                match daemon_client.client().exec_batch(statements) {
+                                    Ok(response) => {
+                                        if response.error.is_some() {
+                                            error!("Daemon error deleting table '{}' from database '{}': {:?}", 
+                                                   sheet_name, db_name, response.error);
                                         } else {
-                                            info!(
-                                                "VACUUM completed after deleting table '{}'",
-                                                sheet_name
-                                            );
+                                            info!("Successfully dropped table '{}', cleaned metadata, and vacuumed database '{}'", 
+                                                  sheet_name, db_name);
                                         }
                                     }
                                     Err(e) => {
-                                        error!(
-                                            "Failed to drop table '{}' from database '{}': {}",
-                                            sheet_name, db_name, e
-                                        );
-                                        feedback_writer.write(SheetOperationFeedback {
-                                            message: format!("Sheet removed from memory but failed to delete from database: {}", e),
-                                            is_error: true,
-                                        });
+                                        error!("Failed to execute delete batch via daemon for table '{}': {:?}", 
+                                               sheet_name, e);
                                     }
                                 }
                             }

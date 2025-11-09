@@ -1,18 +1,20 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 
+use crate::sheets::events::RequestCreateNewSheet;
 use crate::ui::elements::editor::state::EditorWindowState;
 use crate::ui::elements::popups::MigrationPopupState;
 
 /// Renders the "Add Table" popup for database mode.
 ///
 /// This popup allows the user to:
-/// 1. Enter a name for a new table (manual creation - TODO)
+/// 1. Enter a name for a new table (manual creation)
 /// 2. Click "Migrate from JSON" to open the migration popup
 pub fn show_add_table_popup(
     ctx: &egui::Context,
     state: &mut EditorWindowState,
     migration_state: &mut MigrationPopupState,
+    create_sheet_writer: &mut EventWriter<RequestCreateNewSheet>,
 ) {
     if !state.show_add_table_popup {
         return;
@@ -43,19 +45,29 @@ pub fn show_add_table_popup(
                 });
                 ui.add_space(8.0);
 
-                // Create button (manual creation - not yet implemented)
+                // Create button (manual creation)
                 ui.horizontal(|ui| {
-                    if ui
-                        .button("✅ Create Empty Table")
-                        .on_hover_text("Create a new empty table with the given name")
-                        .clicked()
-                    {
-                        // TODO: Implement manual table creation via event
-                        info!(
-                            "Manual table creation not yet implemented: {}",
-                            state.new_sheet_name_input
-                        );
-                    }
+                    let can_create = !state.new_sheet_name_input.trim().is_empty();
+                    
+                    ui.add_enabled_ui(can_create, |ui| {
+                        if ui
+                            .button("✅ Create Empty Table")
+                            .on_hover_text("Create a new empty table with the given name")
+                            .clicked()
+                        {
+                            let table_name = state.new_sheet_name_input.trim().to_string();
+                            info!("Creating new table: {}", table_name);
+                            
+                            create_sheet_writer.write(RequestCreateNewSheet {
+                                desired_name: table_name,
+                                category: state.selected_category.clone(),
+                            });
+                            
+                            // Close popup and clear input
+                            state.show_add_table_popup = false;
+                            state.new_sheet_name_input.clear();
+                        }
+                    });
 
                     // Migrate from JSON button
                     if ui

@@ -1,6 +1,7 @@
 // src/ui/elements/bottom_panel/popups.rs
 use bevy_egui::egui;
 use crate::sheets::resources::SheetRegistry;
+use crate::sheets::database::daemon_client::DaemonClient;
 use crate::sheets::systems::ui_handlers::{category_handlers, sheet_handlers, ui_cache};
 use crate::ui::elements::editor::state::EditorWindowState;
 use crate::sheets::systems::io::metadata_persistence;
@@ -177,6 +178,7 @@ pub fn handle_sheet_context_menu(
     state: &mut EditorWindowState,
     registry: &mut SheetRegistry,
     sheet_name: &str,
+    daemon_client: &DaemonClient,
 ) {
     let mut to_save: Option<crate::sheets::definitions::SheetMetadata> = None;
     let selected_category = state.selected_category.clone();
@@ -198,7 +200,7 @@ pub fn handle_sheet_context_menu(
     }
     
     if let Some(meta_to_save) = to_save {
-        metadata_persistence::save_sheet_metadata(registry, &meta_to_save, selected_category);
+        metadata_persistence::save_sheet_metadata(registry, &meta_to_save, selected_category, daemon_client);
         state.force_filter_recalculation = true;
         ctx_menu.close_menu();
     }

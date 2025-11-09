@@ -30,7 +30,6 @@ trait AncestorDropdownSupport {
     fn get_ancestor_key_values(&self) -> &Vec<String>;
     fn get_ancestor_key_values_mut(&mut self) -> &mut Vec<String>;
     fn get_ancestor_dropdown_cache(&self) -> &HashMap<usize, (Vec<String>, Vec<String>)>;
-    fn get_ancestor_dropdown_cache_mut(&mut self) -> &mut HashMap<usize, (Vec<String>, Vec<String>)>;
 }
 
 impl AncestorDropdownSupport for crate::ui::elements::editor::state::RowReview {
@@ -49,9 +48,6 @@ impl AncestorDropdownSupport for crate::ui::elements::editor::state::RowReview {
     fn get_ancestor_dropdown_cache(&self) -> &HashMap<usize, (Vec<String>, Vec<String>)> {
         &self.ancestor_dropdown_cache
     }
-    fn get_ancestor_dropdown_cache_mut(&mut self) -> &mut HashMap<usize, (Vec<String>, Vec<String>)> {
-        &mut self.ancestor_dropdown_cache
-    }
 }
 
 impl AncestorDropdownSupport for crate::ui::elements::editor::state::NewRowReview {
@@ -69,9 +65,6 @@ impl AncestorDropdownSupport for crate::ui::elements::editor::state::NewRowRevie
     }
     fn get_ancestor_dropdown_cache(&self) -> &HashMap<usize, (Vec<String>, Vec<String>)> {
         &self.ancestor_dropdown_cache
-    }
-    fn get_ancestor_dropdown_cache_mut(&mut self) -> &mut HashMap<usize, (Vec<String>, Vec<String>)> {
-        &mut self.ancestor_dropdown_cache
     }
 }
 
@@ -95,24 +88,11 @@ pub struct RowContext<'a> {
 }
 
 impl<'a> RowContext<'a> {
-    pub fn render_ancestor_keys(&self, row: &mut TableRow) {
-        for (_header, value) in self.ancestor_key_columns.iter() {
-            row.col(|ui| {
-                ui.label(RichText::new(value.clone()).color(PARENT_KEY_COLOR));
-            });
-        }
-    }
-
     /// Get parent sheet info for a specific ancestor level
     ///
-    /// Tries virtual_structure_stack first, falls back to deriving from sheet name
+    /// Virtual structures deprecated; derive from sheet name
     fn get_parent_sheet_info(&self, key_idx: usize) -> Option<(Option<String>, String)> {
-        // Try virtual_structure_stack first
-        if let Some(vs) = self.state.virtual_structure_stack.get(key_idx) {
-            return Some((vs.parent.parent_category.clone(), vs.parent.parent_sheet.clone()));
-        }
-
-        // Fallback: derive from current sheet name
+        // Derive from current sheet name
         let current_sheet = self.state.selected_sheet_name.as_ref()?;
 
         // Navigate up by removing suffixes (key_idx + 1) levels

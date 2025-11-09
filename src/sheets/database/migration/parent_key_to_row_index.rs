@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use rusqlite::{Connection, OptionalExtension};
 
 use super::occasional_fixes::MigrationFix;
-use super::super::error::DbResult;
+use super::super::error::{DbError, DbResult};
 
 /// Migration to convert parent_key values from text-based to row_index-based
 ///
@@ -34,7 +34,7 @@ impl MigrationFix for MigrateParentKeyToRowIndex {
         "Convert parent_key from text values to numeric row_index for stable references"
     }
 
-    fn apply(&self, conn: &mut Connection) -> DbResult<()> {
+    fn apply(&self, conn: &mut Connection, daemon_client: &super::super::daemon_client::DaemonClient) -> DbResult<()> {
         info!("=== Starting parent_key to row_index migration ===");
 
         // Get all table names from global metadata
@@ -142,6 +142,7 @@ impl MigrationFix for MigrateParentKeyToRowIndex {
                 batch_size,
                 num_batches,
                 total_rows,
+                daemon_client,
             )?;
 
             total_migrated += table_migrated;
@@ -207,6 +208,7 @@ fn process_table_batches(
     batch_size: i64,
     num_batches: i64,
     total_rows: i64,
+    daemon_client: &super::super::daemon_client::DaemonClient,
 ) -> DbResult<(usize, usize, usize)> {
     let mut total_migrated = 0;
     let mut total_skipped = 0;
@@ -336,24 +338,33 @@ fn process_table_batches(
             }
         } // stmt is dropped here
 
-        // Perform batch update
+        // Perform batch update through daemon
         if !rows_to_update.is_empty() {
-            let tx = conn.transaction()?;
+            use super::super::daemon_client::Statement;
+            
+            let mut statements = Vec::new();
             for upd in &rows_to_update {
                 if let Some(pk_new) = &upd.parent_key_new {
-                    tx.execute(
-                        &format!("UPDATE \"{}\" SET parent_key = ?1 WHERE id = ?2", table_name),
-                        rusqlite::params![pk_new, &upd.id],
-                    )?;
+                    statements.push(Statement {
+                        sql: format!("UPDATE \"{}\" SET parent_key = ? WHERE id = ?", table_name),
+                        params: vec![
+                            serde_json::Value::String(pk_new.clone()),
+                            serde_json::Value::Number(upd.id.into()),
+                        ],
+                    });
                 }
                 for (col, val) in &upd.ancestor_updates {
-                    tx.execute(
-                        &format!("UPDATE \"{}\" SET \"{}\" = ?1 WHERE id = ?2", table_name, col),
-                        rusqlite::params![val, &upd.id],
-                    )?;
+                    statements.push(Statement {
+                        sql: format!("UPDATE \"{}\" SET \"{}\" = ? WHERE id = ?", table_name, col),
+                        params: vec![
+                            serde_json::Value::String(val.clone()),
+                            serde_json::Value::Number(upd.id.into()),
+                        ],
+                    });
                 }
             }
-            tx.commit()?;
+            daemon_client.exec_batch(statements)
+                .map_err(|e| DbError::MigrationFailed(format!("Failed to execute batch update: {}", e)))?;
         }
 
         total_migrated += batch_migrated;

@@ -12,8 +12,9 @@ use super::editor_popups_integration;
 use super::editor_sheet_display;
 use super::state::{AiModeState, EditorWindowState, SheetInteractionState};
 use crate::sheets::{
+    database::daemon_resource::SharedDaemonClient,
     events::{
-        AddSheetRowRequest, CloseStructureViewEvent, RequestAddColumn,
+        AddSheetRowRequest, RequestAddColumn,
         RequestBatchUpdateColumnAiInclude, RequestCopyCell, RequestCreateAiSchemaGroup,
         RequestCreateCategory, RequestCreateNewSheet, RequestDeleteAiSchemaGroup,
         RequestDeleteCategory, RequestDeleteColumns, RequestDeleteRows, RequestDeleteSheet,
@@ -53,7 +54,6 @@ pub struct SheetEventWriters<'w> {
     pub delete_columns: EventWriter<'w, RequestDeleteColumns>,
     pub reorder_column: EventWriter<'w, RequestReorderColumn>,
     pub revalidate: EventWriter<'w, RequestSheetRevalidation>,
-    pub open_structure: EventWriter<'w, crate::sheets::events::OpenStructureViewEvent>,
     pub toggle_ai_row_generation: EventWriter<'w, RequestToggleAiRowGeneration>,
     pub update_column_ai_include: EventWriter<'w, RequestUpdateColumnAiInclude>,
     pub batch_update_column_ai_include: EventWriter<'w, RequestBatchUpdateColumnAiInclude>,
@@ -95,7 +95,7 @@ pub struct EditorMiscParams<'w> {
     pub session_api_key_res: ResMut<'w, SessionApiKey>,
     pub copier_manager: ResMut<'w, VisualCopierManager>,
     pub request_app_exit_writer: EventWriter<'w, RequestAppExit>,
-    pub close_structure_writer: EventWriter<'w, CloseStructureViewEvent>,
+    pub daemon_client: Res<'w, SharedDaemonClient>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -133,6 +133,7 @@ pub fn generic_sheet_editor_ui(
     crate::sheets::systems::ui_handlers::sheet_handlers::reload_sheet_cache_from_db(
         &mut state,
         &mut misc.registry,
+        misc.daemon_client.client(),
     );
 
     // Trigger revalidation when a sheet is opened/re-opened
@@ -160,6 +161,7 @@ pub fn generic_sheet_editor_ui(
         &mut copier_writers.queue_top_panel_copy,
         &mut copier_writers.reverse_folders,
         &mut copier_writers.state_changed,
+        misc.daemon_client.client(),
     );
 
     // Bottom panels must be declared before CentralPanel to reserve space
@@ -172,6 +174,7 @@ pub fn generic_sheet_editor_ui(
             &mut crate::ui::elements::bottom_panel::sheet_management_bar::SheetManagementEventWriters {
                 move_sheet_to_category: &mut sheet_writers.move_sheet_to_category,
             },
+            misc.daemon_client.client(),
         );
     });
     // Draw Log panel above the category/sheet bar
@@ -180,9 +183,7 @@ pub fn generic_sheet_editor_ui(
     // Render central panel (main content)
     egui::CentralPanel::default().show(ctx, |ui| {
         if keys.just_pressed(KeyCode::Escape) {
-            if !state.virtual_structure_stack.is_empty() {
-                misc.close_structure_writer.write(CloseStructureViewEvent);
-            } else if let Some(nav_ctx) = state.structure_navigation_stack.pop() {
+            if let Some(nav_ctx) = state.structure_navigation_stack.pop() {
                 // Navigate back to parent sheet in real navigation
                 state.selected_category = nav_ctx.parent_category;
                 state.selected_sheet_name = Some(nav_ctx.parent_sheet_name);
@@ -198,7 +199,6 @@ pub fn generic_sheet_editor_ui(
             &mut *misc.registry,
             &mut sheet_writers,
             misc.request_app_exit_writer,
-            misc.close_structure_writer,
             &misc.runtime,
             &misc.session_api_key_res,
             &mut commands,
@@ -223,7 +223,6 @@ pub fn generic_sheet_editor_ui(
                 &misc.render_cache_res,
                 sheet_writers.reorder_column,
                 sheet_writers.cell_update,
-                sheet_writers.open_structure,
                 sheet_writers.toggle_ai_row_generation,
                 sheet_writers.update_column_ai_include,
                 sheet_writers.batch_update_column_ai_include,
@@ -245,7 +244,6 @@ pub fn generic_sheet_editor_ui(
                 &current_category_clone,
                 &current_sheet_name_clone,
                 &misc.registry,
-                &mut sheet_writers.open_structure,
                 &mut sheet_writers.cell_update,
                 &mut sheet_writers.add_row,
             );

@@ -73,20 +73,7 @@ pub fn convert_parent_names_to_row_indices(
         return indices;
     }
 
-    // PRIORITY 1: Check if we're in a virtual structure view (JSON structures)
-    if !state.virtual_structure_stack.is_empty() {
-        // Extract parent row indices from the stack
-        for vctx in &state.virtual_structure_stack {
-            indices.push(vctx.parent.parent_row);
-        }
-        info!(
-            "convert_parent_names_to_row_indices: Using virtual_structure_stack, got indices={:?}",
-            indices
-        );
-        return indices;
-    }
-
-    // PRIORITY 2: Check if we're in a real structure navigation (real child tables)
+    // Check if we're in a real structure navigation (real child tables)
     // In this case, we already have the resolved row indices
     if !state.structure_navigation_stack.is_empty() {
         // Use ancestor_row_indices which contain numeric row_index values

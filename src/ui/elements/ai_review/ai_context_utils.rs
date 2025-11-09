@@ -132,32 +132,13 @@ pub fn build_lineage_prefixes(
     registry: &SheetRegistry,
     selection: &[usize],
 ) -> LineagePrefixes {
+    // Collect prefix columns (ancestor key context) to prepend to rows
     let mut headers: Vec<String> = Vec::new();
     let mut values: Vec<String> = Vec::new();
     let mut prefix_contexts: Vec<Option<String>> = Vec::new();
     
-    // Virtual structure navigation (preferred)
-    if !state.virtual_structure_stack.is_empty() {
-        // Iterate ancestors from oldest to nearest parent using virtual structure stack order
-        for vctx in &state.virtual_structure_stack {
-            if let Some(parent_sheet) = registry.get_sheet(&vctx.parent.parent_category, &vctx.parent.parent_sheet) {
-                if let (Some(parent_meta), Some(parent_row)) = (&parent_sheet.metadata, parent_sheet.grid.get(vctx.parent.parent_row)) {
-                    if let Some(di) = get_first_data_col_idx(parent_meta) {
-                        let header = parent_meta.columns.get(di).map(|c| c.header.clone()).unwrap_or_else(|| "Key".to_string());
-                        let display = parent_row.get(di).cloned().unwrap_or_default();
-                        if !display.is_empty() {
-                            headers.push(header.clone());
-                            values.push(display);
-                            let col_def = &parent_meta.columns[di];
-                            prefix_contexts.push(decorate_context_with_type(col_def.ai_context.as_ref(), col_def.data_type));
-                        }
-                    }
-                }
-            }
-        }
-    } 
-    // Real structure navigation (fallback)
-    else if !state.structure_navigation_stack.is_empty() {
+    // Real structure navigation
+    if !state.structure_navigation_stack.is_empty() {
         if let Some(nav_ctx) = state.structure_navigation_stack.last() {
             // Walk parent lineage to get full ancestry
             if let Some(parent_sheet) = registry.get_sheet(&nav_ctx.parent_category, &nav_ctx.parent_sheet_name) {

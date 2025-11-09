@@ -2,7 +2,7 @@
 // Cascading updates - maintaining referential integrity across related tables
 
 use super::super::error::DbResult;
-use rusqlite::{params, Connection};
+use rusqlite::Connection;
 
 /// Cascade parent key value change to child and descendant structure tables.
 ///
@@ -39,6 +39,7 @@ pub fn cascade_key_value_change_to_children(
     parent_column_name: &str,
     old_value: &str,
     new_value: &str,
+    daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
 ) -> DbResult<()> {
     bevy::log::info!(
         "Cascading key value change to child tables: parent='{}', column='{}', old='{}', new='{}'",
@@ -86,14 +87,27 @@ pub fn cascade_key_value_change_to_children(
     for child_table in &child_tables {
         bevy::log::debug!("Processing child table '{}'", child_table);
         
-        // Update parent_key values where they match the old value
-        let updated = conn.execute(
-            &format!(
+        // Update parent_key values where they match the old value - WRITE through daemon
+        use crate::sheets::database::daemon_client::Statement;
+        
+        let stmt = Statement {
+            sql: format!(
                 "UPDATE \"{}\" SET parent_key = ? WHERE parent_key = ?",
                 child_table
             ),
-            params![new_value, old_value],
-        )?;
+            params: vec![
+                serde_json::Value::String(new_value.to_string()),
+                serde_json::Value::String(old_value.to_string()),
+            ],
+        };
+        
+        let response = daemon_client.exec_batch(vec![stmt])
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                e
+            ))))?;
+        
+        let updated = response.rows_affected.unwrap_or(0);
         
         if updated > 0 {
             bevy::log::info!(
@@ -110,6 +124,7 @@ pub fn cascade_key_value_change_to_children(
             &all_structure_tables,
             old_value,
             new_value,
+            daemon_client,
         )?;
     }
     
@@ -135,6 +150,7 @@ fn cascade_value_to_descendants(
     all_structure_tables: &[String],
     old_value: &str,
     new_value: &str,
+    daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
 ) -> DbResult<usize> {
     let prefix = format!("{}_", parent_table);
     let descendants: Vec<String> = all_structure_tables
@@ -163,20 +179,33 @@ fn cascade_value_to_descendants(
             .query_map([], |row| row.get::<_, String>(1))?
             .collect::<Result<Vec<_>, _>>()?;
         
-        // First, update parent_key column if it exists and matches the old value
+        // First, update parent_key column if it exists and matches the old value - WRITE through daemon
         if columns.iter().any(|col| col == "parent_key") {
             bevy::log::debug!(
                 "    Checking parent_key column in '{}'",
                 descendant_table
             );
             
-            let updated = conn.execute(
-                &format!(
+            use crate::sheets::database::daemon_client::Statement;
+            
+            let stmt = Statement {
+                sql: format!(
                     "UPDATE \"{}\" SET parent_key = ? WHERE parent_key = ?",
                     descendant_table
                 ),
-                params![new_value, old_value],
-            )?;
+                params: vec![
+                    serde_json::Value::String(new_value.to_string()),
+                    serde_json::Value::String(old_value.to_string()),
+                ],
+            };
+            
+            let response = daemon_client.exec_batch(vec![stmt])
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    e
+                ))))?;
+            
+            let updated = response.rows_affected.unwrap_or(0);
             
             if updated > 0 {
                 bevy::log::info!(
@@ -187,7 +216,7 @@ fn cascade_value_to_descendants(
             }
         }
         
-        // Update all grand_N_parent columns
+        // Update all grand_N_parent columns - WRITE through daemon
         for column_name in &columns {
             if column_name.starts_with("grand_") && column_name.ends_with("_parent") {
                 bevy::log::debug!(
@@ -195,14 +224,26 @@ fn cascade_value_to_descendants(
                     column_name, descendant_table
                 );
                 
-                // Update values where they match the old value
-                let updated = conn.execute(
-                    &format!(
+                use crate::sheets::database::daemon_client::Statement;
+                
+                let stmt = Statement {
+                    sql: format!(
                         "UPDATE \"{}\" SET \"{}\" = ? WHERE \"{}\" = ?",
                         descendant_table, column_name, column_name
                     ),
-                    params![new_value, old_value],
-                )?;
+                    params: vec![
+                        serde_json::Value::String(new_value.to_string()),
+                        serde_json::Value::String(old_value.to_string()),
+                    ],
+                };
+                
+                let response = daemon_client.exec_batch(vec![stmt])
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        e
+                    ))))?;
+                
+                let updated = response.rows_affected.unwrap_or(0);
                 
                 if updated > 0 {
                     bevy::log::info!(
@@ -221,6 +262,7 @@ fn cascade_value_to_descendants(
             all_structure_tables,
             old_value,
             new_value,
+            daemon_client,
         )?;
     }
     

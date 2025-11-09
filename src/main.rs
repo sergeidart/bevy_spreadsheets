@@ -25,6 +25,7 @@ mod settings;
 
 mod example_definitions;
 mod sheets;
+mod single_instance;
 mod ui;
 mod visual_copier;
 
@@ -40,7 +41,25 @@ pub struct ApiKeyDisplayStatus {
 #[derive(Resource, Debug, Default)]
 pub struct SessionApiKey(pub Option<String>);
 
+#[derive(Resource)]
+pub struct IpcReceiver(std::sync::Arc<std::sync::Mutex<std::sync::mpsc::Receiver<()>>>);
+
 fn main() {
+    // Check for single instance before doing anything else
+    let _instance_guard = match single_instance::SingleInstanceGuard::try_acquire() {
+        Some(guard) => guard,
+        None => {
+            // Another instance is already running
+            println!("Another instance of SkylineDB is already running. Bringing it to foreground...");
+            single_instance::SingleInstanceGuard::signal_existing_instance();
+            std::thread::sleep(std::time::Duration::from_millis(500)); // Give time for the signal
+            return; // Exit this instance
+        }
+    };
+
+    // Start IPC listener to receive signals from other instances
+    let ipc_receiver = single_instance::start_ipc_listener();
+
     // --- Always write the Python script at startup to ensure it's up to date ---
     const AI_PROCESSOR_PY: &str = include_str!("../script/ai_processor.py");
     let script_path = std::path::Path::new("script/ai_processor.py");
@@ -72,6 +91,7 @@ fn main() {
             focused_mode: UpdateMode::Continuous,
             unfocused_mode: UpdateMode::reactive_low_power(Duration::from_secs_f32(1.0 / 1.0)),
         })
+        .insert_resource(IpcReceiver(std::sync::Arc::new(std::sync::Mutex::new(ipc_receiver))))
         .init_resource::<ApiKeyDisplayStatus>()
         .init_resource::<SessionApiKey>()
         .add_plugins(
@@ -103,7 +123,11 @@ fn main() {
             load_app_settings_startup,
         ))
         .add_systems(Update, fps_limit)
+        .add_systems(Update, handle_ipc_focus_request)
         .run();
+    
+    // Keep the instance guard alive until the app exits
+    drop(_instance_guard);
 }
 
 fn fps_limit(
@@ -153,6 +177,25 @@ fn load_app_settings_startup(mut state: ResMut<EditorWindowState>) {
         );
     } else {
         info!("No persisted app settings found; using defaults.");
+    }
+}
+
+fn handle_ipc_focus_request(
+    ipc_receiver: Res<IpcReceiver>,
+    primary_window_query: Query<Entity, With<PrimaryWindow>>,
+    windows: NonSend<bevy::winit::WinitWindows>,
+) {
+    // Check if there's a request to bring the window to foreground
+    if let Ok(receiver) = ipc_receiver.0.lock() {
+        if receiver.try_recv().is_ok() {
+            if let Ok(primary_entity) = primary_window_query.single() {
+                if let Some(winit_window) = windows.get_window(primary_entity) {
+                    winit_window.focus_window();
+                    winit_window.request_user_attention(Some(UserAttentionType::Critical));
+                    info!("Window brought to foreground due to IPC request");
+                }
+            }
+        }
     }
 }
 

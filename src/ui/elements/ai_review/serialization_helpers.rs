@@ -4,7 +4,6 @@
 
 use std::collections::HashMap;
 use crate::sheets::resources::SheetRegistry;
-use crate::sheets::systems::logic::lineage_helpers::resolve_parent_key_from_lineage;
 use crate::ui::elements::editor::state::{EditorWindowState, StructureReviewEntry};
 
 /// Serialize structure rows to JSON string (array of objects format)
@@ -77,8 +76,8 @@ pub fn resolve_parent_key_for_new_row(
     registry: &SheetRegistry,
     selected_category: &Option<String>,
     active_sheet_name: &str,
-    key_overrides: &HashMap<usize, bool>,
-    ancestor_key_values: &Vec<String>,
+    _key_overrides: &HashMap<usize, bool>,
+    _ancestor_key_values: &Vec<String>,
 ) -> Option<(usize, String)> {
     // Get metadata for the current (child) sheet
     let child_meta = registry
@@ -113,51 +112,7 @@ pub fn resolve_parent_key_for_new_row(
         return None;
     }
 
-    // PRIORITY 2: Virtual structure stack (JSON structure fields)
-    if !state.virtual_structure_stack.is_empty() {
-        let chain_len = state.virtual_structure_stack.len();
-        let immediate_parent_idx = chain_len - 1;
-
-        // Check if user wants to override the parent for this level
-        let override_flag = *key_overrides
-            .get(&(1000 + immediate_parent_idx))
-            .unwrap_or(&false);
-
-        if override_flag {
-            // Get lineage values up to immediate parent
-            let lineage_values: Vec<String> = ancestor_key_values
-                .iter()
-                .take(chain_len)
-                .cloned()
-                .collect();
-
-            if !lineage_values.is_empty() {
-                // Get parent sheet name from virtual structure stack
-                if let Some(parent_ctx) = state.virtual_structure_stack.last() {
-                    // Resolve parent_key from lineage
-                    if let Some(parent_row_idx) = resolve_parent_key_from_lineage(
-                        registry,
-                        selected_category,
-                        &parent_ctx.parent.parent_sheet,
-                        &lineage_values,
-                    ) {
-                        bevy::log::info!(
-                            "Resolved parent_key={} from virtual_structure_stack lineage {:?}",
-                            parent_row_idx,
-                            lineage_values
-                        );
-                        return Some((parent_key_col, parent_row_idx.to_string()));
-                    } else {
-                        bevy::log::warn!(
-                            "Failed to resolve parent_key from lineage: {:?}",
-                            lineage_values
-                        );
-                    }
-                }
-            }
-        }
-    }
-
+    // Virtual structure stack deprecated; skip this priority
     None
 }
 

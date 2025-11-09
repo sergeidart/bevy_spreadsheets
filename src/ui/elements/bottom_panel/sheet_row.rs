@@ -1,6 +1,7 @@
 // src/ui/elements/bottom_panel/sheet_row.rs
 use bevy_egui::egui;
 use crate::sheets::resources::SheetRegistry;
+use crate::sheets::database::daemon_client::DaemonClient;
 use crate::sheets::systems::ui_handlers::sheet_handlers;
 use crate::ui::elements::editor::state::EditorWindowState;
 
@@ -10,6 +11,7 @@ pub fn show_sheet_controls<'a, 'w>(
     state: &mut EditorWindowState,
     registry: &mut SheetRegistry,
     _event_writers: &mut super::SheetManagementEventWriters<'a, 'w>,
+    daemon_client: &DaemonClient,
 ) {
     let sheets_in_category = registry
         .get_sheet_names_in_category_filtered(&state.selected_category, state.show_hidden_sheets);
@@ -38,7 +40,7 @@ pub fn show_sheet_controls<'a, 'w>(
             ui_r.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
                 super::dropdowns::render_sheet_selector(ui, state, registry, &sheets_in_category);
                 render_sheet_controls(ui, state);
-                render_sheet_tabs(ui, state, registry, &sheets_in_category, line_h);
+                render_sheet_tabs(ui, state, registry, &sheets_in_category, line_h, daemon_client);
             });
         },
     );
@@ -46,8 +48,6 @@ pub fn show_sheet_controls<'a, 'w>(
 
 /// Render sheet control buttons (rename, delete, expand)
 fn render_sheet_controls(ui: &mut egui::Ui, state: &mut EditorWindowState) {
-    let can_manage = sheet_handlers::can_manage_sheet(state);
-
     // Removed inline rename and delete; use context menu on sheet dropdown for these actions
 
     ui.add_space(6.0);
@@ -69,6 +69,7 @@ fn render_sheet_tabs(
     registry: &mut SheetRegistry,
     sheets_in_category: &[String],
     line_h: f32,
+    daemon_client: &DaemonClient,
 ) {
     if state.sheet_picker_expanded && !sheets_in_category.is_empty() {
         egui::ScrollArea::horizontal()
@@ -79,7 +80,7 @@ fn render_sheet_tabs(
             .show(ui, |ui_tabs| {
                 ui_tabs.horizontal(|ui_th| {
                     for name in sheets_in_category.iter() {
-                        render_sheet_tab(ui_th, state, registry, name);
+                        render_sheet_tab(ui_th, state, registry, name, daemon_client);
                     }
                 });
             });
@@ -92,6 +93,7 @@ fn render_sheet_tab(
     state: &mut EditorWindowState,
     registry: &mut SheetRegistry,
     name: &str,
+    daemon_client: &DaemonClient,
 ) {
     let is_sel = state.selected_sheet_name.as_deref() == Some(name);
     let resp = ui_th.selectable_label(is_sel, name).on_hover_text(name);
@@ -111,7 +113,7 @@ fn render_sheet_tab(
         }
         menu_ui.separator();
         // Hidden toggle from existing context menu
-        super::popups::handle_sheet_context_menu(menu_ui, state, registry, name);
+        super::popups::handle_sheet_context_menu(menu_ui, state, registry, name, daemon_client);
     });
     
     // Drag-and-drop

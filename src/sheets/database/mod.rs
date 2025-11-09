@@ -2,6 +2,9 @@
 
 pub mod checkpoint;
 pub mod connection;
+pub mod daemon_client;
+pub mod daemon_manager;
+pub mod daemon_resource;
 pub mod error;
 pub mod migration;
 pub mod reader;
@@ -33,9 +36,12 @@ impl DbConfig {
     }
 
     pub fn new() -> Self {
-        Self {
+        let config = Self {
             skyline_path: Self::default_path(),
-        }
+        };
+        // Ensure the directory exists on creation
+        let _ = config.ensure_directories();
+        config
     }
 
     pub fn ensure_directories(&self) -> std::io::Result<()> {
@@ -61,7 +67,9 @@ pub fn open_or_create_db_for_category(category: &str) -> Result<rusqlite::Connec
     base.push(format!("{}.db", category));
     // Emit a log so the exact DB path is visible when debugging SQL calls
     bevy::log::info!("Opening/creating DB file {}", base.display());
-    match rusqlite::Connection::open(&base) {
+    
+    // Use the proper connection method that ensures WAL mode is enabled
+    match connection::DbConnection::open_existing(&base) {
         Ok(conn) => Ok(conn),
         Err(e) => Err(format!("Failed to open/create DB '{}': {}", base.display(), e)),
     }
@@ -75,10 +83,11 @@ pub fn persist_column_metadata(
     filter_expr: Option<&str>,
     ai_context: Option<&str>,
     ai_include: Option<bool>,
+    daemon_client: &daemon_client::DaemonClient,
 ) -> Result<(), String> {
     match open_or_create_db_for_category(category) {
         Ok(conn) => {
-            let _ = crate::sheets::database::schema::ensure_global_metadata_table(&conn)
+            let _ = crate::sheets::database::schema::ensure_global_metadata_table(&conn, daemon_client)
                 .map_err(|e| e.to_string())?;
             crate::sheets::database::writer::DbWriter::update_column_metadata(
                 &conn,
@@ -87,35 +96,7 @@ pub fn persist_column_metadata(
                 filter_expr,
                 ai_context,
                 ai_include,
-            )
-            .map_err(|e| e.to_string())
-        }
-        Err(e) => Err(e),
-    }
-}
-
-/// Convenience helper to persist validator/data_type changes for a column.
-pub fn persist_column_validator(
-    category: &str,
-    table_name: &str,
-    column_index: usize,
-    data_type: crate::sheets::definitions::ColumnDataType,
-    validator: &Option<crate::sheets::definitions::ColumnValidator>,
-    ai_include_in_send: Option<bool>,
-    ai_enable_row_generation: Option<bool>,
-) -> Result<(), String> {
-    match open_or_create_db_for_category(category) {
-        Ok(conn) => {
-            let _ = crate::sheets::database::schema::ensure_global_metadata_table(&conn)
-                .map_err(|e| e.to_string())?;
-            crate::sheets::database::writer::DbWriter::update_column_validator(
-                &conn,
-                table_name,
-                column_index,
-                data_type,
-                validator,
-                ai_include_in_send,
-                ai_enable_row_generation,
+                daemon_client,
             )
             .map_err(|e| e.to_string())
         }
@@ -132,10 +113,11 @@ pub fn persist_column_validator_by_name(
     validator: &Option<crate::sheets::definitions::ColumnValidator>,
     ai_include_in_send: Option<bool>,
     ai_enable_row_generation: Option<bool>,
+    daemon_client: &daemon_client::DaemonClient,
 ) -> Result<(), String> {
     match open_or_create_db_for_category(category) {
         Ok(conn) => {
-            let _ = crate::sheets::database::schema::ensure_global_metadata_table(&conn)
+            let _ = crate::sheets::database::schema::ensure_global_metadata_table(&conn, daemon_client)
                 .map_err(|e| e.to_string())?;
             
             // Lookup column_index by name in the metadata table
@@ -180,6 +162,7 @@ pub fn persist_column_validator_by_name(
                     validator,
                     ai_include_in_send,
                     ai_enable_row_generation,
+                    daemon_client,
                 )
                 .map_err(|e| e.to_string())
             } else {

@@ -10,7 +10,6 @@ impl Default for EditorWindowState {
         Self {
             selected_category: None,
             selected_sheet_name: None,
-            virtual_structure_stack: Vec::new(),
             structure_navigation_stack: Vec::new(),
             show_rename_popup: false,
             rename_target_category: None,

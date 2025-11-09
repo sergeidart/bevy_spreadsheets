@@ -48,8 +48,17 @@ pub fn handle_migration_requests(
                 });
 
                 // Open or create database
+                // Create daemon client for write operations
+                let daemon_client = {
+                    let daemon_path = super::super::daemon_manager::get_daemon_path();
+                    super::super::daemon_client::DaemonClient::new(
+                        None,
+                        daemon_path.to_string_lossy().to_string(),
+                    )
+                };
+                
                 let mut conn = if create_new || !db_path.exists() {
-                    super::super::connection::DbConnection::create_new(&db_path)
+                    super::super::connection::DbConnection::create_new(&db_path, &daemon_client)
                         .map_err(|e| e.to_string())?
                 } else {
                     rusqlite::Connection::open(&db_path).map_err(|e| e.to_string())?
@@ -156,6 +165,7 @@ pub fn handle_migration_requests(
                             sheet_name,
                             Some(idx as i32),
                             Some(&mut row_notifier),
+                            &daemon_client,
                         ) {
                             Ok(_) => {
                                 report.sheets_migrated += 1;
@@ -231,7 +241,7 @@ pub fn handle_migration_requests(
                     super::super::migration::remove_grand_parent_columns::RemoveGrandParentColumns
                 ));
                 
-                match fix_manager.apply_all_fixes(&mut conn) {
+                match fix_manager.apply_all_fixes(&mut conn, &daemon_client) {
                     Ok(applied) => {
                         if !applied.is_empty() {
                             info!("Applied migration fixes: {:?}", applied);

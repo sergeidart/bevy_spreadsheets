@@ -9,26 +9,13 @@ use bevy::prelude::EventWriter;
 /// Derive root context (category, sheet) and current structure path from the virtual stack.
 /// Returns (root_category, root_sheet, structure_path).
 pub fn derive_structure_context(
-    state: &EditorWindowState,
+    _state: &EditorWindowState,
     category: &Option<String>,
     sheet_name: &str,
 ) -> (Option<String>, String, Vec<usize>) {
-    let structure_path: Vec<usize> = state
-        .virtual_structure_stack
-        .iter()
-        .map(|ctx| ctx.parent.parent_col)
-        .collect();
-
-    let (root_category, root_sheet) = if let Some(first_ctx) = state.virtual_structure_stack.first()
-    {
-        (
-            first_ctx.parent.parent_category.clone(),
-            first_ctx.parent.parent_sheet.clone(),
-        )
-    } else {
-        (category.clone(), sheet_name.to_string())
-    };
-
+    // Virtual structures deprecated; return current sheet as root
+    let structure_path: Vec<usize> = Vec::new();
+    let (root_category, root_sheet) = (category.clone(), sheet_name.to_string());
     (root_category, root_sheet, structure_path)
 }
 
@@ -41,21 +28,9 @@ pub fn handle_structure_checkbox_change(
     is_included: bool,
     structure_send_writer: &mut EventWriter<RequestUpdateAiStructureSend>,
 ) {
-    let mut structure_path: Vec<usize> = state
-        .virtual_structure_stack
-        .iter()
-        .map(|ctx| ctx.parent.parent_col)
-        .collect();
-
-    let (root_category, root_sheet) = if let Some(first_ctx) = state.virtual_structure_stack.first()
-    {
-        (
-            first_ctx.parent.parent_category.clone(),
-            first_ctx.parent.parent_sheet.clone(),
-        )
-    } else {
-        (category.clone(), sheet_name.to_string())
-    };
+    // Virtual structures deprecated; use current sheet as root
+    let mut structure_path: Vec<usize> = Vec::new();
+    let (root_category, root_sheet) = (category.clone(), sheet_name.to_string());
 
     if root_sheet.is_empty() {
         warn!(

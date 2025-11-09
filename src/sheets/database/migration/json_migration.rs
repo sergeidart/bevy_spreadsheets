@@ -4,10 +4,11 @@ use bevy::prelude::*;
 use rusqlite::Connection;
 use std::collections::HashMap;
 use std::path::Path;
+// Use modern Base64 engine API (deprecated base64::encode replaced)
+use base64::Engine as _;
 
 use super::super::error::{DbError, DbResult};
-use super::super::{schema, writer::DbWriter};
-use super::dependency_handler::DependencyHandler;
+use super::super::{schema, writer::DbWriter, daemon_client::{DaemonClient, Statement}};
 use super::io_helpers::IoHelpers;
 use super::json_extractor::{expand_value_to_rows, parse_cell_json};
 use crate::sheets::definitions::{ColumnValidator, SheetMetadata};
@@ -31,6 +32,7 @@ impl JsonMigration {
         table_name: &str,
         display_order: Option<i32>,
         mut on_rows_chunk: Option<&mut dyn FnMut(usize)>,
+        daemon_client: &DaemonClient,
     ) -> DbResult<()> {
         info!("Migrating sheet '{}' from JSON files...", table_name);
 
@@ -41,11 +43,11 @@ impl JsonMigration {
         // 2. Create schema
         let tx = conn.transaction()?;
 
-        schema::ensure_global_metadata_table(&tx)?;
-        schema::create_data_table(&tx, table_name, &metadata.columns)?;
-        schema::create_metadata_table(&tx, table_name, &metadata)?;
-        schema::create_ai_groups_table(&tx, table_name, &metadata)?;
-        schema::insert_table_metadata(&tx, table_name, &metadata, display_order)?;
+        schema::ensure_global_metadata_table(&tx, daemon_client)?;
+        schema::create_data_table(table_name, &metadata.columns, daemon_client)?;
+        schema::create_metadata_table(table_name, &metadata, daemon_client)?;
+        schema::create_ai_groups_table(&tx, table_name, &metadata, daemon_client)?;
+        schema::insert_table_metadata(table_name, &metadata, display_order, daemon_client)?;
 
         // 3. Handle structure columns: create structure tables and their metadata
         let mut structure_fields_by_col: HashMap<
@@ -56,14 +58,14 @@ impl JsonMigration {
         for (col_idx, col) in metadata.columns.iter().enumerate() {
             if matches!(col.validator, Some(ColumnValidator::Structure)) {
                 if let Some(schema_fields) = &col.structure_schema {
-                    schema::create_structure_table(&tx, table_name, col, None)?;
+                    schema::create_structure_table(&tx, table_name, col, None, daemon_client)?;
 
                     let structure_table = format!("{}_{}", table_name, col.header);
 
                     // Create metadata table for the structure sheet (columns only)
                     let structure_meta_name = format!("{}_Metadata", structure_table);
-                    tx.execute(
-                        &format!(
+                    let create_meta_stmt = Statement {
+                        sql: format!(
                             "CREATE TABLE IF NOT EXISTS \"{}\" (
                                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                                 column_index INTEGER UNIQUE NOT NULL,
@@ -79,33 +81,40 @@ impl JsonMigration {
                             )",
                             structure_meta_name
                         ),
-                        [],
-                    )?;
+                        params: vec![],
+                    };
+                    daemon_client.exec_batch(vec![create_meta_stmt])
+                        .map_err(|e| DbError::MigrationFailed(format!("Failed to create structure metadata table: {}", e)))?;
 
                     // Insert structure fields metadata (index starts at 0 for first structure field)
+                    let mut insert_stmts = Vec::new();
                     for (sidx, field) in schema_fields.iter().enumerate() {
                         let ai_ctx: Option<String> = field.ai_context.clone();
                         let filter_expr: Option<String> = field.filter.clone();
                         let include_in_send: i32 = field.ai_include_in_send.unwrap_or(true) as i32;
                         let allow_add: i32 = field.ai_enable_row_generation.unwrap_or(false) as i32;
-                        tx.execute(
-                            &format!(
+                        insert_stmts.push(Statement {
+                            sql: format!(
                                 "INSERT OR REPLACE INTO \"{}\" 
                                  (column_index, column_name, data_type, validator_type, validator_config, ai_context, filter_expr, ai_enable_row_generation, ai_include_in_send, deleted)
                                  VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?)",
                                 structure_meta_name
                             ),
-                            rusqlite::params![
-                                sidx as i32,
-                                &field.header,
-                                format!("{:?}", field.data_type),
-                                ai_ctx,
-                                filter_expr,
-                                allow_add,
-                                include_in_send,
-                                0, // deleted flag
+                            params: vec![
+                                serde_json::Value::Number((sidx as i32).into()),
+                                serde_json::Value::String(field.header.clone()),
+                                serde_json::Value::String(format!("{:?}", field.data_type)),
+                                ai_ctx.map(serde_json::Value::String).unwrap_or(serde_json::Value::Null),
+                                filter_expr.map(serde_json::Value::String).unwrap_or(serde_json::Value::Null),
+                                serde_json::Value::Number(allow_add.into()),
+                                serde_json::Value::Number(include_in_send.into()),
+                                serde_json::Value::Number(0.into()), // deleted flag
                             ],
-                        )?;
+                        });
+                    }
+                    if !insert_stmts.is_empty() {
+                        daemon_client.exec_batch(insert_stmts)
+                            .map_err(|e| DbError::MigrationFailed(format!("Failed to insert structure field metadata: {}", e)))?;
                     }
 
                     structure_fields_by_col.insert(col_idx, schema_fields.clone());
@@ -119,7 +128,7 @@ impl JsonMigration {
             if let Some(cb) = maybe_cb.as_deref_mut() {
                 cb(rows_done);
             }
-        })?;
+        }, daemon_client)?;
         // Always emit a final main-progress tick so small sheets (<1000 rows) still report progress
         if let Some(cb) = maybe_cb.as_deref_mut() {
             cb(grid.len());
@@ -134,6 +143,7 @@ impl JsonMigration {
                 &metadata,
                 &structure_fields_by_col,
                 maybe_cb,
+                daemon_client,
             )?;
         }
 
@@ -151,6 +161,7 @@ impl JsonMigration {
         metadata: &SheetMetadata,
         structure_fields_by_col: &HashMap<usize, Vec<crate::sheets::definitions::StructureFieldDefinition>>,
         mut maybe_cb: Option<&mut &mut dyn FnMut(usize)>,
+        daemon_client: &DaemonClient,
     ) -> DbResult<()> {
         // Track aggregate count of inserted structure rows to emit per-1k updates
         let main_total_rows = grid.len();
@@ -227,7 +238,7 @@ impl JsonMigration {
                     "INSERT INTO \"{}\" (parent_id, row_index, parent_key, {}) VALUES ({})",
                     structure_table, field_cols, placeholders
                 );
-                let mut stmt = tx.prepare(&insert_sql)?;
+                // Prepare removed: we batch through daemon, no direct stmt.execute
                 
                 for (_sidx, srow) in rows_to_insert.iter().enumerate() {
                     // Ensure the row width matches the schema width
@@ -292,7 +303,28 @@ impl JsonMigration {
                         params.push(rusqlite::types::Value::Text(cell));
                     }
                     
-                    stmt.execute(rusqlite::params_from_iter(params.iter()))?;
+                    // Redirect structure row insertion through daemon for write serialization
+                    {
+                        use crate::sheets::database::daemon_client::Statement as DStatement;
+                        let mut json_params: Vec<serde_json::Value> = Vec::with_capacity(params.len());
+                        for p in params.iter() {
+                            use rusqlite::types::Value as Rv;
+                            match p {
+                                Rv::Null => json_params.push(serde_json::Value::Null),
+                                Rv::Integer(i) => json_params.push(serde_json::Value::Number((*i).into())),
+                                Rv::Real(f) => json_params.push(serde_json::json!(*f)),
+                                Rv::Text(s) => json_params.push(serde_json::Value::String(s.clone())),
+                                Rv::Blob(b) => {
+                                    // Encode blob using explicit engine to avoid deprecated base64::encode warning
+                                    let encoded = base64::engine::general_purpose::STANDARD.encode(b);
+                                    json_params.push(serde_json::Value::String(encoded));
+                                },
+                            }
+                        }
+                        let insert_stmt = DStatement { sql: insert_sql.clone(), params: json_params };
+                        daemon_client.exec_batch(vec![insert_stmt])
+                            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))))?;
+                    }
                     struct_total_inserted += 1;
                     
                     if struct_total_inserted > 0 && struct_total_inserted % 1000 == 0 {
@@ -313,76 +345,5 @@ impl JsonMigration {
         }
 
         Ok(())
-    }
-
-    /// Migrate multiple sheets with dependency resolution
-    pub fn migrate_folder_to_db(
-        db_path: &Path,
-        folder_path: &Path,
-        create_new_db: bool,
-    ) -> DbResult<MigrationReport> {
-        let mut report = MigrationReport::default();
-
-        // Scan folder
-        let sheets = IoHelpers::scan_json_folder(folder_path)?;
-
-        if sheets.is_empty() {
-            return Err(DbError::MigrationFailed(
-                "No valid JSON sheet pairs found".into(),
-            ));
-        }
-
-        info!("Found {} sheets to migrate", sheets.len());
-
-        // Open or create database
-        let mut conn = if create_new_db || !db_path.exists() {
-            super::super::connection::DbConnection::create_new(db_path)?
-        } else {
-            let c = Connection::open(db_path)?;
-            // Configure for better concurrency
-            c.execute_batch(
-                "PRAGMA journal_mode=WAL;
-                 PRAGMA synchronous=NORMAL;
-                 PRAGMA foreign_keys=ON;",
-            )?;
-            c
-        };
-
-        conn.execute_batch("PRAGMA foreign_keys = ON;")?;
-
-        // Sort sheets by dependency (migrate dependencies first)
-        let ordered_sheets = DependencyHandler::order_sheets_by_dependency(&sheets);
-
-        // Migrate each sheet
-        for (idx, sheet_name) in ordered_sheets.iter().enumerate() {
-            if let Some(pair) = sheets.get(sheet_name) {
-                match Self::migrate_sheet_from_json(
-                    &mut conn,
-                    &pair.data_path,
-                    &pair.meta_path,
-                    sheet_name,
-                    Some(idx as i32),
-                    None,
-                ) {
-                    Ok(_) => {
-                        report.sheets_migrated += 1;
-                        for dep in &pair.dependencies {
-                            if !report.linked_sheets_found.contains(dep) {
-                                report.linked_sheets_found.push(dep.clone());
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        error!("Failed to migrate '{}': {}", sheet_name, e);
-                        report.sheets_failed += 1;
-                        report
-                            .failed_sheets
-                            .push((sheet_name.clone(), e.to_string()));
-                    }
-                }
-            }
-        }
-
-        Ok(report)
     }
 }

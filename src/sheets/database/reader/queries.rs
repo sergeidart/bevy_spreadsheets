@@ -2,59 +2,33 @@
 use rusqlite::Connection;
 use super::super::error::DbResult;
 
-/// Check if a table exists in the database
-pub fn table_exists(conn: &Connection, table_name: &str) -> DbResult<bool> {
-    let exists: bool = conn.query_row(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?",
-        [table_name],
-        |row| row.get::<_, i32>(0).map(|v| v > 0),
-    )?;
-    Ok(exists)
-}
+// NOTE: table_exists() and get_table_type() have been consolidated into schema/queries.rs
+// Use super::super::schema::queries::{table_exists, get_table_type} instead
 
-/// Check if a column exists in a table
-pub fn column_exists_in_table(conn: &Connection, table_name: &str, column_name: &str) -> DbResult<bool> {
-    let mut stmt = conn.prepare(&format!("PRAGMA table_info(\"{}\")", table_name))?;
-    for row in stmt.query_map([], |r| r.get::<_, String>(1))? {
-        if row? == column_name {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
+// NOTE: column_exists_in_table() is no longer needed since daemon handles duplicate column checks
+// The daemon's exec_alter_table will gracefully handle existing columns
 
 /// Add a column to a table if it doesn't exist
+/// NOTE: This is a write operation and should go through the daemon
 pub fn add_column_if_missing(
-    conn: &Connection,
+    daemon_client: &super::super::daemon_client::DaemonClient,
     table_name: &str,
     column_name: &str,
     column_type: &str,
     default_value: &str,
 ) -> DbResult<()> {
-    if !column_exists_in_table(conn, table_name, column_name)? {
-        conn.execute(
-            &format!(
-                "ALTER TABLE \"{}\" ADD COLUMN {} {} DEFAULT {}",
-                table_name, column_name, column_type, default_value
-            ),
-            [],
-        )?;
-        bevy::log::info!("Added column '{}' to table '{}'", column_name, table_name);
-    }
+    daemon_client
+        .exec_alter_table(table_name, column_name, column_type, default_value)
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            e,
+        ))))?;
+    bevy::log::info!("Added column '{}' to table '{}'", column_name, table_name);
     Ok(())
 }
 
-/// Get table type from global metadata
-pub fn get_table_type(conn: &Connection, table_name: &str) -> Option<String> {
-    conn.query_row(
-        "SELECT table_type FROM _Metadata WHERE table_name = ?",
-        [table_name],
-        |row| row.get(0),
-    )
-    .ok()
-}
-
 /// Get physical column information (name, SQL type) from a table
+/// Returns both physical (sanitized) and metadata indices
 pub fn get_physical_columns(conn: &Connection, table_name: &str) -> DbResult<Vec<(String, String)>> {
     let mut columns = Vec::new();
     let mut stmt = conn.prepare(&format!("PRAGMA table_info(\"{}\")", table_name))?;
@@ -67,6 +41,7 @@ pub fn get_physical_columns(conn: &Connection, table_name: &str) -> DbResult<Vec
 }
 
 /// Get column names from physical table
+/// These are the ACTUAL column names in the DB (may differ from visual names)
 pub fn get_physical_column_names(conn: &Connection, table_name: &str) -> DbResult<Vec<String>> {
     let mut columns = Vec::new();
     let mut stmt = conn.prepare(&format!("PRAGMA table_info(\"{}\")", table_name))?;
@@ -112,21 +87,20 @@ pub fn read_metadata_columns(
 }
 
 /// Insert metadata row for an orphaned column
+/// NOTE: This is a write operation and should go through the daemon
 pub fn insert_orphaned_column_metadata(
-    conn: &Connection,
+    daemon_client: &super::super::daemon_client::DaemonClient,
     meta_table: &str,
     column_index: i32,
     column_name: &str,
     data_type: &str,
 ) -> DbResult<()> {
-    conn.execute(
-        &format!(
-            "INSERT INTO \"{}\" (column_index, column_name, data_type, validator_type, deleted) 
-             VALUES (?, ?, ?, ?, 0)",
-            meta_table
-        ),
-        rusqlite::params![column_index, column_name, data_type, "Basic"],
-    )?;
+    daemon_client
+        .exec_insert_metadata(meta_table, column_index, column_name, data_type)
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            e,
+        ))))?;
     Ok(())
 }
 
@@ -240,7 +214,6 @@ pub fn read_grid_with_structure_counts(
             }
 
             Ok(GridRow {
-                row_id,
                 row_index,
                 values,
                 structure_counts,
@@ -272,6 +245,7 @@ pub fn list_all_tables(conn: &Connection) -> DbResult<Vec<String>> {
 
 #[derive(Debug)]
 pub struct MetadataColumnRow {
+    /// Visual column index (display order in UI, from metadata)
     pub column_index: i32,
     pub column_name: String,
     pub display_name: Option<String>,
@@ -283,6 +257,32 @@ pub struct MetadataColumnRow {
     pub ai_enable_row_generation: Option<i32>,
     pub ai_include_in_send: Option<i32>,
     pub deleted: Option<i32>,
+}
+
+impl MetadataColumnRow {
+    /// Get physical column index by looking up in actual table schema
+    /// Physical index accounts for reordering - it's the actual DB column position
+    /// 
+    /// # Usage
+    /// Call this when you need to map a metadata column_index to its actual position
+    /// in the database table, which may differ after column reordering operations.
+    /// 
+    /// # Example
+    /// ```ignore
+    /// // When reading data where column order might not match metadata:
+    /// let meta_rows = get_metadata_columns(&conn, table_name)?;
+    /// for meta_row in &meta_rows {
+    ///     if let Some(physical_idx) = meta_row.get_physical_index(&conn, table_name)? {
+    ///         // Use physical_idx to access the correct column in query results
+    ///     }
+    /// }
+    /// ```
+    pub fn get_physical_index(&self, conn: &Connection, table_name: &str) -> DbResult<Option<usize>> {
+        let physical_columns = get_physical_column_names(conn, table_name)?;
+        Ok(physical_columns
+            .iter()
+            .position(|name| name.eq_ignore_ascii_case(&self.column_name)))
+    }
 }
 
 #[derive(Debug)]
@@ -298,7 +298,6 @@ pub struct TableMetadataRow {
 
 #[derive(Debug)]
 pub struct GridRow {
-    pub row_id: i64,
     pub row_index: i64,
     pub values: Vec<String>,
     pub structure_counts: Vec<(usize, String)>, // (col_idx, count_label)

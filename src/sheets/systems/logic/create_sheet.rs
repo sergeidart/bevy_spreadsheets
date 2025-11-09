@@ -1,6 +1,7 @@
 // src/sheets/systems/logic/create_sheet.rs
 use crate::{
     sheets::{
+        database::daemon_resource::SharedDaemonClient,
         definitions::{SheetGridData, SheetMetadata},
         events::{RequestCreateNewSheet, SheetDataModifiedInRegistryEvent, SheetOperationFeedback},
         resources::SheetRegistry,
@@ -21,6 +22,7 @@ pub fn handle_create_new_sheet_request(
     mut feedback_writer: EventWriter<SheetOperationFeedback>,
     mut data_modified_writer: EventWriter<SheetDataModifiedInRegistryEvent>,
     mut editor_state_opt: Option<ResMut<EditorWindowState>>, // Make optional if direct state change isn't critical path
+    daemon_client: Res<SharedDaemonClient>,
 ) {
     for event in events.read() {
         let category = &event.category;
@@ -96,7 +98,7 @@ pub fn handle_create_new_sheet_request(
                 Ok(conn) => {
                     // Ensure global metadata exists
                     if let Err(e) =
-                        crate::sheets::database::schema::ensure_global_metadata_table(&conn)
+                        crate::sheets::database::schema::ensure_global_metadata_table(&conn, daemon_client.client())
                     {
                         error!(
                             "Failed to ensure _Metadata in DB '{}': {}",
@@ -116,10 +118,10 @@ pub fn handle_create_new_sheet_request(
 
                     // Insert _Metadata row for this table
                     if let Err(e) = crate::sheets::database::schema::insert_table_metadata(
-                        &conn,
                         desired_name,
                         &new_metadata,
                         next_order,
+                        daemon_client.client(),
                     ) {
                         error!(
                             "Failed to insert _Metadata for new sheet '{:?}/{}': {}",
@@ -129,9 +131,9 @@ pub fn handle_create_new_sheet_request(
 
                     // Create the per-table metadata and data tables
                     if let Err(e) = crate::sheets::database::schema::create_metadata_table(
-                        &conn,
                         desired_name,
                         &new_metadata,
+                        daemon_client.client(),
                     ) {
                         error!(
                             "Failed to create metadata table for '{:?}/{}': {}",
@@ -139,9 +141,9 @@ pub fn handle_create_new_sheet_request(
                         );
                     }
                     if let Err(e) = crate::sheets::database::schema::create_data_table(
-                        &conn,
                         desired_name,
                         &new_metadata.columns,
+                        daemon_client.client(),
                     ) {
                         error!(
                             "Failed to create data table for '{:?}/{}': {}",
@@ -159,7 +161,7 @@ pub fn handle_create_new_sheet_request(
 
                     // Immediately reload runtime metadata from DB so technical columns
                     // (e.g., row_index) are present in-memory before any render cache builds.
-                    match crate::sheets::database::reader::DbReader::read_sheet(&conn, desired_name) {
+                    match crate::sheets::database::reader::DbReader::read_sheet(&conn, desired_name, daemon_client.client()) {
                         Ok(loaded) => {
                             registry.add_or_replace_sheet(category.clone(), desired_name.to_string(), loaded);
                             info!(

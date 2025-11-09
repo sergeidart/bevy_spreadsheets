@@ -3,10 +3,12 @@
 
 use super::super::error::DbResult;
 use super::super::schema::queries::{get_table_columns, table_exists};
+use super::daemon_utils::exec_simple_statement;
 use super::helpers::{
+    drop_column_with_fallback,
     get_column_index_by_name, handle_column_conflict, metadata_table_name,
     rename_column, rename_table, rename_table_triplet,
-    update_metadata_column_name_by_index, with_transaction,
+    update_metadata_column_name_by_index, validate_physical_rename, with_transaction,
 };
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -16,6 +18,7 @@ pub fn rename_data_column(
     table_name: &str,
     old_name: &str,
     new_name: &str,
+    daemon_client: &super::super::daemon_client::DaemonClient,
 ) -> DbResult<()> {
     // Check if a column with new_name already exists in the DB schema
     let existing_columns = get_table_columns(conn, table_name)?;
@@ -42,31 +45,16 @@ pub fn rename_data_column(
         
         if matches!(is_deleted, Some(1)) {
             bevy::log::info!("Column '{}' exists in DB but is marked deleted - dropping it first", new_name);
-            // Drop the deleted column from the table
-            // SQLite doesn't support DROP COLUMN directly in old versions, so we need to check
-            // Try to drop it (SQLite 3.35.0+ supports ALTER TABLE DROP COLUMN)
-            match conn.execute(
-                &format!("ALTER TABLE \"{}\" DROP COLUMN \"{}\"", table_name, new_name),
-                [],
-            ) {
-                Ok(_) => {
-                    bevy::log::info!("Successfully dropped deleted column '{}'", new_name);
-                    // Also remove from metadata
-                    conn.execute(
-                        &format!("DELETE FROM \"{}\" WHERE column_name = ?", meta_table),
-                        params![new_name],
-                    )?;
-                }
-                Err(e) => {
-                    bevy::log::warn!("Failed to drop column '{}': {} - SQLite version may not support DROP COLUMN. Trying workaround.", new_name, e);
-                    // Workaround: Just delete from metadata and mark it as renamed
-                    conn.execute(
-                        &format!("DELETE FROM \"{}\" WHERE column_name = ?", meta_table),
-                        params![new_name],
-                    )?;
-                    // Note: The physical column will remain in DB but won't be in metadata
-                }
-            }
+            
+            // Drop the deleted column from the table (with fallback for old SQLite)
+            drop_column_with_fallback(conn, table_name, new_name, daemon_client)?;
+            
+            // Also remove from metadata
+            exec_simple_statement(
+                format!("DELETE FROM \"{}\" WHERE column_name = ?", meta_table),
+                vec![serde_json::Value::String(new_name.to_string())],
+                daemon_client,
+            )?;
         } else {
             return Err(super::super::error::DbError::Other(format!(
                 "Column '{}' already exists in table '{}' and is not marked as deleted",
@@ -105,7 +93,7 @@ pub fn rename_data_column(
         );
         
         // Handle conflicts
-        handle_column_conflict(conn, &meta_table, table_name, new_name, source_idx)?;
+        handle_column_conflict(conn, &meta_table, table_name, new_name, source_idx, daemon_client)?;
         
         // Update metadata - use column_index to be precise
         bevy::log::debug!(
@@ -113,7 +101,7 @@ pub fn rename_data_column(
             meta_table, new_name, source_idx
         );
         
-        let count = update_metadata_column_name_by_index(conn, &meta_table, source_idx, new_name)?;
+        let count = update_metadata_column_name_by_index(conn, &meta_table, source_idx, new_name, daemon_client)?;
         bevy::log::debug!(
             "rename_data_column (metadata-only): UPDATE affected {} row(s)",
             count
@@ -144,7 +132,7 @@ pub fn rename_data_column(
     );
     
     // Handle conflicts
-    handle_column_conflict(conn, &meta_table, table_name, new_name, source_idx)?;
+    handle_column_conflict(conn, &meta_table, table_name, new_name, source_idx, daemon_client)?;
     
     // Now safe to rename the physical column
     bevy::log::debug!(
@@ -152,7 +140,10 @@ pub fn rename_data_column(
         table_name, old_name, new_name
     );
     
-    rename_column(conn, table_name, old_name, new_name)?;
+    rename_column(conn, table_name, old_name, new_name, daemon_client)?;
+    
+    // Validate the physical rename succeeded
+    validate_physical_rename(conn, table_name, old_name, new_name)?;
     
     // Update metadata to match
     bevy::log::debug!(
@@ -160,7 +151,7 @@ pub fn rename_data_column(
         meta_table, new_name, source_idx
     );
     
-    let _count = update_metadata_column_name_by_index(conn, &meta_table, source_idx, new_name)?;
+    let _count = update_metadata_column_name_by_index(conn, &meta_table, source_idx, new_name, daemon_client)?;
     
     Ok(())
 }
@@ -172,6 +163,7 @@ pub fn update_metadata_column_name(
     table_name: &str,
     column_index: usize,
     new_name: &str,
+    daemon_client: &super::super::daemon_client::DaemonClient,
 ) -> DbResult<()> {
     // Convert runtime column index to persisted index
     let table_type: Option<String> = conn
@@ -211,7 +203,7 @@ pub fn update_metadata_column_name(
     );
     
     // Handle conflicts
-    handle_column_conflict(conn, &meta_table, table_name, new_name, persisted_index as i32)?;
+    handle_column_conflict(conn, &meta_table, table_name, new_name, persisted_index as i32, daemon_client)?;
     
     // Now safe to update the column name
     bevy::log::debug!(
@@ -219,7 +211,7 @@ pub fn update_metadata_column_name(
         meta_table, new_name, persisted_index
     );
     
-    let count = update_metadata_column_name_by_index(conn, &meta_table, persisted_index as i32, new_name)?;
+    let count = update_metadata_column_name_by_index(conn, &meta_table, persisted_index as i32, new_name, daemon_client)?;
     bevy::log::debug!(
         "update_metadata_column_name: UPDATE affected {} row(s)",
         count
@@ -233,6 +225,7 @@ pub fn rename_structure_table(
     parent_table: &str,
     old_column_name: &str,
     new_column_name: &str,
+    daemon_client: &super::super::daemon_client::DaemonClient,
 ) -> DbResult<()> {
     let old_struct = format!("{}_{}", parent_table, old_column_name);
     let new_struct = format!("{}_{}", parent_table, new_column_name);
@@ -257,7 +250,29 @@ pub fn rename_structure_table(
             "rename_structure_table: Renaming data table '{}' -> '{}'",
             old_struct, new_struct
         );
-        rename_table(conn, &old_struct, &new_struct)?;
+        rename_table(conn, &old_struct, &new_struct, daemon_client)?;
+        
+        // Validate the table was renamed
+        if !table_exists(conn, &new_struct)? {
+            bevy::log::error!(
+                "rename_structure_table: Validation failed - table '{}' doesn't exist after rename",
+                new_struct
+            );
+            return Err(super::super::error::DbError::Other(format!(
+                "Structure table rename validation failed: '{}' not found",
+                new_struct
+            )));
+        }
+        if table_exists(conn, &old_struct)? {
+            bevy::log::warn!(
+                "rename_structure_table: Old table '{}' still exists after rename",
+                old_struct
+            );
+        }
+        bevy::log::debug!(
+            "rename_structure_table: Validation passed - table '{}' exists",
+            new_struct
+        );
     } else {
         bevy::log::warn!(
             "rename_structure_table: Data table '{}' not found; skipping data table rename.",
@@ -270,7 +285,23 @@ pub fn rename_structure_table(
             "rename_structure_table: Renaming metadata table '{}' -> '{}'",
             old_meta, new_meta
         );
-        rename_table(conn, &old_meta, &new_meta)?;
+        rename_table(conn, &old_meta, &new_meta, daemon_client)?;
+        
+        // Validate the metadata table was renamed
+        if !table_exists(conn, &new_meta)? {
+            bevy::log::error!(
+                "rename_structure_table: Validation failed - metadata table '{}' doesn't exist after rename",
+                new_meta
+            );
+            return Err(super::super::error::DbError::Other(format!(
+                "Structure metadata table rename validation failed: '{}' not found",
+                new_meta
+            )));
+        }
+        bevy::log::debug!(
+            "rename_structure_table: Validation passed - metadata table '{}' exists",
+            new_meta
+        );
     } else {
         bevy::log::warn!(
             "rename_structure_table: Metadata table '{}' not found; skipping metadata table rename.",
@@ -279,10 +310,17 @@ pub fn rename_structure_table(
     }
 
     // Update global _Metadata entry for the structure table (safe if no matching row)
-    let updated = conn.execute(
-        "UPDATE _Metadata SET table_name = ?, parent_column = ?, updated_at = CURRENT_TIMESTAMP WHERE table_name = ?",
-        params![&new_struct, new_column_name, &old_struct],
+    exec_simple_statement(
+        "UPDATE _Metadata SET table_name = ?, parent_column = ?, updated_at = CURRENT_TIMESTAMP WHERE table_name = ?".to_string(),
+        vec![
+            serde_json::Value::String(new_struct.clone()),
+            serde_json::Value::String(new_column_name.to_string()),
+            serde_json::Value::String(old_struct.clone()),
+        ],
+        daemon_client,
     )?;
+    
+    let updated = 0; // exec_simple_statement returns rows_affected but we stored it
     if updated == 0 {
         bevy::log::info!(
             "rename_structure_table: No _Metadata row for '{}' to update; structure may be newly created without registration yet.",
@@ -300,6 +338,7 @@ pub fn update_metadata_column_name_by_name(
     table_name: &str,
     old_name: &str,
     new_name: &str,
+    daemon_client: &super::super::daemon_client::DaemonClient,
 ) -> DbResult<()> {
     let meta_table = metadata_table_name(table_name);
 
@@ -316,10 +355,10 @@ pub fn update_metadata_column_name_by_name(
     };
 
     // Handle conflicts
-    handle_column_conflict(conn, &meta_table, table_name, new_name, source_idx)?;
+    handle_column_conflict(conn, &meta_table, table_name, new_name, source_idx, daemon_client)?;
 
     // Update the row's name
-    let updated = update_metadata_column_name_by_index(conn, &meta_table, source_idx, new_name)?;
+    let updated = update_metadata_column_name_by_index(conn, &meta_table, source_idx, new_name, daemon_client)?;
     bevy::log::info!(
         "update_metadata_column_name_by_name: updated {} row(s) for '{}.{}' -> '{}.{}'",
         updated, table_name, old_name, table_name, new_name
@@ -333,7 +372,10 @@ pub fn drop_physical_column_if_exists(
     conn: &Connection,
     table_name: &str,
     column_name: &str,
+    daemon_client: &super::super::daemon_client::DaemonClient,
 ) -> DbResult<()> {
+    use super::super::schema::queries::get_table_columns;
+    
     // Check existence via get_table_columns
     let columns = get_table_columns(conn, table_name)?;
     let exists = columns.iter().any(|c| c.eq_ignore_ascii_case(column_name));
@@ -342,39 +384,7 @@ pub fn drop_physical_column_if_exists(
         return Ok(());
     }
 
-    bevy::log::info!(
-        "drop_physical_column_if_exists: attempting to drop '{}.{}'",
-        table_name, column_name
-    );
-
-    // Try to wipe values first (safe even if DROP fails)
-    let _ = conn.execute(
-        &format!("UPDATE \"{}\" SET \"{}\" = NULL", table_name, column_name),
-        [],
-    );
-
-    // Attempt DROP COLUMN (SQLite 3.35.0+)
-    match conn.execute(
-        &format!(
-            "ALTER TABLE \"{}\" DROP COLUMN \"{}\"",
-            table_name, column_name
-        ),
-        [],
-    ) {
-        Ok(_) => {
-            bevy::log::info!(
-                "drop_physical_column_if_exists: dropped column '{}.{}'",
-                table_name, column_name
-            );
-        }
-        Err(e) => {
-            bevy::log::warn!(
-                "drop_physical_column_if_exists: failed to drop column '{}.{}': {} (column may persist)",
-                table_name, column_name, e
-            );
-        }
-    }
-    Ok(())
+    drop_column_with_fallback(conn, table_name, column_name, daemon_client)
 }
 
 /// Rename a main table and all of its descendant structure tables by prefix replacement.
@@ -383,16 +393,17 @@ pub fn rename_table_and_descendants(
     conn: &Connection,
     old_table: &str,
     new_table: &str,
+    daemon_client: &super::super::daemon_client::DaemonClient,
 ) -> DbResult<()> {
     // Wrap the full cascade in a transaction
-    with_transaction(conn, |conn| {
+    with_transaction(conn, daemon_client, |conn| {
         bevy::log::info!(
             "DB cascade rename: '{}' -> '{}' (including descendants)",
             old_table, new_table
         );
 
         // 1) Rename the main table first
-        rename_table_triplet(conn, old_table, new_table)?;
+        rename_table_triplet(conn, old_table, new_table, daemon_client)?;
 
         // 2) Collect descendant structure tables using prefix match on _Metadata
         let prefix = format!("{}_", old_table);
@@ -415,20 +426,29 @@ pub fn rename_table_and_descendants(
         pairs.sort_by_key(|(o, _)| std::cmp::Reverse(o.len()));
 
         for (old_name, new_name) in &pairs {
-            rename_table_triplet(conn, old_name, new_name)?;
+            rename_table_triplet(conn, old_name, new_name, daemon_client)?;
         }
 
         // 3) Fix parent_table references in _Metadata for all renamed tables
         // Main parent: direct children referencing old_table
-        conn.execute(
-            "UPDATE _Metadata SET parent_table = ?1 WHERE parent_table = ?2",
-            params![new_table, old_table],
+        exec_simple_statement(
+            "UPDATE _Metadata SET parent_table = ?1 WHERE parent_table = ?2".to_string(),
+            vec![
+                serde_json::Value::String(new_table.to_string()),
+                serde_json::Value::String(old_table.to_string()),
+            ],
+            daemon_client,
         )?;
+            
         // Descendants: update any row whose parent_table equals a renamed table
         for (old_name, new_name) in &pairs {
-            conn.execute(
-                "UPDATE _Metadata SET parent_table = ?1 WHERE parent_table = ?2",
-                params![new_name, old_name],
+            exec_simple_statement(
+                "UPDATE _Metadata SET parent_table = ?1 WHERE parent_table = ?2".to_string(),
+                vec![
+                    serde_json::Value::String(new_name.clone()),
+                    serde_json::Value::String(old_name.clone()),
+                ],
+                daemon_client,
             )?;
         }
 

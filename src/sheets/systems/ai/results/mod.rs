@@ -4,7 +4,6 @@
 mod context_setup;
 mod duplicate_detection;
 mod root_handlers;
-mod row_processors;
 mod structure_handlers;
 
 pub use context_setup::setup_context_prefixes;
@@ -83,9 +82,6 @@ pub fn handle_ai_batch_results(
                         &runtime,
                         &session_api_key,
                     );
-                }
-                AiBatchResultKind::DeepReview { .. } => {
-                    error!("Unexpected DeepReview result kind without flag set!");
                 }
             }
         }

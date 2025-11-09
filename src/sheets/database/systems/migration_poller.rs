@@ -2,6 +2,7 @@
 
 use super::MigrationBackgroundState;
 use crate::sheets::events::{MigrationCompleted, MigrationProgress, SheetOperationFeedback};
+use crate::sheets::database::daemon_resource::SharedDaemonClient;
 use bevy::prelude::*;
 
 /// Poll the background migration thread for progress updates and completion
@@ -14,6 +15,7 @@ pub fn poll_migration_background(
     mut data_modified_writer: EventWriter<crate::sheets::events::SheetDataModifiedInRegistryEvent>,
     mut revalidate_writer: EventWriter<crate::sheets::events::RequestSheetRevalidation>,
     mut editor_state: Option<ResMut<crate::ui::elements::editor::state::EditorWindowState>>,
+    daemon_client: Res<SharedDaemonClient>,
 ) {
     // Drain any progress updates
     if let Some(rx) = &bg_state.progress_rx {
@@ -63,7 +65,7 @@ pub fn poll_migration_background(
                                         .map(|s| s.to_string_lossy().into_owned())
                                         .unwrap_or_else(|| "Unknown".to_string());
                                     for table_name in table_names.iter() {
-                                        match crate::sheets::database::reader::DbReader::read_metadata(&conn, table_name) {
+                                        match crate::sheets::database::reader::DbReader::read_metadata(&conn, table_name, daemon_client.client()) {
                                     Ok(mut metadata) => {
                                         metadata.category = Some(db_name.clone());
                                         match crate::sheets::database::reader::DbReader::read_grid_data(&conn, table_name, &metadata) {

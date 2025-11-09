@@ -13,12 +13,8 @@ pub mod elements_persist_support {}
 // Import the editor UI system from its new location
 use elements::editor::generic_sheet_editor_ui;
 // --- MODIFIED: Import EditorWindowState to initialize it ---
-use crate::sheets::events::{CloseStructureViewEvent, OpenStructureViewEvent};
 use elements::editor::prefs::{load_prefs, save_prefs, UiPrefs};
 use elements::editor::state::EditorWindowState;
-use elements::editor::structure_navigation::{
-    handle_close_structure_view, handle_open_structure_view,
-};
 // --- END MODIFIED ---
 // Import the new feedback handling system
 use systems::clear_ui_feedback_on_sheet_change;
@@ -41,12 +37,6 @@ impl Plugin for EditorUiPlugin {
             .init_resource::<elements::popups::MigrationPopupState>()
             // Load UI prefs on startup
             .add_systems(Startup, load_ui_prefs_startup)
-            .add_event::<OpenStructureViewEvent>()
-            .add_event::<CloseStructureViewEvent>()
-            .add_systems(
-                Update,
-                (handle_open_structure_view, handle_close_structure_view),
-            )
             // --- END MODIFIED ---
             // Ensure we clear transient feedback on sheet changes before processing new feedback events
             .add_systems(Update, clear_ui_feedback_on_sheet_change)

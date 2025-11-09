@@ -2,6 +2,7 @@
 use crate::ui::elements::editor::state::EditorWindowState;
 use crate::{
     sheets::{
+        database::daemon_client::DaemonClient,
         definitions::ColumnValidator,
         events::{RequestUpdateColumnName, RequestUpdateColumnValidator},
         resources::SheetRegistry,
@@ -10,45 +11,38 @@ use crate::{
 };
 use bevy::prelude::*;
 use bevy_egui::egui;
-
 use super::column_options_on_close::handle_on_close;
 use super::column_options_ui::show_column_options_window_ui;
 use super::column_options_validator::apply_validator_update;
 
-/// Main orchestrator function for the column options popup.
-/// Handles initialization, calls UI, applies changes, and manages closing.
 pub fn show_column_options_popup(
     ctx: &egui::Context,
     state: &mut EditorWindowState,
     column_rename_writer: &mut EventWriter<RequestUpdateColumnName>,
     column_validator_writer: &mut EventWriter<RequestUpdateColumnValidator>,
     registry: &mut SheetRegistry,
+    daemon_client: &DaemonClient,
 ) {
     if !state.show_column_options_popup {
         return;
     }
-
     if state.column_options_popup_needs_init {
         initialize_popup_state(state, registry);
         state.column_options_popup_needs_init = false;
     }
-
     let ui_result = {
         let registry_immut = &*registry;
         show_column_options_window_ui(ctx, state, registry_immut)
     };
-
     let mut needs_manual_save = false;
     let mut actions_ok = true;
     let mut non_event_change_occurred = false;
-
     if ui_result.apply_clicked {
         let category = &state.options_column_target_category;
         let sheet_name = &state.options_column_target_sheet;
         let col_index = state.options_column_target_index;
         let mut rename_sent = false;
         let mut validator_sent = false;
-
         let (current_name, current_filter, current_context, current_validator) = {
             let maybe_col_def = registry
                 .get_sheet(category, sheet_name)
@@ -70,7 +64,6 @@ pub fn show_column_options_popup(
                 (None, None, None, None)
             }
         };
-
         if current_name.is_none() {
             warn!(
                 "Apply failed: Column index {} invalid for sheet '{:?}/{}'.",
@@ -78,7 +71,6 @@ pub fn show_column_options_popup(
             );
             actions_ok = false;
         }
-
         if actions_ok {
             let new_name_trimmed = state.options_column_rename_input.trim();
             debug!("Column rename check: new_name='{}', current_name={:?}", new_name_trimmed, current_name);
@@ -173,23 +165,17 @@ pub fn show_column_options_popup(
                                 // Persist filter to DB if this is DB-backed
                                 if meta.category.is_some() {
                                     if let Some(cat) = category {
-                                        let base =
-                                            crate::sheets::systems::io::get_default_data_base_path(
-                                            );
-                                        let db_path = base.join(format!("{}.db", cat));
-                                                    // Try to open (and create if missing) the DB file and persist metadata.
-                                                    // Use centralized helper which opens/creates DB and persists metadata
-                                                    if let Some(cat) = category {
-                                                        let _ = crate::sheets::database::persist_column_metadata(
-                                                            cat,
-                                                            sheet_name,
-                                                            col_index,
-                                                            // Pass empty string when clearing to force DB NULL
-                                                            if let Some(s) = col_def.filter.as_deref() { Some(s) } else { Some("") },
-                                                            None,
-                                                            None,
-                                                        ).map_err(|e| error!("Persist column metadata failed: {}", e));
-                                                    }
+                                        // Use centralized helper which opens/creates DB and persists metadata
+                                        let _ = crate::sheets::database::persist_column_metadata(
+                                            cat,
+                                            sheet_name,
+                                            col_index,
+                                            // Pass empty string when clearing to force DB NULL
+                                            if let Some(s) = col_def.filter.as_deref() { Some(s) } else { Some("") },
+                                            None,
+                                            None,
+                                            daemon_client,
+                                        ).map_err(|e| error!("Persist column metadata failed: {}", e));
                                     }
                                 }
                             }
@@ -204,22 +190,17 @@ pub fn show_column_options_popup(
                                 // Persist AI context to DB if this is DB-backed
                                 if meta.category.is_some() {
                                     if let Some(cat) = category {
-                                        let base =
-                                            crate::sheets::systems::io::get_default_data_base_path(
-                                            );
-                                        let db_path = base.join(format!("{}.db", cat));
-                                                    // Try to open (and create if missing) the DB file and persist AI context.
-                                                    if let Some(cat) = category {
-                                                        let _ = crate::sheets::database::persist_column_metadata(
-                                                            cat,
-                                                            sheet_name,
-                                                            col_index,
-                                                            None,
-                                                            // Pass empty string when clearing to force DB NULL
-                                                            if let Some(s) = col_def.ai_context.as_deref() { Some(s) } else { Some("") },
-                                                            None,
-                                                        ).map_err(|e| error!("Persist column metadata failed: {}", e));
-                                                    }
+                                        // Use centralized helper to persist AI context
+                                        let _ = crate::sheets::database::persist_column_metadata(
+                                            cat,
+                                            sheet_name,
+                                            col_index,
+                                            None,
+                                            // Pass empty string when clearing to force DB NULL
+                                            if let Some(s) = col_def.ai_context.as_deref() { Some(s) } else { Some("") },
+                                            None,
+                                            daemon_client,
+                                        ).map_err(|e| error!("Persist column metadata failed: {}", e));
                                     }
                                 }
                             }
@@ -511,6 +492,3 @@ fn initialize_popup_state(state: &mut EditorWindowState, registry: &SheetRegistr
         state.options_structure_key_parent_column_temp = None;
     }
 }
-
-
-

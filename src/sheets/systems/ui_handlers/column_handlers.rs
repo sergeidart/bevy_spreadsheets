@@ -29,53 +29,10 @@ pub fn calculate_column_width(
 /// Build ancestor key columns for virtual structure sheets.
 /// Returns a vector of (header_text, value_text) tuples.
 pub fn build_ancestor_key_columns(
-    state: &EditorWindowState,
-    registry: &SheetRegistry,
-    selected_name: &str,
+    _state: &EditorWindowState,
+    _registry: &SheetRegistry,
+    _selected_name: &str,
 ) -> Vec<(String, String)> {
-    let mut ancestor_key_columns: Vec<(String, String)> = Vec::new();
-    
-    if let Some(last_ctx) = state.virtual_structure_stack.last() {
-        if last_ctx.virtual_sheet_name == selected_name {
-            // Iterate through stack in order (oldest -> newest)
-            for vctx in &state.virtual_structure_stack {
-                if let Some(parent_sheet) = registry
-                    .get_sheet(&state.selected_category, &vctx.parent.parent_sheet)
-                {
-                    if let (Some(parent_meta), Some(parent_row)) = (
-                        &parent_sheet.metadata,
-                        parent_sheet.grid.get(vctx.parent.parent_row),
-                    ) {
-                        if let Some(struct_col_def) =
-                            parent_meta.columns.get(vctx.parent.parent_col)
-                        {
-                            // Prefer parent-selected key; fallback to first non-technical data column
-                            let key_col_idx = struct_col_def.structure_key_parent_column_index
-                                .or_else(|| {
-                                    // Fall back to first data column (skip row_index at 0, and parent_key at 1 if structure table)
-                                    if parent_meta.is_structure_table() {
-                                        Some(2) // First data column in structure table
-                                    } else {
-                                        Some(1) // First data column in regular table (skip row_index at 0)
-                                    }
-                                });
-                            
-                            if let Some(key_idx) = key_col_idx {
-                                if let Some(key_col_def) = parent_meta.columns.get(key_idx) {
-                                    let value = parent_row
-                                        .get(key_idx)
-                                        .cloned()
-                                        .unwrap_or_default();
-                                    ancestor_key_columns
-                                        .push((key_col_def.header.clone(), value));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    
-    ancestor_key_columns
+    // Virtual structures deprecated; return empty vector
+    Vec::new()
 }

@@ -14,11 +14,6 @@ pub fn default_ai_model_id() -> String {
     "gemini-flash-latest".to_string()
 }
 
-// Deprecated AI sampling parameters - return None for deserialization
-pub fn default_temperature_skip() -> Option<f32> {
-    None
-}
-
 /// Default function for `requested_grounding_with_Google Search` field in `SheetMetadata`.
 pub fn default_grounding_with_google_search() -> Option<bool> {
     Some(false)

@@ -6,7 +6,6 @@ pub mod reorder_column;
 pub mod categories;
 pub mod cell_background_logic;
 pub mod cell_validator_logic;
-pub mod cell_widget_helpers;
 pub mod clipboard;
 pub mod create_sheet;
 pub mod delete_columns;

@@ -4,6 +4,23 @@
 #![cfg(test)]
 
 use rusqlite::{params, Connection};
+use crate::sheets::database::daemon_client::DaemonClient;
+
+/// Create a mock daemon client for testing
+/// 
+/// Returns a DaemonClient that simulates successful operations without
+/// requiring an actual daemon process. All operations return success.
+/// 
+/// # Example
+/// ```
+/// let mock_daemon = create_mock_daemon_client();
+/// DbWriter::prepend_row(&conn, table, &data, &cols, &mock_daemon).unwrap();
+/// ```
+pub fn create_mock_daemon_client() -> DaemonClient {
+    // Create a mock client that bypasses actual daemon communication
+    // The internal structure will handle mock responses
+    DaemonClient::new_mock()
+}
 
 /// Set up a simple test table with standard columns for testing.
 /// 

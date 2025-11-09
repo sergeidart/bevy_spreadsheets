@@ -1,5 +1,6 @@
 // src/sheets/systems/logic/update_column_name.rs
 use crate::sheets::{
+    database::daemon_resource::SharedDaemonClient,
     definitions::SheetMetadata, // Need metadata for saving
     events::{RequestUpdateColumnName, SheetDataModifiedInRegistryEvent, SheetOperationFeedback},
     resources::SheetRegistry,
@@ -14,6 +15,7 @@ pub fn handle_update_column_name(
     mut registry: ResMut<SheetRegistry>,
     mut feedback_writer: EventWriter<SheetOperationFeedback>,
     mut data_modified_writer: EventWriter<SheetDataModifiedInRegistryEvent>,
+    daemon_client: Res<SharedDaemonClient>,
 ) {
     // Use map to track sheets needing save
     let mut changed_sheets: HashMap<(Option<String>, String), SheetMetadata> = HashMap::new();
@@ -165,6 +167,7 @@ pub fn handle_update_column_name(
                         &old_header,
                         new_name,
                         col_index,
+                        daemon_client.client(),
                     )
                 } else {
                     crate::sheets::database::writer::DbWriter::rename_data_column(
@@ -172,6 +175,7 @@ pub fn handle_update_column_name(
                         sheet_name,
                         &old_header,
                         new_name,
+                        daemon_client.client(),
                     )
                 }
             } else {
@@ -180,6 +184,7 @@ pub fn handle_update_column_name(
                     sheet_name,
                     col_index,
                     new_name,
+                    daemon_client.client(),
                 )
             };
 
@@ -201,6 +206,7 @@ pub fn handle_update_column_name(
                     sheet_name,
                     col_index,
                     new_name,
+                    daemon_client.client(),
                 );
             }
         }
@@ -300,7 +306,7 @@ pub fn handle_update_column_name(
                         let db_path = base.join(format!("{}.db", cat_name));
                         if db_path.exists() {
                             match crate::sheets::database::connection::DbConnection::open_existing(&db_path) {
-                                Ok(conn2) => match crate::sheets::database::reader::DbReader::read_sheet(&conn2, &child_new) {
+                                Ok(conn2) => match crate::sheets::database::reader::DbReader::read_sheet(&conn2, &child_new, daemon_client.client()) {
                                     Ok(child_data) => {
                                         registry.add_or_replace_sheet(category.clone(), child_new.clone(), child_data);
                                         info!(

@@ -161,30 +161,6 @@ pub fn save_single_sheet(registry: &SheetRegistry, metadata_to_save: &SheetMetad
     }
 }
 
-/// Core logic function to save ALL registered sheets to JSON files.
-#[allow(dead_code)] // Mark as unused for now if keeping it
-pub fn save_all_sheets_logic(registry: &SheetRegistry) {
-    // Check if there are any sheets at all
-    if registry.iter_sheets().next().is_none() {
-        trace!("Save All skipped: No sheets in registry.");
-        return;
-    }
-    info!("Attempting to save ALL sheets...");
-
-    // Iterate through all sheets using the categorized iterator
-    for (_category, _sheet_name, sheet_data) in registry.iter_sheets() {
-        if let Some(metadata) = &sheet_data.metadata {
-            // Call the single sheet save logic which now handles both grid and meta
-            save_single_sheet(registry, metadata);
-        } else {
-            // This shouldn't happen if registry invariants hold
-            warn!("Skipping save for a sheet because its metadata is missing.");
-        }
-    }
-
-    info!("Finished Save All attempt. Check logs for details of individual sheets.");
-}
-
 // --- File Operation Handlers ---
 
 /// Handles the `RequestDeleteSheetFile` event. Expects relative path (e.g., "Cat/File.json").

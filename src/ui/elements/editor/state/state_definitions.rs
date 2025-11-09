@@ -93,8 +93,6 @@ pub struct AiCallLogEntry {
     pub response: Option<String>,
     /// The full request payload that was sent
     pub request: Option<String>,
-    /// Timestamp or sequence number for ordering
-    pub timestamp: std::time::SystemTime,
     /// Whether this is an error entry
     pub is_error: bool,
 }
@@ -113,6 +111,7 @@ pub struct Phase1IntermediateData {
     /// Context for sending Phase 2
     pub category: Option<String>,
     pub sheet_name: String,
+    #[allow(dead_code)] // Used in other modules but compiler doesn't track cross-module usage
     pub key_prefix_count: usize,
     /// Original row indices from Phase 1 (for structure processing)
     pub original_row_indices: Vec<usize>,
@@ -146,8 +145,6 @@ pub struct StructureNavigationContext {
     /// Order matches ancestor_keys: [deepest_ancestor_row_index, ..., immediate_parent_row_index]
     /// Example: ["3770", "1234"] - numeric strings that can be parsed as usize
     pub ancestor_row_indices: Vec<String>,
-    /// Column name in parent that was clicked
-    pub parent_column_name: String,
 }
 
 #[derive(Debug, Clone)]
@@ -246,47 +243,22 @@ pub struct StructureReviewEntry {
     pub merged_rows: Vec<Vec<String>>,
     /// Per-row, per-column difference flags
     pub differences: Vec<Vec<bool>>,
-    /// Per-row operation flags: None = no change, Some(RowOperation) = tracked action
-    pub row_operations: Vec<RowOperation>,
     pub schema_headers: Vec<String>,
     pub original_rows_count: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum RowOperation {
-    /// Row was merged with AI changes
-    Merged,
-    /// Row was deleted
-    Deleted,
-    /// Row was added (new AI row)
-    Added,
-}
-
 impl StructureReviewEntry {
-    pub fn is_pending(&self) -> bool {
-        self.has_changes && !self.accepted && !self.rejected
-    }
-
     pub fn is_undecided(&self) -> bool {
         self.has_changes && !self.decided
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct VirtualStructureContext {
-    pub virtual_sheet_name: String,
-    pub parent: StructureParentContext,
 }
 
 #[derive(Resource)]
 pub struct EditorWindowState {
     pub selected_category: Option<String>,
     pub selected_sheet_name: Option<String>,
-    // Stack of active virtual structure sheets (each represents a nested structure view)
-    // Top of stack is current virtual sheet. Empty means not in structure view.
-    pub virtual_structure_stack: Vec<VirtualStructureContext>,
 
-    // NEW: Stack for real structure sheet navigation with hidden filters
+    // Stack for real structure sheet navigation with hidden filters
     // When user clicks a structure column cell, we push a context and navigate to the real structure sheet
     // The filter is hidden and temporal - only active during this navigation path
     pub structure_navigation_stack: Vec<StructureNavigationContext>,

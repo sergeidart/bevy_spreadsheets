@@ -1,6 +1,7 @@
 // src/sheets/systems/logic/categories.rs
 use crate::sheets::{
     database::connection::DbConnection,
+    database::daemon_resource::SharedDaemonClient,
     events::{
         RequestCreateCategory, RequestDeleteCategory,
         RequestRenameCategory, SheetOperationFeedback,
@@ -15,6 +16,7 @@ pub fn handle_create_category_request(
     mut events: EventReader<RequestCreateCategory>,
     mut registry: ResMut<SheetRegistry>,
     mut feedback: EventWriter<SheetOperationFeedback>,
+    daemon_client: Res<SharedDaemonClient>,
 ) {
     for ev in events.read() {
         let name = ev.name.trim();
@@ -58,7 +60,7 @@ pub fn handle_create_category_request(
         }
 
         // Create empty database with initialized schema
-        match DbConnection::create_new(&db_path) {
+        match DbConnection::create_new(&db_path, daemon_client.client()) {
             Ok(_conn) => {
                 info!("Created new database file: {}", db_path.display());
 

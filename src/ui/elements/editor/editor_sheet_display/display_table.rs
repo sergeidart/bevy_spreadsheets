@@ -3,7 +3,7 @@
 
 use crate::sheets::{
     events::{
-        OpenStructureViewEvent, RequestBatchUpdateColumnAiInclude,
+        RequestBatchUpdateColumnAiInclude,
         RequestCopyCell, RequestPasteCell, RequestReorderColumn, RequestToggleAiRowGeneration,
         RequestUpdateAiSendSchema, RequestUpdateAiStructureSend, RequestUpdateColumnAiInclude,
         UpdateCellEvent,
@@ -36,7 +36,6 @@ pub fn build_and_render_table(
     ancestor_key_columns: &[(String, String)],
     reorder_column_writer: EventWriter<RequestReorderColumn>,
     cell_update_writer: EventWriter<UpdateCellEvent>,
-    open_structure_writer: EventWriter<OpenStructureViewEvent>,
     toggle_add_rows_writer: EventWriter<RequestToggleAiRowGeneration>,
     column_include_writer: EventWriter<RequestUpdateColumnAiInclude>,
     batch_include_writer: EventWriter<RequestBatchUpdateColumnAiInclude>,
@@ -116,7 +115,6 @@ pub fn build_and_render_table(
                         prefix_count,
                         num_visible_cols,
                         cell_update_writer,
-                        open_structure_writer,
                         toggle_add_rows_writer,
                         copy_writer,
                         paste_writer,
@@ -208,7 +206,6 @@ fn render_table_body(
     prefix_count: usize,
     num_visible_cols: usize,
     cell_update_writer: EventWriter<UpdateCellEvent>,
-    open_structure_writer: EventWriter<OpenStructureViewEvent>,
     toggle_add_rows_writer: EventWriter<RequestToggleAiRowGeneration>,
     copy_writer: EventWriter<RequestCopyCell>,
     paste_writer: EventWriter<RequestPasteCell>,
@@ -252,26 +249,6 @@ fn render_table_body(
             &filtered_indices,
             row_height,
             cell_update_writer,
-            open_structure_writer,
-            toggle_add_rows_writer,
-            copy_writer,
-            paste_writer,
-            clipboard_buffer,
-        );
-    } else {
-        render_virtual_structure_body(
-            body,
-            state,
-            registry,
-            render_cache,
-            metadata,
-            selected_name,
-            current_category,
-            ancestor_key_columns,
-            &filtered_indices,
-            row_height,
-            cell_update_writer,
-            open_structure_writer,
             toggle_add_rows_writer,
             copy_writer,
             paste_writer,
@@ -294,7 +271,6 @@ fn render_standard_body(
     filtered_indices: &[usize],
     row_height: f32,
     mut cell_update_writer: EventWriter<UpdateCellEvent>,
-    mut open_structure_writer: EventWriter<OpenStructureViewEvent>,
     mut toggle_add_rows_writer: EventWriter<RequestToggleAiRowGeneration>,
     mut copy_writer: EventWriter<RequestCopyCell>,
     mut paste_writer: EventWriter<RequestPasteCell>,
@@ -339,100 +315,6 @@ fn render_standard_body(
                         c_idx,
                         &validators,
                         &mut cell_update_writer,
-                        &mut open_structure_writer,
-                        &mut toggle_add_rows_writer,
-                        &mut copy_writer,
-                        &mut paste_writer,
-                        clipboard_buffer,
-                    );
-                });
-            }
-
-            // filler remainder cell to avoid stretching
-            row.col(|ui| {
-                ui.allocate_exact_size(egui::vec2(0.0, row_height), egui::Sense::hover());
-            });
-        } else {
-            row.col(|ui| {
-                ui.colored_label(egui::Color32::RED, "Row Idx Err");
-            });
-        }
-    });
-}
-
-/// Renders virtual structure body with ancestor key columns
-#[allow(clippy::too_many_arguments)]
-fn render_virtual_structure_body(
-    body: TableBody,
-    state: &mut EditorWindowState,
-    registry: &SheetRegistry,
-    render_cache: &SheetRenderCache,
-    metadata: &crate::sheets::definitions::SheetMetadata,
-    selected_name: &str,
-    current_category: &Option<String>,
-    ancestor_key_columns: &[(String, String)],
-    filtered_indices: &[usize],
-    row_height: f32,
-    mut cell_update_writer: EventWriter<UpdateCellEvent>,
-    mut open_structure_writer: EventWriter<OpenStructureViewEvent>,
-    mut toggle_add_rows_writer: EventWriter<RequestToggleAiRowGeneration>,
-    mut copy_writer: EventWriter<RequestCopyCell>,
-    mut paste_writer: EventWriter<RequestPasteCell>,
-    clipboard_buffer: &ClipboardBuffer,
-) {
-    use crate::sheets::definitions::ColumnValidator;
-
-    let sheet_ref = registry
-        .get_sheet(current_category, selected_name)
-        .unwrap();
-    let grid = &sheet_ref.grid;
-    let num_cols_local = metadata.columns.len();
-
-    let validators: Vec<Option<ColumnValidator>> = metadata
-        .columns
-        .iter()
-        .map(|c| c.validator.clone())
-        .collect();
-
-    body.rows(row_height, filtered_indices.len(), |mut row| {
-        let idx_in_list = row.index();
-        let original_row_index = *filtered_indices.get(idx_in_list).unwrap_or(&0);
-
-        // Left control cell
-        render_control_cell(&mut row, state, original_row_index, row_height);
-
-        // Prefix key columns
-        for (_, value) in ancestor_key_columns {
-            row.col(|ui| {
-                ui.colored_label(egui::Color32::from_rgb(0, 150, 0), value);
-            });
-        }
-
-        if let Some(row_data) = grid.get(original_row_index) {
-            if row_data.len() != num_cols_local {
-                row.col(|ui| {
-                    ui.colored_label(egui::Color32::RED, "Row Len Err");
-                });
-                return;
-            }
-
-            let visible_cols_local: Vec<usize> = state
-                .get_visible_column_indices(current_category, selected_name, metadata);
-
-            for c_idx in visible_cols_local.iter().copied() {
-                row.col(|ui| {
-                    render_data_cell(
-                        ui,
-                        state,
-                        registry,
-                        render_cache,
-                        current_category,
-                        selected_name,
-                        original_row_index,
-                        c_idx,
-                        &validators,
-                        &mut cell_update_writer,
-                        &mut open_structure_writer,
                         &mut toggle_add_rows_writer,
                         &mut copy_writer,
                         &mut paste_writer,

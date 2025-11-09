@@ -114,6 +114,10 @@ pub fn handle_upload_json_to_current_db(
                     rusqlite::Connection::open(&db_path_clone).map_err(|e| e.to_string())?;
                 let _ = conn.execute_batch("PRAGMA foreign_keys = ON;");
 
+                // Create daemon client for background thread
+                let daemon_path = crate::sheets::systems::io::get_default_data_base_path().join("daemon.sock");
+                let daemon_client = super::super::daemon_client::DaemonClient::new(None, daemon_path.to_string_lossy().to_string());
+
                 // Determine display order by counting existing tables
                 let mut report = super::super::migration::MigrationReport::default();
 
@@ -220,6 +224,7 @@ pub fn handle_upload_json_to_current_db(
                     &table_name_clone,
                     None,
                     Some(&mut row_notifier),
+                    &daemon_client,
                 ) {
                     Ok(_) => {
                         report.sheets_migrated += 1;

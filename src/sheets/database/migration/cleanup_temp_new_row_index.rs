@@ -48,7 +48,9 @@ impl MigrationFix for CleanupTempNewRowIndex {
         "Drop or hide the temporary column 'temp_new_row_index' left by previous migration"
     }
 
-    fn apply(&self, conn: &mut Connection) -> DbResult<()> {
+    fn apply(&self, conn: &mut Connection, daemon_client: &super::super::daemon_client::DaemonClient) -> DbResult<()> {
+        use super::super::daemon_client::Statement;
+        
         info!("Starting cleanup of 'temp_new_row_index' columns...");
 
         // Get all table names from global metadata
@@ -76,11 +78,14 @@ impl MigrationFix for CleanupTempNewRowIndex {
             }
 
             if can_drop_column {
-                let sql = format!(
-                    "ALTER TABLE \"{}\" DROP COLUMN temp_new_row_index",
-                    table_name
-                );
-                match conn.execute(&sql, []) {
+                let drop_stmt = Statement {
+                    sql: format!(
+                        "ALTER TABLE \"{}\" DROP COLUMN temp_new_row_index",
+                        table_name
+                    ),
+                    params: vec![],
+                };
+                match daemon_client.exec_batch(vec![drop_stmt]) {
                     Ok(_) => {
                         info!("Dropped column 'temp_new_row_index' from '{}'", table_name);
                         dropped += 1;
@@ -96,11 +101,14 @@ impl MigrationFix for CleanupTempNewRowIndex {
             }
 
             // Fallback: rename to mark obsolete (SQLite supports rename since 3.25.0)
-            let sql = format!(
-                "ALTER TABLE \"{}\" RENAME COLUMN temp_new_row_index TO _obsolete_temp_new_row_index",
-                table_name
-            );
-            match conn.execute(&sql, []) {
+            let rename_stmt = Statement {
+                sql: format!(
+                    "ALTER TABLE \"{}\" RENAME COLUMN temp_new_row_index TO _obsolete_temp_new_row_index",
+                    table_name
+                ),
+                params: vec![],
+            };
+            match daemon_client.exec_batch(vec![rename_stmt]) {
                 Ok(_) => {
                     info!(
                         "Renamed 'temp_new_row_index' -> '_obsolete_temp_new_row_index' in '{}'",

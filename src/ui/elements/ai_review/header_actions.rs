@@ -43,18 +43,8 @@ pub fn draw_header_actions(
             }
             ui.add_space(8.0);
             ui.label(RichText::new("AI Review - Structure Detail").heading());
-        } else if !state.virtual_structure_stack.is_empty() {
-            // Virtual structure review mode: NO back button (this is first-level review)
-            // Show context breadcrumb instead
-            ui.label(RichText::new("AI Review").heading());
-            ui.add_space(4.0);
-            if let Some(vctx) = state.virtual_structure_stack.last() {
-                ui.label(RichText::new(format!("({})", vctx.virtual_sheet_name))
-                    .color(Color32::GRAY)
-                    .size(14.0));
-            }
         } else {
-            // Regular review mode: simple header
+            // Regular review mode: simple header (virtual structures deprecated)
             ui.label(RichText::new("AI Review").heading());
         }
         ui.add_space(12.0);

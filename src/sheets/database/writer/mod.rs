@@ -7,9 +7,12 @@ mod renames;
 mod metadata;
 mod cascades;
 mod helpers;
+mod daemon_utils;
 
 #[cfg(test)]
 mod test_helpers;
+#[cfg(test)]
+mod helpers_tests;
 
 use super::error::DbResult;
 use crate::sheets::definitions::{ColumnDataType, ColumnValidator, SheetMetadata};
@@ -36,8 +39,9 @@ impl DbWriter {
         grid: &[Vec<String>],
         metadata: &SheetMetadata,
         on_chunk: F,
+        daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
     ) -> DbResult<()> {
-        insertions::insert_grid_data_with_progress(tx, table_name, grid, metadata, on_chunk)
+        insertions::insert_grid_data_with_progress(tx, table_name, grid, metadata, on_chunk, daemon_client)
     }
 
     /// Prepend a row (row_index = 0) by shifting existing rows down
@@ -46,8 +50,9 @@ impl DbWriter {
         table_name: &str,
         row_data: &[String],
         column_names: &[String],
+        daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
     ) -> DbResult<i64> {
-        insertions::prepend_row(conn, table_name, row_data, column_names)
+        insertions::prepend_row(conn, table_name, row_data, column_names, daemon_client)
     }
 
     /// Batch prepend multiple rows with single row_index calculation
@@ -57,8 +62,9 @@ impl DbWriter {
         table_name: &str,
         rows_data: &[Vec<String>],
         column_names: &[String],
+        daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
     ) -> DbResult<Vec<i64>> {
-        insertions::prepend_rows_batch(conn, table_name, rows_data, column_names)
+        insertions::prepend_rows_batch(conn, table_name, rows_data, column_names, daemon_client)
     }
 
     // ============================================================================
@@ -72,8 +78,9 @@ impl DbWriter {
         row_id: i64,
         column_name: &str,
         value: &str,
+        daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
     ) -> DbResult<()> {
-        updates::update_structure_cell_by_id(conn, table_name, row_id, column_name, value)
+        updates::update_structure_cell_by_id(conn, table_name, row_id, column_name, value, daemon_client)
     }
 
     /// Update column ordering in metadata
@@ -81,8 +88,9 @@ impl DbWriter {
         conn: &Connection,
         table_name: &str,
         ordered_pairs: &[(String, i32)],
+        daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
     ) -> DbResult<()> {
-        updates::update_column_indices(conn, table_name, ordered_pairs)
+        updates::update_column_indices(conn, table_name, ordered_pairs, daemon_client)
     }
 
     // ============================================================================
@@ -95,28 +103,9 @@ impl DbWriter {
         table_name: &str,
         old_name: &str,
         new_name: &str,
+        daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
     ) -> DbResult<()> {
-        renames::rename_data_column(conn, table_name, old_name, new_name)
-    }
-
-    /// Update metadata column_name only (for virtual columns)
-    pub fn update_metadata_column_name(
-        conn: &Connection,
-        table_name: &str,
-        column_index: usize,
-        new_name: &str,
-    ) -> DbResult<()> {
-        renames::update_metadata_column_name(conn, table_name, column_index, new_name)
-    }
-
-    /// Rename a structure table and its metadata table
-    pub fn rename_structure_table(
-        conn: &Connection,
-        parent_table: &str,
-        old_column_name: &str,
-        new_column_name: &str,
-    ) -> DbResult<()> {
-        renames::rename_structure_table(conn, parent_table, old_column_name, new_column_name)
+        renames::rename_data_column(conn, table_name, old_name, new_name, daemon_client)
     }
 
     /// Atomically rename a structure table and update the parent table's metadata column name.
@@ -127,32 +116,57 @@ impl DbWriter {
         old_column_name: &str,
         new_column_name: &str,
         parent_column_index: usize,
+        daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
     ) -> DbResult<()> {
+        use crate::sheets::database::daemon_client::Statement;
+        
         // Begin immediate transaction to avoid race conditions
-        conn.execute("BEGIN IMMEDIATE", [])?;
+        let begin_stmt = Statement {
+            sql: "BEGIN IMMEDIATE".to_string(),
+            params: vec![],
+        };
+        daemon_client.exec_batch(vec![begin_stmt])
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
+                std::io::ErrorKind::Other,
+                e
+            ))))?;
+            
         let result = (|| -> DbResult<()> {
             // Will no-op if physical structure tables are missing
-            renames::rename_structure_table(conn, parent_table, old_column_name, new_column_name)?;
+            renames::rename_structure_table(conn, parent_table, old_column_name, new_column_name, daemon_client)?;
             // Update the parent table's metadata column name
             renames::update_metadata_column_name(
                 conn,
                 parent_table,
                 parent_column_index,
                 new_column_name,
+                daemon_client,
             )?;
             // Clean up: if a physical column with the old structure name exists on the parent table, drop it
             // This prevents orphaned physical columns being "recovered" back into metadata on next load.
-            let _ = renames::drop_physical_column_if_exists(conn, parent_table, old_column_name);
+            let _ = renames::drop_physical_column_if_exists(conn, parent_table, old_column_name, daemon_client);
             Ok(())
         })();
 
         match result {
             Ok(_) => {
-                conn.execute("COMMIT", [])?;
+                let commit_stmt = Statement {
+                    sql: "COMMIT".to_string(),
+                    params: vec![],
+                };
+                daemon_client.exec_batch(vec![commit_stmt])
+                    .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        e
+                    ))))?;
                 Ok(())
             }
             Err(e) => {
-                let _ = conn.execute("ROLLBACK", []);
+                let rollback_stmt = Statement {
+                    sql: "ROLLBACK".to_string(),
+                    params: vec![],
+                };
+                let _ = daemon_client.exec_batch(vec![rollback_stmt]);
                 Err(e)
             }
         }
@@ -163,8 +177,9 @@ impl DbWriter {
         conn: &Connection,
         old_table: &str,
         new_table: &str,
+        daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
     ) -> DbResult<()> {
-        renames::rename_table_and_descendants(conn, old_table, new_table)
+        renames::rename_table_and_descendants(conn, old_table, new_table, daemon_client)
     }
 
     /// Best-effort: drop a physical column from a table if it exists (SQLite 3.35+).
@@ -172,8 +187,9 @@ impl DbWriter {
         conn: &Connection,
         table_name: &str,
         column_name: &str,
+        daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
     ) -> DbResult<()> {
-        renames::drop_physical_column_if_exists(conn, table_name, column_name)
+        renames::drop_physical_column_if_exists(conn, table_name, column_name, daemon_client)
     }
 
     /// Update parent table's metadata column_name by matching the old column name.
@@ -182,8 +198,9 @@ impl DbWriter {
         table_name: &str,
         old_name: &str,
         new_name: &str,
+        daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
     ) -> DbResult<()> {
-        renames::update_metadata_column_name_by_name(conn, table_name, old_name, new_name)
+        renames::update_metadata_column_name_by_name(conn, table_name, old_name, new_name, daemon_client)
     }
 
     pub fn cascade_key_value_change_to_children(
@@ -192,6 +209,7 @@ impl DbWriter {
         parent_column_name: &str,
         old_value: &str,
         new_value: &str,
+        daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
     ) -> DbResult<()> {
         cascades::cascade_key_value_change_to_children(
             conn,
@@ -199,11 +217,17 @@ impl DbWriter {
             parent_column_name,
             old_value,
             new_value,
+            daemon_client,
         )
     }
 
-    pub fn update_table_hidden(conn: &Connection, table_name: &str, hidden: bool) -> DbResult<()> {
-        metadata::update_table_hidden(conn, table_name, hidden)
+    pub fn update_table_hidden(
+        conn: &Connection,
+        table_name: &str,
+        hidden: bool,
+        daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
+    ) -> DbResult<()> {
+        metadata::update_table_hidden(conn, table_name, hidden, daemon_client)
     }
 
     /// Update table-level AI settings in _Metadata
@@ -215,6 +239,7 @@ impl DbWriter {
         model_id: Option<&str>,
         active_group: Option<&str>,
         grounding_with_google_search: Option<bool>,
+        daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
     ) -> DbResult<()> {
         metadata::update_table_ai_settings(
             conn,
@@ -224,6 +249,7 @@ impl DbWriter {
             model_id,
             active_group,
             grounding_with_google_search,
+            daemon_client,
         )
     }
 
@@ -235,6 +261,7 @@ impl DbWriter {
         filter_expr: Option<&str>,
         ai_context: Option<&str>,
         ai_include_in_send: Option<bool>,
+        daemon_client: &super::daemon_client::DaemonClient,
     ) -> DbResult<()> {
         metadata::update_column_metadata(
             conn,
@@ -243,6 +270,7 @@ impl DbWriter {
             filter_expr,
             ai_context,
             ai_include_in_send,
+            daemon_client,
         )
     }
 
@@ -252,8 +280,9 @@ impl DbWriter {
         table_name: &str,
         column_index: usize,
         display_name: &str,
+        daemon_client: &super::daemon_client::DaemonClient,
     ) -> DbResult<()> {
-        metadata::update_column_display_name(conn, table_name, column_index, display_name)
+        metadata::update_column_display_name(conn, table_name, column_index, display_name, daemon_client)
     }
 
     /// Update AI include flag for a column
@@ -262,8 +291,9 @@ impl DbWriter {
         table_name: &str,
         column_index: usize,
         include: bool,
+        daemon_client: &super::daemon_client::DaemonClient,
     ) -> DbResult<()> {
-        metadata::update_column_ai_include(conn, table_name, column_index, include)
+        metadata::update_column_ai_include(conn, table_name, column_index, include, daemon_client)
     }
 
     /// Update a column's validator and optional AI flags
@@ -275,6 +305,7 @@ impl DbWriter {
         validator: &Option<ColumnValidator>,
         ai_include_in_send: Option<bool>,
         ai_enable_row_generation: Option<bool>,
+        daemon_client: &super::daemon_client::DaemonClient,
     ) -> DbResult<()> {
         metadata::update_column_validator(
             conn,
@@ -284,6 +315,7 @@ impl DbWriter {
             validator,
             ai_include_in_send,
             ai_enable_row_generation,
+            daemon_client,
         )
     }
 
@@ -299,6 +331,7 @@ impl DbWriter {
         filter_expr: Option<&str>,
         ai_enable_row_generation: Option<bool>,
         ai_include_in_send: Option<bool>,
+        daemon_client: &super::daemon_client::DaemonClient,
     ) -> DbResult<()> {
         metadata::add_column_with_metadata(
             conn,
@@ -311,6 +344,7 @@ impl DbWriter {
             filter_expr,
             ai_enable_row_generation,
             ai_include_in_send,
+            daemon_client,
         )
     }
 }
@@ -323,6 +357,8 @@ mod tests {
 
     #[test]
     fn test_update_column_indices_reorders_without_collision() {
+        use super::test_helpers::create_mock_daemon_client;
+        
         let conn = Connection::open_in_memory().unwrap();
         let table = "Main";
         setup_metadata_table(&conn, table, &["A", "B", "C", "D"]);
@@ -334,7 +370,8 @@ mod tests {
             ("A".to_string(), 2),
             ("C".to_string(), 3),
         ];
-        DbWriter::update_column_indices(&conn, table, &pairs).unwrap();
+        let mock_daemon = create_mock_daemon_client();
+        DbWriter::update_column_indices(&conn, table, &pairs, &mock_daemon).unwrap();
         // Verify ordering by selecting ordered by column_index
         let meta = format!("{}_Metadata", table);
         let mut stmt = conn
@@ -350,11 +387,16 @@ mod tests {
             .unwrap();
         assert_eq!(cols, vec!["D", "B", "A", "C"]);
     }
+    
+    // TODO: Re-enable after creating mock daemon client infrastructure
     #[test]
     fn test_prepend_row_shifts_and_inserts() {
+        use super::test_helpers::create_mock_daemon_client;
+        
         let conn = Connection::open_in_memory().unwrap();
         let table = "Main";
         setup_simple_table(&conn, table);
+        
         // Seed two rows: indices 0 => "A0", 1 => "A1"
         conn.execute(
             &format!(
@@ -372,9 +414,13 @@ mod tests {
             params![1i32, "A1"],
         )
         .unwrap();
+        
         let cols = vec!["Name".to_string()];
         let data = vec!["New".to_string()];
-        DbWriter::prepend_row(&conn, table, &data, &cols).unwrap();
+        let mock_daemon = create_mock_daemon_client();
+        
+        DbWriter::prepend_row(&conn, table, &data, &cols, &mock_daemon).unwrap();
+        
         let mut stmt = conn
             .prepare(&format!(
                 "SELECT row_index, \"Name\" FROM \"{}\" ORDER BY row_index DESC",

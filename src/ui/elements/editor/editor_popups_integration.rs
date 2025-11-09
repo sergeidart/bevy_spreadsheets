@@ -1,6 +1,7 @@
 // src/ui/elements/editor/editor_popups_integration.rs
 use super::main_editor::SheetEventWriters; // Assuming SheetEventWriters is made public or moved
 use crate::sheets::resources::SheetRegistry;
+use crate::sheets::database::daemon_client::DaemonClient;
 use crate::ui::elements::editor::state::EditorWindowState;
 use crate::ui::elements::popups::{
     show_add_table_popup, show_ai_rule_popup, show_column_options_popup,
@@ -34,6 +35,7 @@ pub(super) fn display_active_popups(
     queue_top_panel_copy_writer: &mut EventWriter<QueueTopPanelCopyEvent>,
     reverse_folders_writer: &mut EventWriter<ReverseTopPanelFoldersEvent>,
     state_changed_writer: &mut EventWriter<VisualCopierStateChanged>,
+    daemon_client: &DaemonClient,
 ) {
     show_column_options_popup(
         ctx,
@@ -41,6 +43,7 @@ pub(super) fn display_active_popups(
         &mut sheet_writers.column_rename,
         &mut sheet_writers.column_validator,
         registry,
+        daemon_client,
     );
     // Separate confirmation popup (if needed) - pass validator writer and registry
     show_validator_confirm_popup(
@@ -74,7 +77,7 @@ pub(super) fn display_active_popups(
         state_changed_writer,
     );
     // AI Rule (per-sheet AI Context) popup is now accessed from AI Mode via 'AI Context' button
-    show_ai_rule_popup(ctx, state, registry);
+    show_ai_rule_popup(ctx, state, registry, daemon_client);
     show_new_sheet_popup(
         ctx,
         state,
@@ -84,7 +87,7 @@ pub(super) fn display_active_popups(
     // Random Picker popup (opened by gear button in the top panel)
     show_random_picker_popup(ctx, state, registry);
     // Add Table popup (database mode - opened by "Add Table" button)
-    show_add_table_popup(ctx, state, migration_state);
+    show_add_table_popup(ctx, state, migration_state, &mut sheet_writers.create_sheet);
     // Migration popup (database mode - opened from Add Table popup)
     // We create a minimal Area to provide egui::Ui context for the migration popup
     // The popup creates its own Window internally

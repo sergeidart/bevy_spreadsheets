@@ -15,19 +15,8 @@ pub fn get_virtual_sheet_context(
     sheet_name: &str,
     editor_state: &Option<Res<EditorWindowState>>,
 ) -> Option<StructureParentContext> {
-    if !sheet_name.starts_with("__virtual__") {
-        return None;
-    }
-    
-    if let Some(state) = editor_state.as_ref() {
-        state
-            .virtual_structure_stack
-            .iter()
-            .find(|v| v.virtual_sheet_name == sheet_name)
-            .map(|vctx| vctx.parent.clone())
-    } else {
-        None
-    }
+    // Virtual structures deprecated; always returns None
+    None
 }
 
 /// Synchronizes virtual sheet changes back to parent cell

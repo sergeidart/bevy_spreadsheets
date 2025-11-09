@@ -91,6 +91,7 @@ impl Plugin for SheetsPlugin {
         app.init_resource::<ClipboardBuffer>();
         app.init_resource::<super::database::systems::MigrationBackgroundState>();
         app.init_resource::<super::database::checkpoint::CheckpointTimer>();
+        app.init_resource::<super::database::daemon_resource::SharedDaemonClient>();
 
         app.add_event::<AddSheetRowRequest>()
             .add_event::<AddSheetRowsBatchRequest>()
@@ -125,7 +126,9 @@ impl Plugin for SheetsPlugin {
             .add_event::<RequestCreateAiSchemaGroup>()
             .add_event::<RequestRenameAiSchemaGroup>()
             .add_event::<RequestDeleteAiSchemaGroup>()
-            .add_event::<RequestSelectAiSchemaGroup>();
+            .add_event::<RequestSelectAiSchemaGroup>()
+            // Daemon management event
+            .add_event::<super::database::daemon_resource::RequestDaemonShutdown>();
         // Category management events
         app.add_event::<RequestCreateCategory>()
             .add_event::<RequestDeleteCategory>()
@@ -144,6 +147,11 @@ impl Plugin for SheetsPlugin {
         app.add_systems(
             Startup,
             (
+                // Initialize daemon FIRST before any database operations
+                systems::io::startup::ensure_daemon_ready,
+                ApplyDeferred,
+                systems::io::startup::initiate_daemon_download_if_needed,
+                ApplyDeferred,
                 systems::io::startup::register_default_sheets_if_needed,
                 ApplyDeferred,
                 systems::io::startup::load_data_for_registered_sheets,
@@ -262,6 +270,10 @@ impl Plugin for SheetsPlugin {
                 super::database::handle_migration_completion,
                 // Periodic WAL checkpoint to prevent data loss
                 super::database::checkpoint::periodic_checkpoint,
+                // Check daemon health periodically
+                systems::io::startup::check_daemon_health,
+                // Handle daemon shutdown requests
+                super::database::daemon_resource::handle_daemon_shutdown_request,
             )
                 .in_set(SheetSystemSet::FileOperations),
         );
@@ -269,7 +281,10 @@ impl Plugin for SheetsPlugin {
         // Critical: Checkpoint databases on app exit to prevent data loss
         app.add_systems(
             Update,
-            super::database::checkpoint::checkpoint_on_exit,
+            (
+                super::database::checkpoint::checkpoint_on_exit,
+                super::database::daemon_resource::disconnect_on_exit,
+            ),
         );
 
         info!("SheetsPlugin initialized (with SheetRenderCache and WAL checkpoint protection).");

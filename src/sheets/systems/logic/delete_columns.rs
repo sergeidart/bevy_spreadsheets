@@ -8,7 +8,6 @@ use crate::sheets::{
     resources::SheetRegistry,
     systems::io::save::save_single_sheet,
 };
-use crate::ui::elements::editor::state::EditorWindowState;
 use bevy::prelude::*;
 use crate::sheets::database::open_or_create_db_for_category;
 use std::collections::HashMap;
@@ -20,7 +19,8 @@ pub fn handle_delete_columns_request(
     mut feedback_writer: EventWriter<SheetOperationFeedback>,
     mut data_modified_writer: EventWriter<SheetDataModifiedInRegistryEvent>,
     mut file_delete_writer: EventWriter<RequestDeleteSheetFile>,
-    editor_state: Option<Res<EditorWindowState>>,
+    // Virtual structure system removed - editor_state no longer needed
+    daemon_client: Res<crate::sheets::database::daemon_resource::SharedDaemonClient>,
 ) {
     let mut sheets_to_save: HashMap<(Option<String>, String), SheetMetadata> = HashMap::new();
     let mut structure_sheets_to_delete: Vec<(Option<String>, String)> = Vec::new();
@@ -29,15 +29,7 @@ pub fn handle_delete_columns_request(
 
     for event in events.read() {
         // Process delete event; scheduled DB column deletions will be recorded in outer vector
-        let (category, sheet_name) = if let Some(state) = editor_state.as_ref() {
-            if let Some(vctx) = state.virtual_structure_stack.last() {
-                (&event.category, &vctx.virtual_sheet_name)
-            } else {
-                (&event.category, &event.sheet_name)
-            }
-        } else {
-            (&event.category, &event.sheet_name)
-        };
+        let (category, sheet_name) = (&event.category, &event.sheet_name);
         let indices_to_delete = &event.column_indices;
 
         if indices_to_delete.is_empty() {
@@ -197,27 +189,41 @@ pub fn handle_delete_columns_request(
                     let base = crate::sheets::systems::io::get_default_data_base_path();
                     let db_path = base.join(format!("{}.db", cat));
                     if db_path.exists() {
-                        if let Ok(conn) = crate::sheets::database::connection::DbConnection::open_existing(&db_path) {
-                            // Drop the structure data table if exists
-                            let drop_sql = format!("DROP TABLE IF EXISTS \"{}\"", struct_sheet_name);
-                            if let Err(e) = conn.execute(&drop_sql, []) {
-                                warn!("Failed to drop structure table '{}' in DB '{}': {}", struct_sheet_name, db_path.display(), e);
-                            } else {
-                                info!("Dropped structure table '{}' from DB '{}'.", struct_sheet_name, db_path.display());
-                            }
-                            // Remove metadata entry for the structure table from _Metadata
-                            if let Err(e) = conn.execute("DELETE FROM _Metadata WHERE table_name = ?", rusqlite::params![struct_sheet_name]) {
-                                warn!("Failed to remove _Metadata entry for '{}' in DB '{}': {}", struct_sheet_name, db_path.display(), e);
-                            } else {
-                                info!("Removed _Metadata entry for '{}' from DB '{}'.", struct_sheet_name, db_path.display());
-                            }
-                            // Drop per-table metadata table if exists
+                        if let Ok(_conn) = crate::sheets::database::connection::DbConnection::open_existing(&db_path) {
+                            // Use daemon for all write operations
                             let meta_table = format!("{}_Metadata", struct_sheet_name);
-                            let drop_meta_sql = format!("DROP TABLE IF EXISTS \"{}\"", meta_table);
-                            if let Err(e) = conn.execute(&drop_meta_sql, []) {
-                                warn!("Failed to drop metadata table '{}' in DB '{}': {}", meta_table, db_path.display(), e);
-                            } else {
-                                info!("Dropped metadata table '{}' from DB '{}'.", meta_table, db_path.display());
+                            
+                            let statements = vec![
+                                // Drop the structure data table if exists
+                                crate::sheets::database::daemon_client::Statement {
+                                    sql: format!("DROP TABLE IF EXISTS \"{}\"", struct_sheet_name),
+                                    params: vec![],
+                                },
+                                // Remove metadata entry for the structure table from _Metadata
+                                crate::sheets::database::daemon_client::Statement {
+                                    sql: "DELETE FROM _Metadata WHERE table_name = ?".to_string(),
+                                    params: vec![serde_json::json!(struct_sheet_name)],
+                                },
+                                // Drop per-table metadata table if exists
+                                crate::sheets::database::daemon_client::Statement {
+                                    sql: format!("DROP TABLE IF EXISTS \"{}\"", meta_table),
+                                    params: vec![],
+                                },
+                            ];
+                            
+                            match daemon_client.client().exec_batch(statements) {
+                                Ok(response) => {
+                                    if response.error.is_some() {
+                                        warn!("Daemon error dropping structure table '{}' in DB '{}': {:?}", 
+                                              struct_sheet_name, db_path.display(), response.error);
+                                    } else {
+                                        info!("Dropped structure table '{}', metadata entry, and metadata table from DB '{}'.", 
+                                              struct_sheet_name, db_path.display());
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!("Failed to execute DROP/DELETE batch via daemon for '{}': {:?}", struct_sheet_name, e);
+                                }
                             }
                         }
                     }
@@ -247,61 +253,65 @@ pub fn handle_delete_columns_request(
             match open_or_create_db_for_category(&cat) {
                 Ok(conn) => {
                     let meta_table = format!("{}_Metadata", table_name);
-                    // Mark deleted flag and disable AI include in metadata
-                    let update_sql = format!(
-                        "UPDATE \"{}\" SET deleted = 1, ai_include_in_send = 0 WHERE column_name = ?",
-                        meta_table
-                    );
-                    match conn.execute(&update_sql, rusqlite::params![column_name]) {
-                        Ok(count) => {
-                            info!("Marked {} row(s) deleted in '{}', AI include disabled", count, meta_table);
-                            // Also wipe column contents to free space immediately, but first verify column exists
-                            let mut col_exists = false;
-                            if let Ok(mut stmt) = conn.prepare(&format!("PRAGMA table_info(\"{}\")", table_name)) {
-                                if let Ok(mut rows) = stmt.query([]) {
-                                    while let Ok(Some(row)) = rows.next() {
-                                        let name: String = row.get(1).unwrap_or_default();
-                                        if name == column_name {
-                                            col_exists = true;
-                                            break;
-                                        }
-                                    }
+                    
+                    // Check if column exists first (for reads we still use direct connection)
+                    let mut col_exists = false;
+                    if let Ok(mut stmt) = conn.prepare(&format!("PRAGMA table_info(\"{}\")", table_name)) {
+                        if let Ok(mut rows) = stmt.query([]) {
+                            while let Ok(Some(row)) = rows.next() {
+                                let name: String = row.get(1).unwrap_or_default();
+                                if name == column_name {
+                                    col_exists = true;
+                                    break;
                                 }
-                            }
-                            if col_exists {
-                                // Wipe data first
-                                let wipe_sql = format!("UPDATE \"{}\" SET \"{}\" = NULL", table_name, column_name);
-                                match conn.execute(&wipe_sql, []) {
-                                    Ok(wiped) => {
-                                        info!("Wiped {} cell(s) in '{}' column '{}'", wiped, table_name, column_name);
-                                        
-                                        // Try to drop the column (SQLite 3.35.0+)
-                                        let drop_sql = format!("ALTER TABLE \"{}\" DROP COLUMN \"{}\"", table_name, column_name);
-                                        match conn.execute(&drop_sql, []) {
-                                            Ok(_) => {
-                                                info!("Dropped column '{}' from table '{}'", column_name, table_name);
-                                                
-                                                // Run VACUUM to reclaim space
-                                                match conn.execute("VACUUM", []) {
-                                                    Ok(_) => info!("VACUUM completed after dropping column '{}'", column_name),
-                                                    Err(e) => warn!("VACUUM failed after dropping column '{}': {}", column_name, e),
-                                                }
-                                            }
-                                            Err(e) => {
-                                                warn!("Failed to drop column '{}' from '{}': {} (data wiped, column still exists)", column_name, table_name, e);
-                                            }
-                                        }
-                                    }
-                                    Err(e) => warn!("Failed to wipe data for column '{}' on '{}': {}", column_name, table_name, e),
-                                }
-                            } else {
-                                warn!("Cannot wipe data for column '{}' on '{}': column not found in table schema", column_name, table_name);
                             }
                         }
-                        Err(e) => warn!(
-                            "Failed to mark column '{}' deleted in '{}': {}",
-                            column_name, meta_table, e
-                        ),
+                    }
+                    
+                    // Build statements for daemon execution
+                    let mut statements = vec![
+                        // Mark deleted flag and disable AI include in metadata
+                        crate::sheets::database::daemon_client::Statement {
+                            sql: format!("UPDATE \"{}\" SET deleted = 1, ai_include_in_send = 0 WHERE column_name = ?", meta_table),
+                            params: vec![serde_json::json!(column_name)],
+                        },
+                    ];
+                    
+                    if col_exists {
+                        // Wipe data first
+                        statements.push(crate::sheets::database::daemon_client::Statement {
+                            sql: format!("UPDATE \"{}\" SET \"{}\" = NULL", table_name, column_name),
+                            params: vec![],
+                        });
+                        
+                        // Try to drop the column (SQLite 3.35.0+)
+                        statements.push(crate::sheets::database::daemon_client::Statement {
+                            sql: format!("ALTER TABLE \"{}\" DROP COLUMN \"{}\"", table_name, column_name),
+                            params: vec![],
+                        });
+                        
+                        // Run VACUUM to reclaim space
+                        statements.push(crate::sheets::database::daemon_client::Statement {
+                            sql: "VACUUM".to_string(),
+                            params: vec![],
+                        });
+                    }
+                    
+                    match daemon_client.client().exec_batch(statements) {
+                        Ok(response) => {
+                            if response.error.is_some() {
+                                warn!("Daemon error during column deletion for '{}.{}': {:?}", table_name, column_name, response.error);
+                            } else {
+                                if col_exists {
+                                    info!("Successfully marked deleted, wiped, dropped, and vacuumed column '{}' from table '{}'", column_name, table_name);
+                                } else {
+                                    info!("Marked column '{}' deleted in metadata (column didn't exist in table '{}')", column_name, table_name);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            warn!("Failed to execute column deletion batch via daemon for '{}.{}': {:?}", table_name, column_name, e);
+                        }
                     }
                 }
                 Err(e) => warn!("Could not open DB for category '{}' when marking column '{}' deleted: {}", cat, column_name, e),

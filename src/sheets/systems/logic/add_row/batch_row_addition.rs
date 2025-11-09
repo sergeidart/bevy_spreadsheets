@@ -21,6 +21,7 @@ pub fn handle_add_rows_batch_request(
     mut feedback_writer: EventWriter<SheetOperationFeedback>,
     mut data_modified_writer: EventWriter<SheetDataModifiedInRegistryEvent>,
     mut editor_state: Option<ResMut<EditorWindowState>>,
+    daemon_client: Res<crate::sheets::database::daemon_resource::SharedDaemonClient>,
 ) {
     for event in events.read() {
         if event.rows_initial_values.is_empty() {
@@ -115,7 +116,7 @@ pub fn handle_add_rows_batch_request(
                     if meta.category.is_some() {
                         // DB-backed: batch insert all rows
                         let persist_start = std::time::Instant::now();
-                        match persist_rows_batch_to_db(meta, &sheet_name, &category, &sheet_data.grid, num_rows) {
+                        match persist_rows_batch_to_db(meta, &sheet_name, &category, &sheet_data.grid, num_rows, daemon_client.client()) {
                             Ok(_) => {
                                 let duration = persist_start.elapsed();
                                 info!("Batch of {} rows persisted to DB in {:?}", num_rows, duration);

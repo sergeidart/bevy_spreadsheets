@@ -11,6 +11,7 @@ pub(super) fn persist_row_to_db(
     sheet_name: &str,
     category: &Option<String>,
     grid_data: &[Vec<String>],
+    daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
 ) -> Result<(), String> {
     // Only proceed if this is a DB-backed sheet
     let Some(cat) = category.as_ref() else {
@@ -112,6 +113,7 @@ pub(super) fn persist_row_to_db(
             sheet_name,
             &row_data,
             &column_names,
+            daemon_client,
         )
         .map_err(|e| format!("Failed to prepend row to structure table: {:?}", e))?;
 
@@ -138,6 +140,7 @@ pub(super) fn persist_row_to_db(
             sheet_name,
             &row_data,
             &column_names,
+            daemon_client,
         )
         .map_err(|e| format!("Failed to prepend row to database: {:?}", e))?;
     }
@@ -155,6 +158,7 @@ pub(super) fn persist_rows_batch_to_db(
     category: &Option<String>,
     grid_data: &[Vec<String>],
     num_rows: usize,
+    daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
 ) -> Result<(), String> {
     // Only proceed if this is a DB-backed sheet
     let Some(cat) = category.as_ref() else {
@@ -260,6 +264,7 @@ pub(super) fn persist_rows_batch_to_db(
             sheet_name,
             &batch_rows,
             &column_names,
+            daemon_client,
         )
         .map_err(|e| format!("Failed to batch prepend rows to structure table: {:?}", e))?;
 
@@ -294,6 +299,7 @@ pub(super) fn persist_rows_batch_to_db(
             sheet_name,
             &batch_rows,
             &column_names,
+            daemon_client,
         )
         .map_err(|e| format!("Failed to batch prepend rows to database: {:?}", e))?;
     }
@@ -309,6 +315,7 @@ pub(super) fn update_table_ai_settings_db(
     category: &Option<String>,
     sheet_name: &str,
     enable_rows: Option<bool>,
+    daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
 ) -> Result<(), String> {
     let Some(cat) = category.as_ref() else {
         return Ok(()); // Not a DB sheet
@@ -324,7 +331,7 @@ pub(super) fn update_table_ai_settings_db(
     let conn = crate::sheets::database::connection::DbConnection::open_existing(&db_path)
         .map_err(|e| format!("Failed to open database: {}", e))?;
 
-    let _ = crate::sheets::database::schema::ensure_global_metadata_table(&conn);
+    let _ = crate::sheets::database::schema::ensure_global_metadata_table(&conn, daemon_client);
     
     crate::sheets::database::writer::DbWriter::update_table_ai_settings(
         &conn,
@@ -334,6 +341,7 @@ pub(super) fn update_table_ai_settings_db(
         None,
         None,
         None,
+        daemon_client,
     )
     .map_err(|e| format!("Failed to update AI settings: {:?}", e))?;
 
@@ -346,6 +354,7 @@ pub(super) fn update_column_ai_include_db(
     sheet_name: &str,
     column_index: usize,
     include_flag: bool,
+    daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
 ) -> Result<(), String> {
     let Some(cat) = category.as_ref() else {
         return Ok(()); // Not a DB sheet
@@ -361,13 +370,14 @@ pub(super) fn update_column_ai_include_db(
     let conn = crate::sheets::database::connection::DbConnection::open_existing(&db_path)
         .map_err(|e| format!("Failed to open database: {}", e))?;
 
-    let _ = crate::sheets::database::schema::ensure_global_metadata_table(&conn);
+    let _ = crate::sheets::database::schema::ensure_global_metadata_table(&conn, daemon_client);
     
     crate::sheets::database::writer::DbWriter::update_column_ai_include(
         &conn,
         sheet_name,
         column_index,
         include_flag,
+        daemon_client,
     )
     .map_err(|e| format!("Failed to update column AI include: {:?}", e))?;
 
@@ -380,6 +390,7 @@ pub(super) fn update_column_metadata_db(
     sheet_name: &str,
     column_index: usize,
     ai_include_in_send: Option<bool>,
+    daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
 ) -> Result<(), String> {
     let Some(cat) = category.as_ref() else {
         return Ok(()); // Not a DB sheet
@@ -395,7 +406,7 @@ pub(super) fn update_column_metadata_db(
     let conn = crate::sheets::database::connection::DbConnection::open_existing(&db_path)
         .map_err(|e| format!("Failed to open database: {}", e))?;
 
-    let _ = crate::sheets::database::schema::ensure_global_metadata_table(&conn);
+    let _ = crate::sheets::database::schema::ensure_global_metadata_table(&conn, daemon_client);
     
     crate::sheets::database::writer::DbWriter::update_column_metadata(
         &conn,
@@ -404,6 +415,7 @@ pub(super) fn update_column_metadata_db(
         None,
         None,
         ai_include_in_send,
+        daemon_client,
     )
     .map_err(|e| format!("Failed to update column metadata: {:?}", e))?;
 

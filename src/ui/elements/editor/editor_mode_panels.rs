@@ -78,7 +78,6 @@ pub(super) fn show_active_mode_panel(
                 current_category_clone,
                 current_sheet_name_clone,
                 registry,
-                &mut sheet_writers.open_structure,
                 &mut sheet_writers.cell_update,
                 &mut sheet_writers.add_row,
             );

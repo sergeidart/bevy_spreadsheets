@@ -4,52 +4,55 @@ use bevy::prelude::*;
 use rusqlite::Connection;
 
 use super::super::error::{DbError, DbResult};
+use super::super::daemon_client::DaemonClient;
 use super::helpers::sql_type_for_column;
 use super::migrations::{ensure_migration_tracking, is_migration_applied, mark_migration_applied};
 use super::queries;
+use super::writer;
 use crate::sheets::definitions::{ColumnDefinition, ColumnValidator, SheetMetadata};
 
 /// Create the global _Metadata table if it doesn't exist
-pub fn ensure_global_metadata_table(conn: &Connection) -> DbResult<()> {
+pub fn ensure_global_metadata_table(conn: &Connection, daemon_client: &DaemonClient) -> DbResult<()> {
     // First ensure migration tracking exists
-    ensure_migration_tracking(conn)?;
+    ensure_migration_tracking(conn, daemon_client)?;
 
     // Create the table
-    queries::create_global_metadata_table(conn)?;
+    writer::create_global_metadata_table(daemon_client)?;
 
     // Run migrations only if not already applied
     if !is_migration_applied(conn, 1)? {
-        add_metadata_columns_migration(conn)?;
-        mark_migration_applied(conn, 1, "Added hidden and grounding columns to _Metadata")?;
+        add_metadata_columns_migration(conn, daemon_client)?;
+        mark_migration_applied(conn, 1, "Added hidden and grounding columns to _Metadata", daemon_client)?;
     }
 
     if !is_migration_applied(conn, 2)? {
-        add_ai_model_id_column_migration(conn)?;
-        mark_migration_applied(conn, 2, "Added ai_model_id column to _Metadata")?;
+        add_ai_model_id_column_migration(conn, daemon_client)?;
+        mark_migration_applied(conn, 2, "Added ai_model_id column to _Metadata", daemon_client)?;
     }
 
     Ok(())
 }
 
 /// Migration 1: Add hidden and grounding columns
-fn add_metadata_columns_migration(conn: &Connection) -> DbResult<()> {
+fn add_metadata_columns_migration(conn: &Connection, daemon_client: &DaemonClient) -> DbResult<()> {
     let existing_cols = queries::get_table_columns(conn, "_Metadata")?;
 
     if !existing_cols.iter().any(|c| c.eq_ignore_ascii_case("hidden")) {
-        queries::add_column_if_missing(conn, "_Metadata", "hidden", "INTEGER DEFAULT 0")?;
+        writer::add_column_if_missing(conn, "_Metadata", "hidden", "INTEGER DEFAULT 0", daemon_client)?;
         // Hide structure tables by default
-        queries::update_table_metadata_hidden(conn, "table_type = 'structure'")?;
+        writer::update_table_metadata_hidden("table_type = 'structure'", daemon_client)?;
     }
 
     if !existing_cols
         .iter()
         .any(|c| c.eq_ignore_ascii_case("ai_grounding_with_google_search"))
     {
-        queries::add_column_if_missing(
+        writer::add_column_if_missing(
             conn,
             "_Metadata",
             "ai_grounding_with_google_search",
             "INTEGER DEFAULT 0",
+            daemon_client,
         )?;
     }
 
@@ -57,11 +60,11 @@ fn add_metadata_columns_migration(conn: &Connection) -> DbResult<()> {
 }
 
 /// Migration 2: Add ai_model_id column
-fn add_ai_model_id_column_migration(conn: &Connection) -> DbResult<()> {
+fn add_ai_model_id_column_migration(conn: &Connection, daemon_client: &DaemonClient) -> DbResult<()> {
     let existing_cols = queries::get_table_columns(conn, "_Metadata")?;
 
     if !existing_cols.iter().any(|c| c.eq_ignore_ascii_case("ai_model_id")) {
-        queries::add_column_if_missing(conn, "_Metadata", "ai_model_id", "TEXT")?;
+        writer::add_column_if_missing(conn, "_Metadata", "ai_model_id", "TEXT", daemon_client)?;
         info!("Added ai_model_id column to _Metadata table");
     }
 
@@ -70,9 +73,9 @@ fn add_ai_model_id_column_migration(conn: &Connection) -> DbResult<()> {
 
 /// Create main data table from metadata
 pub fn create_data_table(
-    conn: &Connection,
     table_name: &str,
     columns: &[ColumnDefinition],
+    daemon_client: &DaemonClient,
 ) -> DbResult<()> {
     let mut col_defs = vec![
         "id INTEGER PRIMARY KEY AUTOINCREMENT".to_string(),
@@ -89,27 +92,26 @@ pub fn create_data_table(
         col_defs.push(format!("\"{}\" {}", col.header, sql_type));
     }
 
-    queries::create_main_data_table(conn, table_name, &col_defs)?;
+    writer::create_main_data_table(table_name, &col_defs, daemon_client)?;
     Ok(())
 }
 
 /// Create metadata table for a sheet
 pub fn create_metadata_table(
-    conn: &Connection,
     table_name: &str,
     metadata: &SheetMetadata,
+    daemon_client: &DaemonClient,
 ) -> DbResult<()> {
     let meta_table = format!("{}_Metadata", table_name);
 
     // Create the table structure
-    queries::create_sheet_metadata_table(conn, &meta_table)?;
+    writer::create_sheet_metadata_table(&meta_table, daemon_client)?;
 
     // Insert column metadata
     for (idx, col) in metadata.columns.iter().enumerate() {
         let (validator_type, validator_config) = build_validator_info(table_name, col)?;
 
-        queries::insert_column_metadata(
-            conn,
+        writer::insert_column_metadata(
             &meta_table,
             idx as i32,
             &col.header,
@@ -121,6 +123,7 @@ pub fn create_metadata_table(
             col.ai_enable_row_generation.unwrap_or(false) as i32,
             col.ai_include_in_send.unwrap_or(true) as i32,
             col.deleted as i32,
+            daemon_client,
         )?;
     }
 
@@ -171,38 +174,40 @@ pub fn ensure_table_metadata_schema(
     conn: &Connection,
     table_name: &str,
     metadata: &SheetMetadata,
+    daemon_client: &DaemonClient,
 ) -> DbResult<()> {
     let meta_table = format!("{}_Metadata", table_name);
 
     // Create table if missing
     if !queries::table_exists(conn, &meta_table)? {
-        create_metadata_table(conn, table_name, metadata)?;
+        create_metadata_table(table_name, metadata, daemon_client)?;
         return Ok(());
     }
 
     // Ensure required columns exist
-    add_missing_metadata_columns(conn, &meta_table)?;
+    add_missing_metadata_columns(conn, &meta_table, daemon_client)?;
 
     // Ensure one row for each column index exists
-    populate_missing_column_rows(conn, table_name, &meta_table, metadata)?;
+    populate_missing_column_rows(conn, table_name, &meta_table, metadata, daemon_client)?;
 
     Ok(())
 }
 
 /// Add missing columns to metadata table
-fn add_missing_metadata_columns(conn: &Connection, meta_table: &str) -> DbResult<()> {
-    queries::add_column_if_missing(conn, meta_table, "display_name", "TEXT")?;
-    queries::add_column_if_missing(conn, meta_table, "validator_type", "TEXT")?;
-    queries::add_column_if_missing(conn, meta_table, "validator_config", "TEXT")?;
-    queries::add_column_if_missing(conn, meta_table, "ai_context", "TEXT")?;
-    queries::add_column_if_missing(conn, meta_table, "filter_expr", "TEXT")?;
-    queries::add_column_if_missing(
+fn add_missing_metadata_columns(conn: &Connection, meta_table: &str, daemon_client: &DaemonClient) -> DbResult<()> {
+    writer::add_column_if_missing(conn, meta_table, "display_name", "TEXT", daemon_client)?;
+    writer::add_column_if_missing(conn, meta_table, "validator_type", "TEXT", daemon_client)?;
+    writer::add_column_if_missing(conn, meta_table, "validator_config", "TEXT", daemon_client)?;
+    writer::add_column_if_missing(conn, meta_table, "ai_context", "TEXT", daemon_client)?;
+    writer::add_column_if_missing(conn, meta_table, "filter_expr", "TEXT", daemon_client)?;
+    writer::add_column_if_missing(
         conn,
         meta_table,
         "ai_enable_row_generation",
         "INTEGER DEFAULT 0",
+        daemon_client,
     )?;
-    queries::add_column_if_missing(conn, meta_table, "ai_include_in_send", "INTEGER DEFAULT 1")?;
+    writer::add_column_if_missing(conn, meta_table, "ai_include_in_send", "INTEGER DEFAULT 1", daemon_client)?;
     Ok(())
 }
 
@@ -212,6 +217,7 @@ fn populate_missing_column_rows(
     table_name: &str,
     meta_table: &str,
     metadata: &SheetMetadata,
+    daemon_client: &DaemonClient,
 ) -> DbResult<()> {
     let table_type = queries::get_table_type(conn, table_name)?;
     let is_structure = matches!(table_type.as_deref(), Some("structure"));
@@ -233,12 +239,12 @@ fn populate_missing_column_rows(
         }
 
         let dt = format!("{:?}", col.data_type);
-        queries::insert_column_metadata_if_missing(
-            &tx,
+        writer::insert_column_metadata_if_missing(
             meta_table,
             data_column_idx,
             &col.header,
             &dt,
+            daemon_client,
         )?;
         data_column_idx += 1;
     }
@@ -252,25 +258,26 @@ pub fn create_ai_groups_table(
     conn: &Connection,
     table_name: &str,
     metadata: &SheetMetadata,
+    daemon_client: &DaemonClient,
 ) -> DbResult<()> {
     let groups_table = format!("{}_Metadata_Groups", table_name);
     let meta_table = format!("{}_Metadata", table_name);
 
     // Create the groups table
-    queries::create_ai_groups_table(conn, &groups_table, &meta_table)?;
+    writer::create_ai_groups_table(&groups_table, &meta_table, daemon_client)?;
 
     // Ensure deleted column exists in metadata table
-    queries::add_column_if_missing(conn, &meta_table, "deleted", "INTEGER DEFAULT 0")?;
+    writer::add_column_if_missing(conn, &meta_table, "deleted", "INTEGER DEFAULT 0", daemon_client)?;
 
     // Populate from metadata
     for group in &metadata.ai_schema_groups {
         for &col_idx in &group.included_columns {
-            queries::insert_ai_group_column(
-                conn,
+            writer::insert_ai_group_column(
                 &groups_table,
                 &meta_table,
                 &group.name,
                 col_idx as i32,
+                daemon_client,
             )?;
         }
     }
@@ -284,6 +291,7 @@ pub fn create_structure_table(
     parent_table: &str,
     col_def: &ColumnDefinition,
     structure_columns: Option<&[ColumnDefinition]>,
+    daemon_client: &DaemonClient,
 ) -> DbResult<()> {
     let structure_table = format!("{}_{}", parent_table, col_def.header);
 
@@ -296,14 +304,14 @@ pub fn create_structure_table(
     // Check if table exists and needs recreation
     if should_recreate_structure_table(conn, &structure_table, &col_defs, structure_columns, col_def)? {
         info!("Schema mismatch detected, dropping and recreating table '{}'", structure_table);
-        queries::drop_table(conn, &structure_table)?;
+        writer::drop_table(&structure_table, daemon_client)?;
     }
 
     // Create the table
-    queries::create_structure_data_table(conn, &structure_table, &col_defs)?;
+    writer::create_structure_data_table(&structure_table, &col_defs, daemon_client)?;
 
     // Register in global metadata
-    queries::register_structure_table(conn, &structure_table, parent_table, &col_def.header)?;
+    writer::register_structure_table(&structure_table, parent_table, &col_def.header, daemon_client)?;
 
     info!("======================================");
     Ok(())
@@ -390,9 +398,20 @@ fn should_recreate_structure_table(
         return Ok(false); // Table doesn't exist, no need to recreate
     }
 
-    let existing_cols = queries::get_table_columns(conn, structure_table)?;
-    let expected_col_count = col_defs.len() - 1; // -1 for UNIQUE constraint
-    let actual_col_count = existing_cols.len();
+    // Extract expected column names from col_defs (e.g., "id INTEGER PRIMARY KEY" -> "id")
+    let expected_columns: Vec<String> = col_defs
+        .iter()
+        .filter_map(|def| {
+            // Skip UNIQUE constraints and other table-level constraints
+            if def.starts_with("UNIQUE") || def.starts_with("FOREIGN KEY") {
+                return None;
+            }
+            // Extract column name (first token, removing quotes)
+            def.split_whitespace()
+                .next()
+                .map(|s| s.trim_matches('"').to_string())
+        })
+        .collect();
 
     let source_count = if let Some(struct_cols) = structure_columns {
         struct_cols.len()
@@ -405,30 +424,34 @@ fn should_recreate_structure_table(
     };
 
     info!(
-        "Table '{}' exists with {} columns, expected {} columns (from source with {} fields)",
-        structure_table, actual_col_count, expected_col_count, source_count
+        "Table '{}' exists, verifying structure with {} expected columns (from source with {} fields)",
+        structure_table, expected_columns.len(), source_count
     );
 
-    if actual_col_count != expected_col_count {
-        warn!(
-            "Schema mismatch for '{}': existing={:?}, expected cols={}",
-            structure_table, existing_cols, expected_col_count
-        );
-        return Ok(true);
+    // Use verify_table_structure to check both column count and names
+    match queries::verify_table_structure(conn, structure_table, &expected_columns) {
+        Ok(_) => {
+            info!("Structure table '{}' schema matches expectations", structure_table);
+            Ok(false) // No need to recreate
+        }
+        Err(e) => {
+            warn!(
+                "Schema mismatch detected for '{}': {}",
+                structure_table, e
+            );
+            Ok(true) // Needs recreation
+        }
     }
-
-    Ok(false)
 }
 
 /// Insert table-level metadata
 pub fn insert_table_metadata(
-    conn: &Connection,
     table_name: &str,
     metadata: &SheetMetadata,
     display_order: Option<i32>,
+    daemon_client: &DaemonClient,
 ) -> DbResult<()> {
-    queries::upsert_table_metadata(
-        conn,
+    writer::upsert_table_metadata(
         table_name,
         metadata.ai_enable_row_generation as i32,
         metadata.ai_general_rule.as_deref(),
@@ -436,6 +459,7 @@ pub fn insert_table_metadata(
         metadata.category.as_deref(),
         display_order,
         metadata.hidden as i32,
+        daemon_client,
     )?;
     Ok(())
 }

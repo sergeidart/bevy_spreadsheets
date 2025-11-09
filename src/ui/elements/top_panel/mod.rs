@@ -50,7 +50,6 @@ mod orchestrator {
         registry: &mut SheetRegistry,
         sheet_writers: &mut SheetEventWriters<'w>, // Received as &mut
         mut _request_app_exit_writer: EventWriter<'w, RequestAppExit>,
-        mut close_structure_writer: EventWriter<'w, crate::sheets::events::CloseStructureViewEvent>,
         runtime: &TokioTasksRuntime,
         session_api_key: &crate::SessionApiKey,
         commands: &mut Commands,
@@ -64,13 +63,11 @@ mod orchestrator {
                     // Back button (reserve width when hidden to prevent jumps)
                     let back_width = calc_button_width(ui_row, "⬅ Back");
                     let interact_h = ui_row.style().spacing.interact_size.y;
-                    let has_navigation = !state.virtual_structure_stack.is_empty() || !state.structure_navigation_stack.is_empty();
+                    let has_navigation = !state.structure_navigation_stack.is_empty();
                     if has_navigation {
                         if ui_row.add_sized([back_width, interact_h], egui::Button::new("⬅ Back")).clicked() {
-                            // Priority: virtual structure navigation first, then real structure navigation
-                            if !state.virtual_structure_stack.is_empty() {
-                                close_structure_writer.write(crate::sheets::events::CloseStructureViewEvent);
-                            } else if let Some(nav_ctx) = state.structure_navigation_stack.pop() {
+                            // Navigate back using structure navigation stack
+                            if let Some(nav_ctx) = state.structure_navigation_stack.pop() {
                                 // Navigate back to parent sheet
                                 state.selected_category = nav_ctx.parent_category;
                                 state.selected_sheet_name = Some(nav_ctx.parent_sheet_name);

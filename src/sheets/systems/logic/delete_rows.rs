@@ -5,6 +5,7 @@ use crate::sheets::{
     resources::SheetRegistry,
     systems::io::save::save_single_sheet,
 };
+use crate::ui::elements::editor::state::StructureParentContext;
 use bevy::prelude::*;
 use std::collections::HashMap;
 
@@ -13,8 +14,9 @@ pub fn handle_delete_rows_request(
     mut events: EventReader<RequestDeleteRows>,
     mut registry: ResMut<SheetRegistry>,
     mut feedback_writer: EventWriter<SheetOperationFeedback>,
-    mut data_modified_writer: EventWriter<SheetDataModifiedInRegistryEvent>, // Added writer
-    editor_state: Option<Res<crate::ui::elements::editor::state::EditorWindowState>>, // To map virtual sheets to parent contexts
+    mut data_modified_writer: EventWriter<SheetDataModifiedInRegistryEvent>,
+    // Virtual structure system removed - editor_state no longer needed
+    daemon_client: Res<crate::sheets::database::daemon_resource::SharedDaemonClient>,
 ) {
     // Use map to track sheets needing save after deletions
     let mut sheets_to_save: HashMap<(Option<String>, String), SheetMetadata> = HashMap::new();
@@ -33,22 +35,9 @@ pub fn handle_delete_rows_request(
             continue;
         }
 
-        // Check if this is a virtual structure sheet
-        let mut is_virtual = false;
-        let mut parent_ctx_opt = None;
-        if let Some(state) = editor_state.as_ref() {
-            if sheet_name.starts_with("__virtual__") {
-                // Find corresponding context
-                if let Some(vctx) = state
-                    .virtual_structure_stack
-                    .iter()
-                    .find(|v| &v.virtual_sheet_name == sheet_name)
-                {
-                    is_virtual = true;
-                    parent_ctx_opt = Some(vctx.parent.clone());
-                }
-            }
-        }
+        // Virtual structures are deprecated; this check now always returns false
+        let is_virtual = false;
+        let parent_ctx_opt: Option<StructureParentContext> = None;
 
         // --- Perform Deletion (Mutable Borrow) ---
         let mut operation_successful = false;
@@ -286,32 +275,34 @@ pub fn handle_delete_rows_request(
                 let db_path = base.join(format!("{}.db", db_name));
                 if db_path.exists() {
                     match crate::sheets::database::connection::DbConnection::open_existing(&db_path) {
-                        Ok(conn) => {
-                            // Foreign keys already enabled by open_existing
-                            
-                            // Both structure and regular tables use row_index for deletion
+                        Ok(_conn) => {
+                            // Use daemon for DELETE operations
                             let table_type = if is_structure { "structure" } else { "regular" };
                             info!("Deleting {} {} table rows from '{}' with row_index values: {:?}", 
                                   row_index_values.len(), table_type, sheet_name, row_index_values);
                             
-                            for row_index_val in row_index_values {
-                                match conn.execute(
-                                    &format!("DELETE FROM \"{}\" WHERE row_index = ?", sheet_name),
-                                    [row_index_val],
-                                ) {
-                                    Ok(deleted_count) => {
-                                        if deleted_count == 0 {
-                                            warn!("DELETE query for row_index={} affected 0 rows in '{}'", 
-                                                  row_index_val, sheet_name);
-                                        } else {
-                                            info!("Successfully deleted row with row_index={} from '{}' (affected {} row)", 
-                                                  row_index_val, sheet_name, deleted_count);
-                                        }
+                            // Build batch of DELETE statements for daemon
+                            let delete_statements: Vec<_> = row_index_values
+                                .iter()
+                                .map(|row_index_val| {
+                                    crate::sheets::database::daemon_client::Statement {
+                                        sql: format!("DELETE FROM \"{}\" WHERE row_index = ?", sheet_name),
+                                        params: vec![serde_json::json!(row_index_val)],
                                     }
-                                    Err(e) => {
-                                        error!("Failed to delete row row_index={} from '{}': {}", 
-                                               row_index_val, sheet_name, e);
+                                })
+                                .collect();
+                            
+                            match daemon_client.client().exec_batch(delete_statements) {
+                                Ok(response) => {
+                                    if response.error.is_some() {
+                                        error!("Daemon DELETE error for '{}': {:?}", sheet_name, response.error);
+                                    } else {
+                                        info!("Successfully deleted {} rows from '{}' via daemon", 
+                                              row_index_values.len(), sheet_name);
                                     }
+                                }
+                                Err(e) => {
+                                    error!("Failed to execute DELETE batch via daemon for '{}': {:?}", sheet_name, e);
                                 }
                             }
                         }

@@ -9,6 +9,7 @@ use bevy_egui::egui;
 
 use crate::sheets::events::RequestMoveSheetToCategory;
 use crate::sheets::resources::SheetRegistry;
+use crate::sheets::database::daemon_client::DaemonClient;
 use crate::ui::elements::editor::state::EditorWindowState;
 
 // Use sibling modules
@@ -25,10 +26,11 @@ pub fn show_sheet_management_controls<'a, 'w>(
     state: &mut EditorWindowState,
     registry: &mut SheetRegistry,
     event_writers: &mut SheetManagementEventWriters<'a, 'w>,
+    daemon_client: &DaemonClient,
 ) {
     ui.vertical(|ui_v| {
         category_row::show_category_picker(ui_v, state, registry, event_writers);
         ui_v.add_space(4.0);
-        sheet_row::show_sheet_controls(ui_v, state, registry, event_writers);
+        sheet_row::show_sheet_controls(ui_v, state, registry, event_writers, daemon_client);
     });
 }

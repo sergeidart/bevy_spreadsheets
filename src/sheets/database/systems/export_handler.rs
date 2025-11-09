@@ -2,12 +2,14 @@
 
 use crate::sheets::events::{RequestExportSheetToJson, SheetOperationFeedback};
 use crate::sheets::database::migration::MigrationTools;
+use crate::sheets::database::daemon_resource::SharedDaemonClient;
 use bevy::prelude::*;
 
 /// Handle requests to export a sheet from SQLite database to JSON format
 pub fn handle_export_requests(
     mut events: EventReader<RequestExportSheetToJson>,
     mut feedback_writer: EventWriter<SheetOperationFeedback>,
+    daemon_client: Res<SharedDaemonClient>,
 ) {
     for event in events.read() {
         info!(
@@ -21,6 +23,7 @@ pub fn handle_export_requests(
                     &conn,
                     &event.table_name,
                     &event.output_folder,
+                    daemon_client.client(),
                 ) {
                     Ok(_) => {
                         let msg = format!("Successfully exported '{}' to JSON", event.table_name);

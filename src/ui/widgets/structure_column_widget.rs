@@ -3,7 +3,6 @@
 use bevy::prelude::*;
 use bevy_egui::egui;
 use crate::sheets::{
-    events::OpenStructureViewEvent,
     resources::SheetRegistry,
 };
 use crate::ui::elements::editor::state::{EditorWindowState, StructureNavigationContext};
@@ -15,7 +14,6 @@ use crate::ui::elements::editor::state::{EditorWindowState, StructureNavigationC
 /// - Row count caching for performance
 /// - Tooltip with structure information
 /// - Navigation stack management when clicked
-/// - Event emission for structure creation if needed
 ///
 /// # Arguments
 /// * `ui` - The egui UI context
@@ -26,7 +24,6 @@ use crate::ui::elements::editor::state::{EditorWindowState, StructureNavigationC
 /// * `state` - Mutable editor window state
 /// * `category` - Optional category for the sheet
 /// * `sheet_name` - Name of the current sheet
-/// * `structure_open_events` - Event writer for opening structure views
 ///
 /// # Returns
 /// `(Option<Response>, Option<String>)` - The response and any new value (always None for structure columns)
@@ -39,7 +36,6 @@ pub fn render_structure_column(
     state: &mut EditorWindowState,
     category: &Option<String>,
     sheet_name: &str,
-    structure_open_events: &mut EventWriter<OpenStructureViewEvent>,
 ) -> (Option<egui::Response>, Option<String>) {
     let column_def = registry
         .get_sheet(category, sheet_name)
@@ -102,7 +98,6 @@ pub fn render_structure_column(
                 col_index,
                 current_display_text,
                 &ui_header,
-                structure_open_events,
             );
         }
 
@@ -198,10 +193,9 @@ fn handle_structure_click(
     sheet_name: &str,
     structure_sheet_name: &str,
     row_index: usize,
-    col_index: usize,
+    _col_index: usize,
     current_display_text: &str,
     ui_header: &str,
-    structure_open_events: &mut EventWriter<OpenStructureViewEvent>,
 ) {
     if registry.get_sheet(category, structure_sheet_name).is_some() {
         // Structure sheet exists - navigate to it
@@ -215,15 +209,9 @@ fn handle_structure_click(
             current_display_text,
             ui_header,
         );
-    } else {
-        // Structure sheet doesn't exist - emit event to create it
-        structure_open_events.write(OpenStructureViewEvent {
-            parent_category: category.clone(),
-            parent_sheet: sheet_name.to_string(),
-            row_index,
-            col_index,
-        });
     }
+    // Note: Structure sheet creation via OpenStructureViewEvent removed (deprecated)
+    // All structure sheets should be pre-created in the database
 }
 
 /// Builds navigation context and pushes it to the navigation stack.
@@ -235,7 +223,7 @@ fn build_and_push_navigation_context(
     structure_sheet_name: &str,
     row_index: usize,
     current_display_text: &str,
-    ui_header: &str,
+    _ui_header: &str,
 ) {
     // Build ancestor_keys (display values) and ancestor_row_indices (numeric) from navigation stack
     let mut ancestor_keys = if let Some(current_nav) = state.structure_navigation_stack.last() {
@@ -286,7 +274,6 @@ fn build_and_push_navigation_context(
         parent_row_key: parent_row_index_value,
         ancestor_keys,
         ancestor_row_indices,
-        parent_column_name: ui_header.to_string(),
     };
 
     state.structure_navigation_stack.push(nav_context);

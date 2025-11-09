@@ -5,7 +5,6 @@ use crate::sheets::{
     resources::SheetRegistry,
     systems::io::save::save_single_sheet,
 };
-use crate::ui::elements::editor::state::EditorWindowState;
 use bevy::prelude::*;
 use std::collections::HashMap;
 
@@ -15,20 +14,13 @@ pub fn handle_reorder_column_request(
     mut feedback_writer: EventWriter<SheetOperationFeedback>,
     mut data_modified_writer: EventWriter<SheetDataModifiedInRegistryEvent>,
     mut render_cache: ResMut<crate::sheets::resources::SheetRenderCache>,
-    editor_state: Option<Res<EditorWindowState>>,
+    // Virtual structure system removed - editor_state no longer needed
+    daemon_client: Res<crate::sheets::database::daemon_resource::SharedDaemonClient>,
 ) {
     let mut sheets_to_save: HashMap<(Option<String>, String), SheetMetadata> = HashMap::new();
 
     for event in events.read() {
-        let (category, sheet_name) = if let Some(state) = editor_state.as_ref() {
-            if let Some(vctx) = state.virtual_structure_stack.last() {
-                (&event.category, &vctx.virtual_sheet_name)
-            } else {
-                (&event.category, &event.sheet_name)
-            }
-        } else {
-            (&event.category, &event.sheet_name)
-        };
+        let (category, sheet_name) = (&event.category, &event.sheet_name);
         let old_index = event.old_index;
         let new_index = event.new_index;
 
@@ -129,6 +121,7 @@ pub fn handle_reorder_column_request(
                                             &conn,
                                             sheet_name,
                                             &pairs,
+                                            daemon_client.client(),
                                         ) {
                                             Ok(_) => {
                                                 info!(

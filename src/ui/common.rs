@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use crate::sheets::{
     definitions::{ColumnDataType, ColumnValidator},
     events::{
-        OpenStructureViewEvent, RequestCopyCell, RequestPasteCell, RequestToggleAiRowGeneration,
+        RequestCopyCell, RequestPasteCell, RequestToggleAiRowGeneration,
     },
     resources::{ClipboardBuffer, SheetRegistry, SheetRenderCache},
     systems::logic::{
@@ -31,7 +31,6 @@ pub fn edit_cell_widget(
     registry: &SheetRegistry,
     render_cache: &SheetRenderCache,
     state: &mut EditorWindowState,
-    structure_open_events: &mut EventWriter<OpenStructureViewEvent>,
     _toggle_ai_events: &mut EventWriter<RequestToggleAiRowGeneration>,
     copy_events: &mut EventWriter<RequestCopyCell>,
     paste_events: &mut EventWriter<RequestPasteCell>,
@@ -116,7 +115,6 @@ pub fn edit_cell_widget(
                                     state,
                                     category,
                                     sheet_name,
-                                    structure_open_events,
                                 );
                                 response_opt = resp;
                                 temp_new_value = new_val;

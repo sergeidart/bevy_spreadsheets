@@ -1,7 +1,6 @@
 // Handlers for accepting/cancelling AI row suggestions (moved out of monolithic file)
 use crate::sheets::events::{AddSheetRowRequest, UpdateCellEvent};
 use crate::sheets::resources::SheetRegistry;
-use crate::sheets::systems::logic::lineage_helpers::resolve_parent_key_from_lineage;
 use crate::ui::elements::editor::state::{
     EditorWindowState, NewRowReview, ReviewChoice, StructureReviewEntry,
 };
@@ -9,7 +8,7 @@ use crate::ui::elements::ai_review::serialization_helpers::{
     serialize_structure_rows_to_json, get_rows_to_serialize,
     resolve_parent_key_for_new_row, adjust_parent_indices_after_removal,
 };
-use bevy::prelude::{info, warn, EventWriter};
+use bevy::prelude::{info, EventWriter};
 
 fn remove_new_row_context(state: &mut EditorWindowState, new_index: usize) {
     state.ai_structure_new_row_contexts.remove(&new_index);
@@ -131,7 +130,7 @@ pub fn process_existing_accept(
     selected_category: &Option<String>,
     active_sheet_name: &str,
     cell_update_writer: &mut EventWriter<UpdateCellEvent>,
-    registry: &SheetRegistry,
+    _registry: &SheetRegistry,
 ) {
     let mut sorted = indices.to_vec();
     if sorted.is_empty() {
@@ -166,55 +165,7 @@ pub fn process_existing_accept(
                 }
             }
 
-            // Apply ancestor overrides: map human-readable values to numeric row_index for the full chain
-            if !state.virtual_structure_stack.is_empty() {
-                if let Some(child_meta) = registry
-                    .get_sheet(selected_category, active_sheet_name)
-                    .and_then(|s| s.metadata.as_ref())
-                {
-                    // Only handle parent_key (immediate parent), not grand_N columns
-                    let chain_len = state.virtual_structure_stack.len();
-                    let immediate_parent_idx = chain_len - 1;
-                    
-                    let override_flag = *rr.key_overrides.get(&(1000 + immediate_parent_idx)).unwrap_or(&false);
-                    if override_flag {
-                        // Get lineage values up to immediate parent
-                        let lineage_values: Vec<String> = (0..chain_len)
-                            .filter_map(|i| rr.ancestor_key_values.get(i).cloned())
-                            .collect();
-                        
-                        if !lineage_values.is_empty() {
-                            // Get parent sheet name from virtual structure stack
-                            if let Some(parent_ctx) = state.virtual_structure_stack.last() {
-                                // Resolve parent_key from lineage
-                                if let Some(parent_row_idx) = resolve_parent_key_from_lineage(
-                                    registry,
-                                    selected_category,
-                                    &parent_ctx.parent.parent_sheet,
-                                    &lineage_values,
-                                ) {
-                                    // Find parent_key column in child table
-                                    if let Some(parent_key_col) = child_meta
-                                        .columns
-                                        .iter()
-                                        .position(|c| c.header.eq_ignore_ascii_case("parent_key"))
-                                    {
-                                        cell_update_writer.write(UpdateCellEvent {
-                                            category: selected_category.clone(),
-                                            sheet_name: active_sheet_name.to_string(),
-                                            row_index: rr.row_index,
-                                            col_index: parent_key_col,
-                                            new_value: parent_row_idx.to_string(),
-                                        });
-                                    }
-                                } else {
-                                    warn!("Failed to resolve parent_key from lineage: {:?}", lineage_values);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            // Apply ancestor overrides: virtual structures deprecated; skip this logic
 
             // Write structure cells
             // Include all non-rejected structures - use merged_rows if decided, ai_rows otherwise

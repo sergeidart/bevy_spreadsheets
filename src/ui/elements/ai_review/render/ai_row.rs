@@ -29,24 +29,19 @@ fn get_parent_key_display(
                 let parent_category = parent_link.parent_category.clone();
                 let parent_sheet = parent_link.parent_sheet.clone();
                 
-                // Check cache first
                 let cache_key = (parent_category.clone(), parent_sheet.clone(), parent_row_idx);
                 let lineage = if let Some(cached) = ctx.state.parent_lineage_cache.get(&cache_key) {
                     cached.clone()
                 } else {
-                    // Build lineage and cache it
                     let lineage = walk_parent_lineage(
                         ctx.registry,
                         &parent_category,
                         &parent_sheet,
                         parent_row_idx,
                     );
-                    // We can't insert into cache here as ctx.state is borrowed immutably
-                    // But this is OK, the cache will be populated during table view
                     lineage
                 };
                 
-                // Format lineage with › separator
                 if !lineage.is_empty() {
                     return lineage.iter()
                         .map(|(_, display_val, _)| display_val.as_str())
@@ -57,7 +52,6 @@ fn get_parent_key_display(
         }
     }
     
-    // Fallback to raw value
     parent_key_value.to_string()
 }
 
@@ -281,11 +275,6 @@ fn render_ai_regular_cell(
             }
             
             if let Some(rr) = ctx.state.ai_row_reviews.get_mut(data_idx) {
-                // Check if this is a key column with override enabled
-                let is_key_column = plan.actual_col == 0;
-                let override_enabled = is_key_column && 
-                    *rr.key_overrides.get(&position).unwrap_or(&false);
-
                 let original_value = rr.original.get(position).cloned().unwrap_or_default();
                 let choices_vec = &mut rr.choices;
                 let ai_vec = &mut rr.ai;
@@ -357,11 +346,6 @@ fn render_ai_regular_cell(
             }
             
             if let Some(nr) = ctx.state.ai_new_row_reviews.get_mut(data_idx) {
-                // Check if this is a key column with override enabled
-                let is_key_column = plan.actual_col == 0;
-                let override_enabled = is_key_column && 
-                    *nr.key_overrides.get(&position).unwrap_or(&false);
-
                 let ai_vec = &mut nr.ai;
 
                 ui.horizontal(|ui| {
@@ -421,11 +405,6 @@ fn render_ai_regular_cell(
             
             if let Some(nr) = ctx.state.ai_new_row_reviews.get_mut(data_idx) {
                 let (merge_decided, merge_selected) = merge_state.unwrap_or((false, false));
-
-                // Check if this is a key column with override enabled
-                let is_key_column = plan.actual_col == 0;
-                let override_enabled = is_key_column && 
-                    *nr.key_overrides.get(&position).unwrap_or(&false);
 
                 let original_value = nr
                     .original_for_merge

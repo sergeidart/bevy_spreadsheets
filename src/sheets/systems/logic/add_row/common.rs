@@ -1,18 +1,13 @@
 // src/sheets/systems/logic/add_row_handlers/common.rs
 // Common helper functions used across add_row handlers
 
-use crate::sheets::definitions::{ColumnDefinition, ColumnValidator, SheetMetadata, StructureFieldDefinition};
-use std::collections::HashSet;
-
-/// Sets an Option<bool> to a new value and returns true if it changed
-pub(super) fn set_option(slot: &mut Option<bool>, new_value: Option<bool>) -> bool {
-    if *slot != new_value {
-        *slot = new_value;
-        true
-    } else {
-        false
-    }
-}
+use crate::sheets::{
+    definitions::{ColumnDefinition, ColumnValidator, SheetMetadata, StructureFieldDefinition},
+    events::{SheetDataModifiedInRegistryEvent, SheetOperationFeedback},
+    resources::SheetRegistry,
+};
+use bevy::prelude::*;
+use std::collections::{BTreeMap, HashSet};
 
 /// Sets an include option (true -> None, false -> Some(false)) and returns true if changed
 pub(super) fn set_include_option(flag: &mut Option<bool>, include: bool) -> bool {
@@ -44,73 +39,18 @@ pub(super) fn update_structure_row_generation(
         return Err("structure path missing".to_string());
     }
 
-    let mut names: Vec<String> = Vec::new();
-    let column_index = path[0];
-    let column = meta
-        .columns
-        .get_mut(column_index)
-        .ok_or_else(|| format!("column index {} out of bounds", column_index))?;
-    let changed = set_structure_override_column(column, &path[1..], override_opt, &mut names)?;
-    let label = if names.is_empty() {
-        None
-    } else {
-        Some(names.join(" -> "))
-    };
+    // Validate path exists before attempting to modify
+    if !meta.structure_path_exists(path) {
+        return Err(format!("invalid structure path: {:?}", path));
+    }
+
+    // Use existing helper to get the label
+    let label = meta.describe_structure_path(path);
+
+    // Navigate and update using the existing AI schema group method
+    let changed = meta.set_active_ai_schema_group_structure_override(path, override_opt);
+
     Ok((changed, label))
-}
-
-fn set_structure_override_column(
-    column: &mut ColumnDefinition,
-    path: &[usize],
-    override_opt: Option<bool>,
-    names: &mut Vec<String>,
-) -> Result<bool, String> {
-    names.push(column.header.clone());
-    if path.is_empty() {
-        return Ok(set_option(
-            &mut column.ai_enable_row_generation,
-            override_opt,
-        ));
-    }
-    let next_index = path[0];
-    let schema = column
-        .structure_schema
-        .as_mut()
-        .ok_or_else(|| format!("structure column '{}' missing schema", column.header))?;
-    let field = schema.get_mut(next_index).ok_or_else(|| {
-        format!(
-            "structure column '{}' index {} out of bounds",
-            column.header, next_index
-        )
-    })?;
-    set_structure_override_field(field, &path[1..], override_opt, names)
-}
-
-fn set_structure_override_field(
-    field: &mut StructureFieldDefinition,
-    path: &[usize],
-    override_opt: Option<bool>,
-    names: &mut Vec<String>,
-) -> Result<bool, String> {
-    names.push(field.header.clone());
-    if path.is_empty() {
-        return Ok(set_option(
-            &mut field.ai_enable_row_generation,
-            override_opt,
-        ));
-    }
-    let next_index = path[0];
-    let schema = field
-        .structure_schema
-        .as_mut()
-        .ok_or_else(|| format!("nested structure '{}' missing schema", field.header))?;
-    let next_field = schema.get_mut(next_index).ok_or_else(|| {
-        format!(
-            "nested structure '{}' index {} out of bounds",
-            field.header, next_index
-        )
-    })?;
-    set_structure_override_field(next_field, &path[1..], override_opt, names)
 }
 
 /// Applies AI send schema to root-level columns
@@ -128,59 +68,67 @@ pub(super) fn apply_send_schema_to_structure(
         return Err("structure path missing".to_string());
     }
 
+    // Validate that path points to a structure
     let column_index = path[0];
     let column = meta
         .columns
-        .get_mut(column_index)
+        .get(column_index)
         .ok_or_else(|| format!("column index {} out of bounds", column_index))?;
     if !matches!(column.validator, Some(ColumnValidator::Structure)) {
         return Err(format!("column '{}' is not a structure", column.header));
     }
 
-    let mut labels = vec![column.header.clone()];
+    // Use existing helper to get the path labels
+    let path_description = meta.describe_structure_path(path)
+        .ok_or_else(|| "invalid structure path".to_string())?;
+    let labels: Vec<String> = path_description.split(" -> ").map(|s| s.to_string()).collect();
 
-    if path.len() == 1 {
+    // Now we need to apply the changes to the mutable column
+    // Navigate to get mutable reference
+    let column = meta.columns.get_mut(column_index).unwrap();
+    
+    let changed = if path.len() == 1 {
+        // Direct structure column - apply to its schema
         let schema = column
             .structure_schema
             .as_mut()
             .ok_or_else(|| format!("structure column '{}' missing schema", column.header))?;
-        let changed = apply_send_schema_to_fields(schema, included);
-        return Ok((changed, labels));
-    }
+        apply_send_schema_to_fields(schema, included)
+    } else {
+        // Navigate to nested field and apply
+        let mut field = {
+            let schema = column
+                .structure_schema
+                .as_mut()
+                .ok_or_else(|| format!("structure column '{}' missing schema", column.header))?;
+            schema.get_mut(path[1]).ok_or_else(|| {
+                format!(
+                    "structure column '{}' index {} out of bounds",
+                    column.header, path[1]
+                )
+            })?
+        };
 
-    let mut field = {
-        let schema = column
+        for next_index in path.iter().skip(2) {
+            let next_schema = field
+                .structure_schema
+                .as_mut()
+                .ok_or_else(|| format!("nested structure '{}' missing schema", field.header))?;
+            field = next_schema.get_mut(*next_index).ok_or_else(|| {
+                format!(
+                    "nested structure '{}' index {} out of bounds",
+                    field.header, next_index
+                )
+            })?;
+        }
+
+        let target_schema = field
             .structure_schema
             .as_mut()
-            .ok_or_else(|| format!("structure column '{}' missing schema", column.header))?;
-        schema.get_mut(path[1]).ok_or_else(|| {
-            format!(
-                "structure column '{}' index {} out of bounds",
-                column.header, path[1]
-            )
-        })?
+            .ok_or_else(|| format!("structure '{}' missing schema", field.header))?;
+        apply_send_schema_to_fields(target_schema, included)
     };
-    labels.push(field.header.clone());
 
-    for next_index in path.iter().skip(2) {
-        let next_schema = field
-            .structure_schema
-            .as_mut()
-            .ok_or_else(|| format!("nested structure '{}' missing schema", field.header))?;
-        field = next_schema.get_mut(*next_index).ok_or_else(|| {
-            format!(
-                "nested structure '{}' index {} out of bounds",
-                field.header, next_index
-            )
-        })?;
-        labels.push(field.header.clone());
-    }
-
-    let target_schema = field
-        .structure_schema
-        .as_mut()
-        .ok_or_else(|| format!("structure '{}' missing schema", field.header))?;
-    let changed = apply_send_schema_to_fields(target_schema, included);
     Ok((changed, labels))
 }
 
@@ -240,58 +188,65 @@ pub(super) fn set_structure_send_flag(
         return Err("structure path missing".to_string());
     }
 
-    let mut labels: Vec<String> = Vec::new();
+    // Validate that path points to a structure
     let column_index = path[0];
     let column = meta
         .columns
-        .get_mut(column_index)
+        .get(column_index)
         .ok_or_else(|| format!("column index {} out of bounds", column_index))?;
     if !matches!(column.validator, Some(ColumnValidator::Structure)) {
         return Err(format!("column '{}' is not a structure", column.header));
     }
-    labels.push(column.header.clone());
 
-    if path.len() == 1 {
-        let changed = set_include_option(&mut column.ai_include_in_send, include);
-        return Ok((changed, labels));
-    }
+    // Use existing helper to get the path labels
+    let path_description = meta.describe_structure_path(path)
+        .ok_or_else(|| "invalid structure path".to_string())?;
+    let labels: Vec<String> = path_description.split(" -> ").map(|s| s.to_string()).collect();
 
-    let mut field = {
-        let schema = column
-            .structure_schema
-            .as_mut()
-            .ok_or_else(|| format!("structure column '{}' missing schema", column.header))?;
-        schema.get_mut(path[1]).ok_or_else(|| {
-            format!(
-                "structure column '{}' index {} out of bounds",
-                column.header, path[1]
-            )
-        })?
+    // Navigate and set the flag
+    let column = meta.columns.get_mut(column_index).unwrap();
+    
+    let changed = if path.len() == 1 {
+        // Direct structure column
+        set_include_option(&mut column.ai_include_in_send, include)
+    } else {
+        // Navigate to nested field
+        let mut field = {
+            let schema = column
+                .structure_schema
+                .as_mut()
+                .ok_or_else(|| format!("structure column '{}' missing schema", column.header))?;
+            schema.get_mut(path[1]).ok_or_else(|| {
+                format!(
+                    "structure column '{}' index {} out of bounds",
+                    column.header, path[1]
+                )
+            })?
+        };
+
+        for next_index in path.iter().skip(2) {
+            let schema = field
+                .structure_schema
+                .as_mut()
+                .ok_or_else(|| format!("nested structure '{}' missing schema", field.header))?;
+            field = schema.get_mut(*next_index).ok_or_else(|| {
+                format!(
+                    "nested structure '{}' index {} out of bounds",
+                    field.header, next_index
+                )
+            })?;
+        }
+
+        if !matches!(field.validator, Some(ColumnValidator::Structure)) {
+            return Err(format!(
+                "path does not reference a structure node (ended at '{}')",
+                field.header
+            ));
+        }
+
+        set_include_option(&mut field.ai_include_in_send, include)
     };
-    labels.push(field.header.clone());
 
-    for next_index in path.iter().skip(2) {
-        let schema = field
-            .structure_schema
-            .as_mut()
-            .ok_or_else(|| format!("nested structure '{}' missing schema", field.header))?;
-        field = schema.get_mut(*next_index).ok_or_else(|| {
-            format!(
-                "nested structure '{}' index {} out of bounds",
-                field.header, next_index
-            )
-        })?;
-        labels.push(field.header.clone());
-    }
-
-    if !matches!(field.validator, Some(ColumnValidator::Structure)) {
-        return Err(format!(
-            "path does not reference a structure node (ended at '{}')",
-            field.header
-        ));
-    }
-
-    let changed = set_include_option(&mut field.ai_include_in_send, include);
     Ok((changed, labels))
 }
 
@@ -303,8 +258,7 @@ pub(super) fn update_virtual_sheets_from_parent_structure(
     parent_sheet: &str,
     structure_path: &[usize],
 ) {
-    // Clone the structure schema we need before doing any mutable operations
-    // This avoids borrow checker issues
+    // Get the structure schema using existing helper
     let structure_schema_clone = {
         let Some(parent_sheet_data) = registry.get_sheet(parent_category, parent_sheet) else {
             return;
@@ -313,47 +267,15 @@ pub(super) fn update_virtual_sheets_from_parent_structure(
             return;
         };
 
-        // Navigate to the structure column at the given path
-        if structure_path.is_empty() {
-            return;
-        }
+        // Use existing helper to get the structure schema
+        parent_meta.structure_fields_for_path(structure_path)
+    };
 
-        let column_index = structure_path[0];
-        let Some(parent_column) = parent_meta.columns.get(column_index) else {
-            return;
-        };
-
-        // Get the structure schema (could be nested)
-        let structure_schema = if structure_path.len() == 1 {
-            // Direct structure column
-            parent_column.structure_schema.as_ref()
-        } else {
-            // Navigate through nested structure fields
-            let mut current_schema = parent_column.structure_schema.as_ref();
-            for &field_idx in structure_path.iter().skip(1) {
-                if let Some(schema) = current_schema {
-                    if let Some(field) = schema.get(field_idx) {
-                        current_schema = field.structure_schema.as_ref();
-                    } else {
-                        return;
-                    }
-                } else {
-                    return;
-                }
-            }
-            current_schema
-        };
-
-        let Some(schema) = structure_schema else {
-            return;
-        };
-
-        // Clone the schema so we can use it after releasing the immutable borrow
-        schema.clone()
+    let Some(structure_schema_clone) = structure_schema_clone else {
+        return;
     };
 
     // Find all virtual sheets that have this as their parent
-    // We need to collect the virtual sheet names first to avoid borrow conflicts
     let mut virtual_sheets_to_update: Vec<(Option<String>, String)> = Vec::new();
     let column_index = structure_path[0];
 
@@ -393,4 +315,119 @@ pub(super) fn update_virtual_sheets_from_parent_structure(
             }
         }
     }
+}
+
+/// Applies AI include updates to columns, handling both single and batch updates
+pub(super) fn apply_ai_include_updates(
+    registry: &mut SheetRegistry,
+    feedback: &mut EventWriter<SheetOperationFeedback>,
+    data_modified_writer: &mut EventWriter<SheetDataModifiedInRegistryEvent>,
+    category: &Option<String>,
+    sheet_name: &str,
+    updates: &[(usize, bool)],
+    daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
+) {
+    if updates.is_empty() {
+        return;
+    }
+
+    let (meta_snapshot, changed_indices) = {
+        let Some(sheet) = registry.get_sheet_mut(category, sheet_name) else {
+            feedback.write(SheetOperationFeedback {
+                message: format!(
+                    "Sheet {:?}/{} not found for AI include update",
+                    category, sheet_name
+                ),
+                is_error: true,
+            });
+            return;
+        };
+
+        let Some(meta) = sheet.metadata.as_mut() else {
+            feedback.write(SheetOperationFeedback {
+                message: format!(
+                    "Metadata missing for {:?}/{} when updating AI include",
+                    category, sheet_name
+                ),
+                is_error: true,
+            });
+            return;
+        };
+
+        meta.ensure_ai_schema_groups_initialized();
+
+        let mut dedup: BTreeMap<usize, bool> = BTreeMap::new();
+        for (idx, include) in updates.iter().copied() {
+            dedup.insert(idx, include);
+        }
+
+        let mut changed_indices: Vec<usize> = Vec::new();
+        for (idx, include) in dedup {
+            if let Some(column) = meta.columns.get_mut(idx) {
+                let previously_included = !matches!(column.ai_include_in_send, Some(false));
+                if include != previously_included {
+                    column.ai_include_in_send = if include { None } else { Some(false) };
+                    changed_indices.push(idx);
+                }
+            } else {
+                feedback.write(SheetOperationFeedback {
+                    message: format!(
+                        "Column index {} out of bounds for {:?}/{}",
+                        idx + 1,
+                        category,
+                        sheet_name
+                    ),
+                    is_error: true,
+                });
+            }
+        }
+
+        if changed_indices.is_empty() {
+            return;
+        }
+
+        let included_indices: Vec<usize> = meta
+            .columns
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, column)| {
+                if matches!(column.validator, Some(ColumnValidator::Structure)) {
+                    return None;
+                }
+                if matches!(column.ai_include_in_send, Some(false)) {
+                    None
+                } else {
+                    Some(idx)
+                }
+            })
+            .collect();
+        let _ = meta.set_active_ai_schema_group_included_columns(&included_indices);
+
+        (meta.clone(), changed_indices)
+    };
+
+    if meta_snapshot.category.is_none() {
+        super::json_persistence::save_to_json(&*registry, &meta_snapshot);
+    } else {
+        for idx in &changed_indices {
+            let include_flag =
+                !matches!(meta_snapshot.columns[*idx].ai_include_in_send, Some(false));
+            let _ = super::db_persistence::update_column_ai_include_db(category, sheet_name, *idx, include_flag, daemon_client);
+        }
+    }
+
+    data_modified_writer.write(SheetDataModifiedInRegistryEvent {
+        category: category.clone(),
+        sheet_name: sheet_name.to_string(),
+    });
+
+    feedback.write(SheetOperationFeedback {
+        message: format!(
+            "Updated AI send for {} column(s) in {:?}/{}",
+            changed_indices.len(),
+            category,
+            sheet_name
+        ),
+        is_error: false,
+    });
 }

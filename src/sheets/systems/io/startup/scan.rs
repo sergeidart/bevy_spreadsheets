@@ -294,7 +294,8 @@ pub fn scan_filesystem_for_unregistered_sheets(
 pub fn scan_and_load_database_files(
     mut registry: ResMut<SheetRegistry>,
     mut revalidate_writer: EventWriter<RequestSheetRevalidation>,
+    daemon_client: Res<crate::sheets::database::daemon_resource::SharedDaemonClient>,
 ) {
     // Delegate to handler
-    scan_handlers::scan_and_load_database_files(&mut registry, &mut revalidate_writer);
+    scan_handlers::scan_and_load_database_files(&mut registry, &mut revalidate_writer, daemon_client.client());
 }

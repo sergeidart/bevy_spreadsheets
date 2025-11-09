@@ -19,7 +19,9 @@ impl MigrationFix for HideTempNewRowIndexInMetadata {
         "Mark temporary row index columns as deleted in metadata"
     }
 
-    fn apply(&self, conn: &mut Connection) -> DbResult<()> {
+    fn apply(&self, conn: &mut Connection, daemon_client: &super::super::daemon_client::DaemonClient) -> DbResult<()> {
+        use super::super::daemon_client::Statement;
+        
         info!("Hiding temp row index columns in metadata...");
 
         // Get all table names from global metadata
@@ -33,20 +35,23 @@ impl MigrationFix for HideTempNewRowIndexInMetadata {
         for table_name in &tables {
             let meta_table = format!("{}_Metadata", table_name);
 
-            let updated = conn.execute(
-                &format!(
+            let update_stmt = Statement {
+                sql: format!(
                     "UPDATE \"{}\" SET deleted = 1 WHERE LOWER(column_name) IN ('temp_new_row_index','_obsolete_temp_new_row_index')",
                     meta_table
                 ),
-                [],
-            )?;
-
-            if updated > 0 {
-                affected += 1;
-                info!(
-                    "  ✓ Marked temp columns deleted in '{}' ({} row(s))",
-                    meta_table, updated
-                );
+                params: vec![],
+            };
+            
+            match daemon_client.exec_batch(vec![update_stmt]) {
+                Ok(_) => {
+                    affected += 1;
+                    info!("  ✓ Marked temp columns deleted in '{}'", meta_table);
+                }
+                Err(e) => {
+                    // Non-fatal: table might not have the column
+                    debug!("  Skipping '{}': {}", meta_table, e);
+                }
             }
         }
 

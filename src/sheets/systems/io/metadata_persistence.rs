@@ -10,6 +10,7 @@ pub fn save_sheet_metadata(
     registry: &SheetRegistry,
     metadata: &SheetMetadata,
     category: Option<String>,
+    daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
 ) {
     if let Some(ref cat_name) = category {
         // Database-backed category: category name equals the database file stem
@@ -20,7 +21,7 @@ pub fn save_sheet_metadata(
             match rusqlite::Connection::open(&db_path) {
                 Ok(conn) => {
                     // Ensure metadata table has 'hidden' column (migrate if needed)
-                    if let Err(e) = crate::sheets::database::schema::ensure_global_metadata_table(&conn) {
+                    if let Err(e) = crate::sheets::database::schema::ensure_global_metadata_table(&conn, daemon_client) {
                         error!(
                             "Failed to ensure _Metadata schema in DB '{}': {}",
                             db_path.display(),
@@ -32,6 +33,7 @@ pub fn save_sheet_metadata(
                         &conn,
                         &metadata.sheet_name,
                         metadata.hidden,
+                        daemon_client,
                     ) {
                         error!(
                             "Failed to update hidden flag in DB for '{}': {}",

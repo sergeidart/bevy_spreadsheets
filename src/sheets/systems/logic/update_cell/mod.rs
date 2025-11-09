@@ -5,7 +5,7 @@ mod cascade;
 mod cell_update;
 mod db_persistence;
 mod validation;
-mod virtual_sheet;
+// Virtual sheet module deprecated - virtual structures removed in favor of real DB-backed child tables
 
 use crate::sheets::{
     definitions::SheetMetadata,
@@ -16,7 +16,6 @@ use crate::sheets::{
     resources::SheetRegistry,
     systems::io::save::save_single_sheet,
 };
-use crate::ui::elements::editor::state::EditorWindowState;
 use bevy::prelude::*;
 use std::collections::HashMap;
 
@@ -27,7 +26,8 @@ pub fn handle_cell_update(
     mut feedback_writer: EventWriter<SheetOperationFeedback>,
     mut data_modified_writer: EventWriter<SheetDataModifiedInRegistryEvent>,
     mut revalidate_writer: EventWriter<RequestSheetRevalidation>,
-    editor_state: Option<Res<EditorWindowState>>,
+    // Virtual structure system removed - editor_state no longer needed
+    daemon_client: Res<crate::sheets::database::daemon_resource::SharedDaemonClient>,
 ) {
     let mut sheets_to_save: HashMap<(Option<String>, String), SheetMetadata> = HashMap::new();
     let mut sheets_to_revalidate: HashMap<(Option<String>, String), ()> = HashMap::new();
@@ -39,9 +39,7 @@ pub fn handle_cell_update(
         let col_idx = event.col_index;
         let new_value = &event.new_value;
 
-        // Check if this is a virtual sheet
-        let parent_ctx_opt = virtual_sheet::get_virtual_sheet_context(&sheet_name, &editor_state);
-        let is_virtual = parent_ctx_opt.is_some();
+        // Virtual structures deprecated - all sheets are now real DB-backed tables
 
         // Validate cell location
         let validation_result = validation::validate_cell_location(
@@ -106,6 +104,7 @@ pub fn handle_cell_update(
                                         update_result.old_value.as_deref(),
                                         col_meta.is_structure_col,
                                         col_meta.looks_like_real_structure,
+                                        daemon_client.client(),
                                     );
                                 }
                             } else {
@@ -141,20 +140,7 @@ pub fn handle_cell_update(
             }
         }
 
-        // Sync virtual sheet changes back to parent
-        if is_virtual {
-            if let Some(parent_ctx) = parent_ctx_opt {
-                let _ = virtual_sheet::sync_virtual_sheet_to_parent(
-                    registry.as_mut(),
-                    &category,
-                    &sheet_name,
-                    &parent_ctx,
-                    &mut sheets_to_save,
-                    &mut sheets_to_revalidate,
-                    &mut data_modified_writer,
-                );
-            }
-        }
+        // Virtual sheet sync removed - all structure data now persisted directly to DB
     }
 
     // Save sheets that were modified

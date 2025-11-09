@@ -34,6 +34,7 @@ impl MigrationTools {
         table_name: &str,
         display_order: Option<i32>,
         on_rows_chunk: Option<&mut dyn FnMut(usize)>,
+        daemon_client: &super::daemon_client::DaemonClient,
     ) -> DbResult<()> {
         JsonMigration::migrate_sheet_from_json(
             conn,
@@ -42,12 +43,8 @@ impl MigrationTools {
             table_name,
             display_order,
             on_rows_chunk,
+            daemon_client,
         )
-    }
-
-    /// Find all linked sheets referenced in metadata
-    pub fn find_linked_sheets(metadata: &crate::sheets::definitions::SheetMetadata) -> Vec<String> {
-        DependencyHandler::find_linked_sheets(metadata)
     }
 
     /// Scan folder for JSON pairs and their dependencies
@@ -55,15 +52,6 @@ impl MigrationTools {
         folder_path: &Path,
     ) -> DbResult<std::collections::HashMap<String, JsonSheetPair>> {
         IoHelpers::scan_json_folder(folder_path)
-    }
-
-    /// Migrate multiple sheets with dependency resolution
-    pub fn migrate_folder_to_db(
-        db_path: &Path,
-        folder_path: &Path,
-        create_new_db: bool,
-    ) -> DbResult<MigrationReport> {
-        JsonMigration::migrate_folder_to_db(db_path, folder_path, create_new_db)
     }
 
     /// Order sheets so dependencies are migrated first
@@ -78,7 +66,8 @@ impl MigrationTools {
         conn: &Connection,
         table_name: &str,
         output_folder: &Path,
+        daemon_client: &super::daemon_client::DaemonClient,
     ) -> DbResult<()> {
-        IoHelpers::export_sheet_to_json(conn, table_name, output_folder)
+        IoHelpers::export_sheet_to_json(conn, table_name, output_folder, daemon_client)
     }
 }

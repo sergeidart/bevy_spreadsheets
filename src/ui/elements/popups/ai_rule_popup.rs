@@ -1,6 +1,7 @@
 // src/ui/elements/popups/ai_rule_popup.rs
 use crate::{
     sheets::{
+        database::daemon_client::DaemonClient,
         definitions::{default_ai_model_id, SheetMetadata},
         resources::SheetRegistry,
         systems::io::save::save_single_sheet,
@@ -15,6 +16,7 @@ pub fn show_ai_rule_popup(
     ctx: &egui::Context,
     state: &mut EditorWindowState,
     registry: &mut SheetRegistry,
+    daemon_client: &DaemonClient,
 ) {
     if !state.show_ai_rule_popup {
         return;
@@ -211,6 +213,7 @@ pub fn show_ai_rule_popup(
                                 let _ =
                                     crate::sheets::database::schema::ensure_global_metadata_table(
                                         &conn,
+                                        daemon_client,
                                     );
                                 let _ = crate::sheets::database::writer::DbWriter::update_table_ai_settings(
                                     &conn,
@@ -220,6 +223,7 @@ pub fn show_ai_rule_popup(
                                     Some(&meta_for_saving.ai_model_id),
                                     None,
                                     meta_for_saving.requested_grounding_with_google_search,
+                                    daemon_client,
                                 );
                             }
                         }

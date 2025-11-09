@@ -24,7 +24,7 @@ use super::{
     ai_group_panel::draw_group_panel,
 };
 use crate::sheets::systems::ai::control_handler::{
-    resolve_structure_override, spawn_batch_task, BatchPayload,
+    spawn_batch_task, BatchPayload,
 };
 use crate::ui::elements::popups::ai_prompt_popup::show_ai_prompt_popup;
 
@@ -44,11 +44,7 @@ pub fn send_selected_rows(
         return;
     }
     let category = state.selected_category.clone();
-    let sheet_name = if let Some(vctx) = state.virtual_structure_stack.last() {
-        vctx.virtual_sheet_name.clone()
-    } else {
-        state.selected_sheet_name.clone().unwrap_or_default()
-    };
+    let sheet_name = state.selected_sheet_name.clone().unwrap_or_default();
     let sheet_opt = registry.get_sheet(&category, &sheet_name);
     let meta_opt = sheet_opt.and_then(|s| s.metadata.as_ref());
     if meta_opt.is_none() {
@@ -61,11 +57,8 @@ pub fn send_selected_rows(
 
     // Collect non-structure columns to include (influenced by schema groups) and
     // when in a structure sheet: exclude the technical columns (row_index, id), keep 'parent_key'.
-    // Treat as structure context when either:
-    // - Navigated into a virtual structure view (virtual_structure_stack), or
-    // - The selected sheet's metadata marks it as a structure table
-    let in_structure_sheet = !state.virtual_structure_stack.is_empty()
-        || meta.is_structure_table();
+    // Treat as structure context when the selected sheet's metadata marks it as a structure table
+    let in_structure_sheet = meta.is_structure_table();
     
     let inclusion = collect_ai_included_columns(meta, in_structure_sheet);
     let included_indices = inclusion.included_indices;
@@ -99,71 +92,17 @@ pub fn send_selected_rows(
         meta.ai_model_id.clone()
     };
 
-    // Use root sheet's general rule when inside a virtual structure
-    let rule = if !state.virtual_structure_stack.is_empty() {
-        if let Some(root_sheet) = root_sheet_opt.as_ref() {
-            if let Some(root_meta) = registry
-                .get_sheet(&root_category, root_sheet)
-                .and_then(|s| s.metadata.as_ref())
-            {
-                root_meta.ai_general_rule.clone()
-            } else {
-                meta.ai_general_rule.clone()
-            }
-        } else {
-            meta.ai_general_rule.clone()
-        }
-    } else {
-        meta.ai_general_rule.clone()
-    };
+    // Use current sheet's general rule directly (virtual structures deprecated)
+    let rule = meta.ai_general_rule.clone();
 
-    // Grounding flag: use root sheet metadata if in structure, otherwise current metadata
-    let grounding = if !state.virtual_structure_stack.is_empty() {
-        // Inside structure - get grounding from root sheet
-        if let Some(root_sheet) = root_sheet_opt.as_ref() {
-            if let Some(root_meta) = registry
-                .get_sheet(&root_category, root_sheet)
-                .and_then(|s| s.metadata.as_ref())
-            {
-                root_meta
-                    .requested_grounding_with_google_search
-                    .unwrap_or(false)
-            } else {
-                meta.requested_grounding_with_google_search.unwrap_or(false)
-            }
-        } else {
-            meta.requested_grounding_with_google_search.unwrap_or(false)
-        }
-    } else {
-        meta.requested_grounding_with_google_search.unwrap_or(false)
-    };
+    // Grounding flag: use current metadata directly (virtual structures deprecated)
+    let grounding = meta.requested_grounding_with_google_search.unwrap_or(false);
 
-    // Row additions flag (structure aware). If inside structure stack, resolve root & overrides similar to old panel.
-    let mut allow_additions_flag = meta.ai_enable_row_generation;
-    if !state.virtual_structure_stack.is_empty() {
-        // Find root meta & structure path like legacy logic.
-        if let Some(root_sheet) = root_sheet_opt.as_ref() {
-            if let Some(root_meta) = registry
-                .get_sheet(&root_category, root_sheet)
-                .and_then(|s| s.metadata.as_ref())
-            {
-                // Start with root sheet's default
-                let sheet_default = root_meta.ai_enable_row_generation;
-                // Then try to get structure-specific override
-                if let Some(override_val) =
-                    resolve_structure_override(root_meta, &state.ai_cached_included_columns_path)
-                {
-                    allow_additions_flag = override_val;
-                } else {
-                    // No explicit override, use root sheet's default
-                    allow_additions_flag = sheet_default;
-                }
-            }
-        }
-    }
+    // Row additions flag (use current metadata directly - virtual structures deprecated)
+    let allow_additions_flag = meta.ai_enable_row_generation;
 
     // Build human-readable ancestor prefixes using programmatic lineage walking.
-    // Prefer virtual structure context; fall back to legacy structure navigation if present.
+    // Virtual structure context deprecated; use legacy structure navigation if present.
     let lineage_prefixes = build_lineage_prefixes(state, registry, &selection);
     
     let key_prefix_count = lineage_prefixes.key_prefix_count;
@@ -337,100 +276,43 @@ pub fn draw_ai_panel(
                 .get_sheet(selected_category, &sheet_name)
                 .and_then(|s| s.metadata.as_ref())
             {
-                // Determine root context and structure path
-                let (root_category, root_sheet_opt) = state.resolve_root_sheet(registry);
-                let structure_path = if !state.virtual_structure_stack.is_empty() {
-                    state.ai_cached_included_columns_path.clone()
-                } else {
-                    Vec::new()
-                };
-
-                // Resolve the actual value from structure override if applicable
-                let mut allow_flag = meta.ai_enable_row_generation;
-                let mut sheet_default = meta.ai_enable_row_generation;
-
-                if !state.virtual_structure_stack.is_empty() {
-                    // Inside virtual structure - resolve from parent structure column
-                    if let Some(root_sheet) = root_sheet_opt.as_ref() {
-                        if let Some(root_meta) = registry
-                            .get_sheet(&root_category, root_sheet)
-                            .and_then(|s| s.metadata.as_ref())
-                        {
-                            sheet_default = root_meta.ai_enable_row_generation;
-                            if let Some(override_val) =
-                                resolve_structure_override(root_meta, &structure_path)
-                            {
-                                allow_flag = override_val;
-                            } else {
-                                allow_flag = sheet_default;
-                            }
-                        }
-                    }
-                }
-
+                // Use current sheet's enable_row_generation directly
+                let allow_flag = meta.ai_enable_row_generation;
                 let mut toggle_val = allow_flag;
-                let tooltip = if !state.virtual_structure_stack.is_empty() {
-                    "Allow AI to append new rows to this structure"
-                } else {
-                    "Allow AI to append new rows to this sheet"
-                };
+                let tooltip = "Allow AI to append new rows to this sheet";
                 let resp = ui
                     .add_enabled(true, egui::Checkbox::new(&mut toggle_val, "Add Rows"))
                     .on_hover_text(tooltip);
 
                 if resp.changed() {
-                    // For structures, calculate override value
-                    let (new_structure_path, new_override) =
-                        if !state.virtual_structure_stack.is_empty() {
-                            let new_override = if toggle_val == sheet_default {
-                                None
-                            } else {
-                                Some(toggle_val)
-                            };
-                            (Some(structure_path), new_override)
-                        } else {
-                            (None, None)
-                        };
-
-                    let (event_category, event_sheet) = if !state.virtual_structure_stack.is_empty()
-                    {
-                        (
-                            root_category.clone(),
-                            root_sheet_opt.unwrap_or(sheet_name.clone()),
-                        )
-                    } else {
-                        (selected_category.clone(), sheet_name.clone())
-                    };
-
+                    // Update directly for current sheet (virtual structures deprecated)
                     toggle_writer.write(RequestToggleAiRowGeneration {
-                        category: event_category,
-                        sheet_name: event_sheet,
+                        category: selected_category.clone(),
+                        sheet_name: sheet_name.clone(),
                         enabled: toggle_val,
-                        structure_path: new_structure_path,
-                        structure_override: new_override,
+                        structure_path: None,
+                        structure_override: None,
                     });
                 }
             }
         }
 
-        // Group panel (only when at root structure view)
-        if state.virtual_structure_stack.is_empty() {
-            if let Some(sheet_name) = selected_sheet.clone() {
-                let meta_opt = registry
-                    .get_sheet(selected_category, &sheet_name)
-                    .and_then(|s| s.metadata.as_ref());
-                draw_group_panel(
-                    ui,
-                    state,
-                    selected_category,
-                    &sheet_name,
-                    meta_opt,
-                    create_group_writer,
-                    rename_group_writer,
-                    select_group_writer,
-                    delete_group_writer,
-                );
-            }
+        // Group panel (always shown - virtual structures deprecated)
+        if let Some(sheet_name) = selected_sheet.clone() {
+            let meta_opt = registry
+                .get_sheet(selected_category, &sheet_name)
+                .and_then(|s| s.metadata.as_ref());
+            draw_group_panel(
+                ui,
+                state,
+                selected_category,
+                &sheet_name,
+                meta_opt,
+                create_group_writer,
+                rename_group_writer,
+                select_group_writer,
+                delete_group_writer,
+            );
         }
 
         // Review Batch (if results ready)
