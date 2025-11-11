@@ -223,6 +223,7 @@ pub fn show_ai_rule_popup(
                                     Some(&meta_for_saving.ai_model_id),
                                     None,
                                     meta_for_saving.requested_grounding_with_google_search,
+                                    db_path.file_name().and_then(|n| n.to_str()),
                                     daemon_client,
                                 );
                             }

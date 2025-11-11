@@ -251,7 +251,7 @@ pub fn rename_structure_table(
             "rename_structure_table: Renaming data table '{}' -> '{}'",
             old_struct, new_struct
         );
-        rename_table(conn, &old_struct, &new_struct, daemon_client)?;
+        rename_table(conn, &old_struct, &new_struct, None, daemon_client)?;
         
         // Validate the table was renamed
         if !table_exists(conn, &new_struct)? {
@@ -286,7 +286,7 @@ pub fn rename_structure_table(
             "rename_structure_table: Renaming metadata table '{}' -> '{}'",
             old_meta, new_meta
         );
-        rename_table(conn, &old_meta, &new_meta, daemon_client)?;
+        rename_table(conn, &old_meta, &new_meta, None, daemon_client)?;
         
         // Validate the metadata table was renamed
         if !table_exists(conn, &new_meta)? {
@@ -395,6 +395,7 @@ pub fn rename_table_and_descendants(
     conn: &Connection,
     old_table: &str,
     new_table: &str,
+    db_filename: Option<&str>,
     daemon_client: &super::super::daemon_client::DaemonClient,
 ) -> DbResult<()> {
     // Wrap the full cascade in a transaction
@@ -405,7 +406,7 @@ pub fn rename_table_and_descendants(
         );
 
         // 1) Rename the main table first
-        rename_table_triplet(conn, old_table, new_table, daemon_client)?;
+        rename_table_triplet(conn, old_table, new_table, db_filename, daemon_client)?;
 
         // 2) Collect descendant structure tables using prefix match on _Metadata
         let prefix = format!("{}_", old_table);
@@ -428,7 +429,7 @@ pub fn rename_table_and_descendants(
         pairs.sort_by_key(|(o, _)| std::cmp::Reverse(o.len()));
 
         for (old_name, new_name) in &pairs {
-            rename_table_triplet(conn, old_name, new_name, daemon_client)?;
+            rename_table_triplet(conn, old_name, new_name, db_filename, daemon_client)?;
         }
 
         // 3) Fix parent_table references in _Metadata for all renamed tables

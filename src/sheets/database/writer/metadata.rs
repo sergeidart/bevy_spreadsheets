@@ -111,6 +111,7 @@ pub fn update_table_hidden(
     _conn: &Connection,
     table_name: &str,
     hidden: bool,
+    db_filename: Option<&str>,
     daemon_client: &DaemonClient,
 ) -> DbResult<()> {
     let sql = "INSERT INTO _Metadata (table_name, hidden) VALUES (?, ?) \
@@ -119,7 +120,7 @@ pub fn update_table_hidden(
         serde_json::Value::String(table_name.to_string()),
         bool_to_json(hidden),
     ];
-    exec_daemon_stmt(sql, params, None, daemon_client)
+    exec_daemon_stmt(sql, params, db_filename, daemon_client)
 }
 
 /// Update table-level flags in _Metadata
@@ -131,6 +132,7 @@ pub fn update_table_ai_settings(
     model_id: Option<&str>,
     active_group: Option<&str>,
     grounding_with_google_search: Option<bool>,
+    db_filename: Option<&str>,
     daemon_client: &DaemonClient,
 ) -> DbResult<()> {
     let mut sets: Vec<&str> = Vec::new();
@@ -167,7 +169,7 @@ pub fn update_table_ai_settings(
     );
     params.push(serde_json::Value::String(table_name.to_string()));
     
-    exec_daemon_stmt(sql, params, None, daemon_client)
+    exec_daemon_stmt(sql, params, db_filename, daemon_client)
 }
 
 /// Update a column's filter, ai_context, and include flag in the table's metadata table

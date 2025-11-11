@@ -33,6 +33,7 @@ pub fn save_sheet_metadata(
                         &conn,
                         &metadata.sheet_name,
                         metadata.hidden,
+                        db_path.file_name().and_then(|n| n.to_str()),
                         daemon_client,
                     ) {
                         error!(

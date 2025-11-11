@@ -180,9 +180,10 @@ impl DbWriter {
         conn: &Connection,
         old_table: &str,
         new_table: &str,
+        db_filename: Option<&str>,
         daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
     ) -> DbResult<()> {
-        renames::rename_table_and_descendants(conn, old_table, new_table, daemon_client)
+        renames::rename_table_and_descendants(conn, old_table, new_table, db_filename, daemon_client)
     }
 
     /// Best-effort: drop a physical column from a table if it exists (SQLite 3.35+).
@@ -228,9 +229,10 @@ impl DbWriter {
         conn: &Connection,
         table_name: &str,
         hidden: bool,
+        db_filename: Option<&str>,
         daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
     ) -> DbResult<()> {
-        metadata::update_table_hidden(conn, table_name, hidden, daemon_client)
+        metadata::update_table_hidden(conn, table_name, hidden, db_filename, daemon_client)
     }
 
     /// Update table-level AI settings in _Metadata
@@ -242,6 +244,7 @@ impl DbWriter {
         model_id: Option<&str>,
         active_group: Option<&str>,
         grounding_with_google_search: Option<bool>,
+        db_filename: Option<&str>,
         daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
     ) -> DbResult<()> {
         metadata::update_table_ai_settings(
@@ -252,6 +255,7 @@ impl DbWriter {
             model_id,
             active_group,
             grounding_with_google_search,
+            db_filename,
             daemon_client,
         )
     }

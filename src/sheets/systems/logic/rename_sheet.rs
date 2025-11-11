@@ -103,6 +103,7 @@ pub fn handle_rename_request(
                                         &conn,
                                         old_name,
                                         new_name,
+                                        db_path.file_name().and_then(|n| n.to_str()),
                                         daemon_client.client(),
                                     ) {
                                         error!("DB cascade rename failed for '{:?}/{}': {}", category, new_name, e);

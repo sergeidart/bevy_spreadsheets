@@ -102,13 +102,13 @@ pub fn handle_column_conflict(conn: &Connection, meta_table: &str, table_name: &
 }
 
 /// Rename a table in the database.
-pub fn rename_table(_conn: &Connection, old_name: &str, new_name: &str, daemon_client: &super::super::daemon_client::DaemonClient) -> DbResult<()> {
+pub fn rename_table(_conn: &Connection, old_name: &str, new_name: &str, db_filename: Option<&str>, daemon_client: &super::super::daemon_client::DaemonClient) -> DbResult<()> {
     use crate::sheets::database::daemon_client::Statement;
     let stmt = Statement {
         sql: format!("ALTER TABLE \"{}\" RENAME TO \"{}\"", old_name, new_name),
         params: vec![],
     };
-    daemon_client.exec_batch(vec![stmt], None).map_err(daemon_error_to_rusqlite)?;
+    daemon_client.exec_batch(vec![stmt], db_filename).map_err(daemon_error_to_rusqlite)?;
     Ok(())
 }
 
@@ -195,7 +195,7 @@ where F: FnOnce(&Connection) -> DbResult<()>
 }
 
 /// Rename a table triplet: data table, metadata table, and AI groups table (if present).
-pub fn rename_table_triplet(conn: &Connection, old_name: &str, new_name: &str, daemon_client: &super::super::daemon_client::DaemonClient) -> DbResult<()> {
+pub fn rename_table_triplet(conn: &Connection, old_name: &str, new_name: &str, db_filename: Option<&str>, daemon_client: &super::super::daemon_client::DaemonClient) -> DbResult<()> {
     use super::super::schema::queries::table_exists;
     use crate::sheets::database::daemon_client::Statement;
     let new_data_exists = table_exists(conn, new_name)?;
@@ -204,18 +204,18 @@ pub fn rename_table_triplet(conn: &Connection, old_name: &str, new_name: &str, d
     if new_meta_exists && !new_data_exists {
         bevy::log::warn!("Found orphan metadata table '{}' without data table '{}'; dropping before rename.", new_meta, new_name);
         let drop_stmt = Statement { sql: format!("DROP TABLE IF EXISTS \"{}\"", new_meta), params: vec![] };
-        daemon_client.exec_batch(vec![drop_stmt], None).map_err(daemon_error_to_rusqlite)?;
+        daemon_client.exec_batch(vec![drop_stmt], db_filename).map_err(daemon_error_to_rusqlite)?;
     }
     let new_groups = format!("{}_AIGroups", new_name);
     let new_groups_exists = table_exists(conn, &new_groups)?;
     if new_groups_exists && !new_data_exists {
         bevy::log::warn!("Found orphan AI groups table '{}' without data table '{}'; dropping before rename.", new_groups, new_name);
         let drop_stmt = Statement { sql: format!("DROP TABLE IF EXISTS \"{}\"", new_groups), params: vec![] };
-        daemon_client.exec_batch(vec![drop_stmt], None).map_err(daemon_error_to_rusqlite)?;
+        daemon_client.exec_batch(vec![drop_stmt], db_filename).map_err(daemon_error_to_rusqlite)?;
     }
     let data_exists = table_exists(conn, old_name)?;
     if data_exists {
-        rename_table(conn, old_name, new_name, daemon_client)?;
+        rename_table(conn, old_name, new_name, db_filename, daemon_client)?;
     } else {
         bevy::log::warn!("rename_table_triplet: Data table '{}' not found; skipping data rename.", old_name);
     }
@@ -223,7 +223,7 @@ pub fn rename_table_triplet(conn: &Connection, old_name: &str, new_name: &str, d
     let new_meta = metadata_table_name(new_name);
     let meta_exists = table_exists(conn, &old_meta)?;
     if meta_exists {
-        rename_table(conn, &old_meta, &new_meta, daemon_client)?;
+        rename_table(conn, &old_meta, &new_meta, db_filename, daemon_client)?;
     } else {
         bevy::log::warn!("rename_table_triplet: Metadata table '{}' not found; skipping metadata rename.", old_meta);
     }
@@ -231,7 +231,7 @@ pub fn rename_table_triplet(conn: &Connection, old_name: &str, new_name: &str, d
     let new_groups = format!("{}_AIGroups", new_name);
     let groups_exists = table_exists(conn, &old_groups)?;
     if groups_exists {
-        rename_table(conn, &old_groups, &new_groups, daemon_client)?;
+        rename_table(conn, &old_groups, &new_groups, db_filename, daemon_client)?;
     }
     let delete_stmt = Statement {
         sql: "DELETE FROM _Metadata WHERE table_name = ?".to_string(),
@@ -244,6 +244,6 @@ pub fn rename_table_triplet(conn: &Connection, old_name: &str, new_name: &str, d
             serde_json::Value::String(old_name.to_string()),
         ],
     };
-    daemon_client.exec_batch(vec![delete_stmt, update_stmt], None).map_err(daemon_error_to_rusqlite)?;
+    daemon_client.exec_batch(vec![delete_stmt, update_stmt], db_filename).map_err(daemon_error_to_rusqlite)?;
     Ok(())
 }

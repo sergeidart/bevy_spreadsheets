@@ -108,7 +108,7 @@ pub fn handle_delete_rows_request(
                             }
                         }
                     }
-                    db_backed = Some((db_name.clone(), is_structure, row_index_values, meta.data_filename.clone()));
+                    db_backed = Some((db_name.clone(), is_structure, row_index_values, meta.sheet_name.clone()));
                 }
             }
         }

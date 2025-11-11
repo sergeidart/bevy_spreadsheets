@@ -306,8 +306,8 @@ pub fn handle_update_column_validator(
 
                 // Persist to DB if this sheet belongs to a database category
                 if let Some(cat_str) = &meta_mut.category {
-                    // Use physical table name for database operations
-                    let physical_table_name = &meta_mut.data_filename;
+                    // Use sheet_name as the physical table name for database operations
+                    let physical_table_name = &meta_mut.sheet_name;
                     // Persist by column name to avoid index mismatch when metadata contains technical columns
                     let column_name = meta_mut.columns[col_index].header.clone();
                     
