@@ -128,12 +128,22 @@ impl DaemonClient {
     /// * `statements` - Vector of SQL statements to execute
     /// * `db_path` - Optional database path. If None, uses the stored database name
     pub fn exec_batch(&self, statements: Vec<Statement>, db_path: Option<&str>) -> Result<DaemonResponse, String> {
+        self.exec_batch_with_mode(statements, db_path, TransactionMode::Atomic)
+    }
+
+    /// Execute a batch of SQL statements with a specific transaction mode
+    /// 
+    /// # Arguments
+    /// * `statements` - Vector of SQL statements to execute
+    /// * `db_path` - Optional database path. If None, uses the stored database name
+    /// * `tx_mode` - Transaction mode (Atomic or NoTransaction)
+    pub fn exec_batch_with_mode(&self, statements: Vec<Statement>, db_path: Option<&str>, tx_mode: TransactionMode) -> Result<DaemonResponse, String> {
         let db_name = self.get_db_name(db_path)?;
         
         let request = DaemonRequest::ExecBatch {
             db: db_name,
             stmts: statements,
-            tx: TransactionMode::Atomic,
+            tx: tx_mode,
         };
         self.send_request(&request)
     }

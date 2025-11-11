@@ -280,7 +280,7 @@ pub fn handle_delete_columns_request(
                         }
                     }
                     
-                    // Build statements for daemon execution
+                    // Build statements for daemon execution (transactional part)
                     let mut statements = vec![
                         // Mark deleted flag and disable AI include in metadata
                         crate::sheets::database::daemon_client::Statement {
@@ -301,21 +301,43 @@ pub fn handle_delete_columns_request(
                             sql: format!("ALTER TABLE \"{}\" DROP COLUMN \"{}\"", table_name, column_name),
                             params: vec![],
                         });
-                        
-                        // Run VACUUM to reclaim space
-                        statements.push(crate::sheets::database::daemon_client::Statement {
-                            sql: "VACUUM".to_string(),
-                            params: vec![],
-                        });
                     }
                     
+                    // Execute transactional statements first
                     match daemon_client.client().exec_batch(statements, db_path.file_name().and_then(|n| n.to_str())) {
                         Ok(response) => {
                             if response.error.is_some() {
                                 warn!("Daemon error during column deletion for '{}.{}': {:?}", table_name, column_name, response.error);
                             } else {
                                 if col_exists {
-                                    info!("Successfully marked deleted, wiped, dropped, and vacuumed column '{}' from table '{}'", column_name, table_name);
+                                    info!("Successfully marked deleted, wiped, and dropped column '{}' from table '{}'", column_name, table_name);
+                                    
+                                    // Run VACUUM separately (cannot run inside transaction)
+                                    let vacuum_statements = vec![
+                                        crate::sheets::database::daemon_client::Statement {
+                                            sql: "VACUUM".to_string(),
+                                            params: vec![],
+                                        },
+                                    ];
+                                    
+                                    match daemon_client.client().exec_batch_with_mode(
+                                        vacuum_statements, 
+                                        db_path.file_name().and_then(|n| n.to_str()),
+                                        crate::sheets::database::daemon_client::TransactionMode::NoTransaction
+                                    ) {
+                                        Ok(vacuum_response) => {
+                                            if vacuum_response.error.is_some() {
+                                                warn!("Failed to vacuum after column deletion for '{}.{}': {:?}", 
+                                                      table_name, column_name, vacuum_response.error);
+                                            } else {
+                                                info!("Successfully vacuumed database after deleting column '{}'", column_name);
+                                            }
+                                        }
+                                        Err(e) => {
+                                            warn!("Failed to vacuum database after column deletion for '{}.{}': {:?}", 
+                                                  table_name, column_name, e);
+                                        }
+                                    }
                                 } else {
                                     info!("Marked column '{}' deleted in metadata (column didn't exist in table '{}')", column_name, table_name);
                                 }

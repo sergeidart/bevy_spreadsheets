@@ -59,6 +59,10 @@ pub struct Statement {
 pub enum TransactionMode {
     /// All statements in one atomic transaction (recommended)
     Atomic,
+    /// Execute statements without a transaction wrapper
+    /// Use this for statements that cannot run inside transactions (e.g., VACUUM)
+    #[serde(rename = "none")]
+    NoTransaction,
 }
 
 /// Response from daemon

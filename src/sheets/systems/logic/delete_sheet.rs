@@ -170,10 +170,6 @@ pub fn handle_delete_request(
                                                 sql: "DELETE FROM _Metadata WHERE table_name = ?".to_string(),
                                                 params: vec![serde_json::json!(child_name)],
                                             },
-                                            crate::sheets::database::daemon_client::Statement {
-                                                sql: "VACUUM".to_string(),
-                                                params: vec![],
-                                            },
                                         ];
                                         
                                         match daemon_client.client().exec_batch(statements, db_path.file_name().and_then(|n| n.to_str())) {
@@ -182,8 +178,36 @@ pub fn handle_delete_request(
                                                     warn!("Daemon error cascade deleting child '{:?}/{}': {:?}", 
                                                           child_cat, child_name, response.error);
                                                 } else {
-                                                    info!("Cascade: cleaned DB objects and vacuumed for child '{:?}/{}'", 
+                                                    info!("Cascade: cleaned DB objects for child '{:?}/{}'", 
                                                           child_cat, child_name);
+                                                    
+                                                    // Run VACUUM separately (cannot run inside transaction)
+                                                    let vacuum_statements = vec![
+                                                        crate::sheets::database::daemon_client::Statement {
+                                                            sql: "VACUUM".to_string(),
+                                                            params: vec![],
+                                                        },
+                                                    ];
+                                                    
+                                                    match daemon_client.client().exec_batch_with_mode(
+                                                        vacuum_statements, 
+                                                        db_path.file_name().and_then(|n| n.to_str()),
+                                                        crate::sheets::database::daemon_client::TransactionMode::NoTransaction
+                                                    ) {
+                                                        Ok(vacuum_response) => {
+                                                            if vacuum_response.error.is_some() {
+                                                                warn!("Failed to vacuum after cascade delete of '{:?}/{}': {:?}", 
+                                                                      child_cat, child_name, vacuum_response.error);
+                                                            } else {
+                                                                info!("Successfully vacuumed database after cascade delete of '{:?}/{}'", 
+                                                                      child_cat, child_name);
+                                                            }
+                                                        }
+                                                        Err(e) => {
+                                                            warn!("Failed to vacuum database after cascade delete of '{:?}/{}': {:?}", 
+                                                                  child_cat, child_name, e);
+                                                        }
+                                                    }
                                                 }
                                             }
                                             Err(e) => {
@@ -287,10 +311,6 @@ pub fn handle_delete_request(
                                         sql: "DELETE FROM _Metadata WHERE table_name = ?".to_string(),
                                         params: vec![serde_json::json!(sheet_name)],
                                     },
-                                    crate::sheets::database::daemon_client::Statement {
-                                        sql: "VACUUM".to_string(),
-                                        params: vec![],
-                                    },
                                 ];
                                 
                                 match daemon_client.client().exec_batch(statements, db_path.file_name().and_then(|n| n.to_str())) {
@@ -299,8 +319,36 @@ pub fn handle_delete_request(
                                             error!("Daemon error deleting table '{}' from database '{}': {:?}", 
                                                    sheet_name, db_name, response.error);
                                         } else {
-                                            info!("Successfully dropped table '{}', cleaned metadata, and vacuumed database '{}'", 
+                                            info!("Successfully dropped table '{}' and cleaned metadata from database '{}'", 
                                                   sheet_name, db_name);
+                                            
+                                            // Run VACUUM separately (cannot run inside transaction)
+                                            let vacuum_statements = vec![
+                                                crate::sheets::database::daemon_client::Statement {
+                                                    sql: "VACUUM".to_string(),
+                                                    params: vec![],
+                                                },
+                                            ];
+                                            
+                                            match daemon_client.client().exec_batch_with_mode(
+                                                vacuum_statements, 
+                                                db_path.file_name().and_then(|n| n.to_str()),
+                                                crate::sheets::database::daemon_client::TransactionMode::NoTransaction
+                                            ) {
+                                                Ok(vacuum_response) => {
+                                                    if vacuum_response.error.is_some() {
+                                                        warn!("Failed to vacuum after deleting table '{}': {:?}", 
+                                                              sheet_name, vacuum_response.error);
+                                                    } else {
+                                                        info!("Successfully vacuumed database '{}' after deleting table '{}'", 
+                                                              db_name, sheet_name);
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    warn!("Failed to vacuum database '{}' after deleting table '{}': {:?}", 
+                                                          db_name, sheet_name, e);
+                                                }
+                                            }
                                         }
                                     }
                                     Err(e) => {
