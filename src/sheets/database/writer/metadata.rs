@@ -350,6 +350,7 @@ pub fn add_column_with_metadata(
     filter_expr: Option<&str>,
     ai_enable_row_generation: Option<bool>,
     ai_include_in_send: Option<bool>,
+    db_filename: Option<&str>,
     daemon_client: &DaemonClient,
 ) -> DbResult<()> {
     let meta_table = metadata_table_name(table_name);
@@ -378,7 +379,7 @@ pub fn add_column_with_metadata(
     if !col_exists {
         let sql_type = sql_type_for_column(data_type);
         let sql = format!("ALTER TABLE \"{}\" ADD COLUMN \"{}\" {}", table_name, column_name, sql_type);
-        exec_daemon_stmt(sql, vec![], None, daemon_client)?;
+        exec_daemon_stmt(sql, vec![], db_filename, daemon_client)?;
     }
 
     let (validator_type, validator_config) = validator_to_metadata(&validator, table_name, column_name);
@@ -391,7 +392,8 @@ pub fn add_column_with_metadata(
         meta_table
     );
     
-    let params = vec![
+    // Parameters for reuse UPDATE (column_index is LAST)
+    let reuse_params = vec![
         serde_json::Value::String(column_name.to_string()),
         serde_json::Value::String(format!("{:?}", data_type)),
         opt_string_to_json(validator_type.clone()),
@@ -403,8 +405,8 @@ pub fn add_column_with_metadata(
         serde_json::Value::Number((persisted_index as i32).into()),
     ];
     
-    let stmt = Statement { sql: reuse_sql, params: params.clone() };
-    let response = daemon_client.exec_batch(vec![stmt], None)
+    let stmt = Statement { sql: reuse_sql, params: reuse_params };
+    let response = daemon_client.exec_batch(vec![stmt], db_filename)
         .map_err(|e| super::super::error::DbError::Other(e))?;
     
     if response.rows_affected.unwrap_or(0) > 0 {
@@ -419,5 +421,18 @@ pub fn add_column_with_metadata(
         meta_table
     );
     
-    exec_daemon_stmt(insert_sql, params, None, daemon_client)
+    // Parameters for INSERT (column_index is FIRST)
+    let insert_params = vec![
+        serde_json::Value::Number((persisted_index as i32).into()),
+        serde_json::Value::String(column_name.to_string()),
+        serde_json::Value::String(format!("{:?}", data_type)),
+        opt_string_to_json(validator_type),
+        opt_string_to_json(validator_config),
+        string_to_json(ai_context),
+        string_to_json(filter_expr),
+        bool_to_json(ai_enable_row_generation.unwrap_or(false)),
+        bool_to_json(ai_include_in_send.unwrap_or(true)),
+    ];
+    
+    exec_daemon_stmt(insert_sql, insert_params, db_filename, daemon_client)
 }

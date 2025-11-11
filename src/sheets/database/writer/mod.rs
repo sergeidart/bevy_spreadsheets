@@ -91,9 +91,10 @@ impl DbWriter {
         conn: &Connection,
         table_name: &str,
         ordered_pairs: &[(String, i32)],
-        daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
+        db_filename: Option<&str>,
+        daemon_client: &super::daemon_client::DaemonClient,
     ) -> DbResult<()> {
-        updates::update_column_indices(conn, table_name, ordered_pairs, daemon_client)
+        updates::update_column_indices(conn, table_name, ordered_pairs, db_filename, daemon_client)
     }
 
     // ============================================================================
@@ -345,6 +346,7 @@ impl DbWriter {
         filter_expr: Option<&str>,
         ai_enable_row_generation: Option<bool>,
         ai_include_in_send: Option<bool>,
+        db_filename: Option<&str>,
         daemon_client: &super::daemon_client::DaemonClient,
     ) -> DbResult<()> {
         metadata::add_column_with_metadata(
@@ -358,6 +360,7 @@ impl DbWriter {
             filter_expr,
             ai_enable_row_generation,
             ai_include_in_send,
+            db_filename,
             daemon_client,
         )
     }
@@ -385,7 +388,7 @@ mod tests {
             ("C".to_string(), 3),
         ];
         let mock_daemon = create_mock_daemon_client();
-        DbWriter::update_column_indices(&conn, table, &pairs, &mock_daemon).unwrap();
+        DbWriter::update_column_indices(&conn, table, &pairs, None, &mock_daemon).unwrap();
         // Verify ordering by selecting ordered by column_index
         let meta = format!("{}_Metadata", table);
         let mut stmt = conn

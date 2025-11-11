@@ -58,6 +58,7 @@ pub fn handle_add_column_request(
                         if let Ok(conn) = crate::sheets::database::connection::DbConnection::open_existing(&db_path) {
                             let last_index = metadata.columns.len().saturating_sub(1);
                             let new_def = metadata.columns.last().cloned().unwrap();
+                            let db_filename = db_path.file_name().and_then(|n| n.to_str());
                             let _ =
                                 crate::sheets::database::writer::DbWriter::add_column_with_metadata(
                                     &conn,
@@ -70,6 +71,7 @@ pub fn handle_add_column_request(
                                     new_def.filter.as_deref(),
                                     new_def.ai_enable_row_generation,
                                     new_def.ai_include_in_send,
+                                    db_filename,
                                     &daemon_client.client(),
                                 );
                         }

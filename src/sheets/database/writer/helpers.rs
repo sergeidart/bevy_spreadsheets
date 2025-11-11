@@ -57,6 +57,9 @@ pub fn metadata_table_name(table_name: &str) -> String {
 
 /// Get column index from metadata table by column name.
 pub fn get_column_index_by_name(conn: &Connection, meta_table: &str, column_name: &str) -> DbResult<Option<i32>> {
+    // Checkpoint WAL to ensure we see the latest daemon writes
+    let _ = conn.query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |_| Ok(()));
+    
     let result = conn.query_row(
         &format!("SELECT column_index FROM \"{}\" WHERE column_name = ?", meta_table),
         params![column_name],
@@ -67,6 +70,9 @@ pub fn get_column_index_by_name(conn: &Connection, meta_table: &str, column_name
 
 /// Check if a column name conflicts with an existing column at a different index.
 pub fn check_column_name_conflict(conn: &Connection, meta_table: &str, column_name: &str) -> DbResult<Option<(i32, i32)>> {
+    // Checkpoint WAL to ensure we see the latest daemon writes
+    let _ = conn.query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |_| Ok(()));
+    
     let result = conn.query_row(
         &format!("SELECT column_index, deleted FROM \"{}\" WHERE column_name = ?", meta_table),
         params![column_name],
@@ -140,6 +146,10 @@ pub fn update_metadata_column_name_by_index(_conn: &Connection, meta_table: &str
 /// Validate that a physical column rename succeeded by checking the table schema.
 pub fn validate_physical_rename(conn: &Connection, table_name: &str, old_name: &str, new_name: &str) -> DbResult<()> {
     use super::super::reader::queries::get_physical_column_names;
+    
+    // Checkpoint WAL to ensure daemon writes are visible
+    let _ = conn.query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |_| Ok(()));
+    
     let physical_cols = get_physical_column_names(conn, table_name)?;
     if !physical_cols.iter().any(|col| col.eq_ignore_ascii_case(new_name)) {
         bevy::log::error!("validate_physical_rename: Validation failed - column '{}' not found after rename in table '{}'", new_name, table_name);

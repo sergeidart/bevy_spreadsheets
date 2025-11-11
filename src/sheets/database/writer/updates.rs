@@ -43,6 +43,7 @@ pub fn update_column_indices(
     _conn: &Connection,
     table_name: &str,
     ordered_pairs: &[(String, i32)],
+    db_filename: Option<&str>,
     daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
 ) -> DbResult<()> {
     use crate::sheets::database::daemon_client::Statement;
@@ -95,7 +96,7 @@ pub fn update_column_indices(
     let mut all_stmts = vec![stmt0, stmt1];
     all_stmts.extend(phase2_stmts);
     
-    daemon_client.exec_batch(all_stmts, None)
+    daemon_client.exec_batch(all_stmts, db_filename)
         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
             std::io::ErrorKind::Other,
             e

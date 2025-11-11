@@ -28,10 +28,12 @@ mod sheets;
 mod single_instance;
 mod ui;
 mod visual_copier;
+mod cli;
 
 use sheets::SheetsPlugin;
 use ui::EditorUiPlugin;
 use visual_copier::VisualCopierPlugin;
+use clap::Parser;
 
 #[derive(Resource, Debug, Default)]
 pub struct ApiKeyDisplayStatus {
@@ -45,6 +47,50 @@ pub struct SessionApiKey(pub Option<String>);
 pub struct IpcReceiver(std::sync::Arc<std::sync::Mutex<std::sync::mpsc::Receiver<()>>>);
 
 fn main() {
+    // Parse CLI arguments first
+    let cli = cli::Cli::parse();
+    
+    // If a subcommand was provided, run it and exit (don't start GUI)
+    if let Some(command) = cli.command {
+        if let Err(e) = run_cli_command(command) {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+        return;
+    }
+    
+    // No subcommand - launch GUI app
+    run_gui_app();
+}
+
+fn run_cli_command(command: cli::Commands) -> Result<(), Box<dyn std::error::Error>> {
+    match command {
+        cli::Commands::RepairMetadata { path } => {
+            cli::repair_metadata::run(path)?;
+        }
+        cli::Commands::DiagnoseMetadata { path } => {
+            cli::diagnose_metadata::run(path)?;
+        }
+        cli::Commands::AddDisplayName { path } => {
+            cli::add_display_name::run(path)?;
+        }
+        cli::Commands::ListColumns { path } => {
+            cli::list_columns::run(path)?;
+        }
+        cli::Commands::SyncColumnNames { path } => {
+            cli::sync_column_names::run(path)?;
+        }
+        cli::Commands::RestoreColumns { path } => {
+            cli::restore_columns::run(path)?;
+        }
+        cli::Commands::CheckStructureColumns { path } => {
+            cli::check_structure_columns::run(path)?;
+        }
+    }
+    Ok(())
+}
+
+fn run_gui_app() {
     // Check for single instance before doing anything else
     let _instance_guard = match single_instance::SingleInstanceGuard::try_acquire() {
         Some(guard) => guard,

@@ -117,10 +117,12 @@ pub fn handle_reorder_column_request(
                                                 idx, col_name, col_idx
                                             );
                                         }
+                                        let db_filename = db_path.file_name().and_then(|n| n.to_str());
                                         match crate::sheets::database::writer::DbWriter::update_column_indices(
                                             &conn,
                                             sheet_name,
                                             &pairs,
+                                            db_filename,
                                             daemon_client.client(),
                                         ) {
                                             Ok(_) => {

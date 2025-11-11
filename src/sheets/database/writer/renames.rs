@@ -38,6 +38,8 @@ pub fn rename_data_column(
     if new_name_exists {
         // Check if it's marked as deleted in metadata
         let meta_table = metadata_table_name(table_name);
+        // Checkpoint WAL to ensure we see the latest daemon writes
+        let _ = conn.query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |_| Ok(()));
         let is_deleted: Option<i32> = conn.query_row(
             &format!("SELECT deleted FROM \"{}\" WHERE column_name = ?", meta_table),
             params![new_name],
