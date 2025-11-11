@@ -113,18 +113,18 @@ pub fn rename_table(_conn: &Connection, old_name: &str, new_name: &str, db_filen
 }
 
 /// Rename a column in a table.
-pub fn rename_column(_conn: &Connection, table_name: &str, old_name: &str, new_name: &str, daemon_client: &super::super::daemon_client::DaemonClient) -> DbResult<()> {
+pub fn rename_column(_conn: &Connection, table_name: &str, old_name: &str, new_name: &str, db_filename: Option<&str>, daemon_client: &super::super::daemon_client::DaemonClient) -> DbResult<()> {
     use crate::sheets::database::daemon_client::Statement;
     let stmt = Statement {
         sql: format!("ALTER TABLE \"{}\" RENAME COLUMN \"{}\" TO \"{}\"", table_name, old_name, new_name),
         params: vec![],
     };
-    daemon_client.exec_batch(vec![stmt], None).map_err(daemon_error_to_rusqlite)?;
+    daemon_client.exec_batch(vec![stmt], db_filename).map_err(daemon_error_to_rusqlite)?;
     Ok(())
 }
 
 /// Update column_name in metadata table by column_index.
-pub fn update_metadata_column_name_by_index(_conn: &Connection, meta_table: &str, column_index: i32, new_name: &str, daemon_client: &super::super::daemon_client::DaemonClient) -> DbResult<usize> {
+pub fn update_metadata_column_name_by_index(_conn: &Connection, meta_table: &str, column_index: i32, new_name: &str, db_filename: Option<&str>, daemon_client: &super::super::daemon_client::DaemonClient) -> DbResult<usize> {
     use crate::sheets::database::daemon_client::Statement;
     let stmt = Statement {
         sql: format!("UPDATE \"{}\" SET column_name = ? WHERE column_index = ?", meta_table),
@@ -133,7 +133,7 @@ pub fn update_metadata_column_name_by_index(_conn: &Connection, meta_table: &str
             serde_json::Value::Number(column_index.into()),
         ],
     };
-    let response = daemon_client.exec_batch(vec![stmt], None).map_err(daemon_error_to_rusqlite)?;
+    let response = daemon_client.exec_batch(vec![stmt], db_filename).map_err(daemon_error_to_rusqlite)?;
     Ok(response.rows_affected.unwrap_or(0))
 }
 

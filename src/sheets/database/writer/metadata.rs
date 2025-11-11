@@ -317,6 +317,7 @@ pub fn update_column_display_name(
     table_name: &str,
     column_index: usize,
     display_name: &str,
+    db_filename: Option<&str>,
     daemon_client: &DaemonClient,
 ) -> DbResult<()> {
     let persisted_index = match get_persisted_index_or_skip(conn, table_name, column_index, daemon_client)? {
@@ -333,7 +334,7 @@ pub fn update_column_display_name(
         serde_json::Value::Number((persisted_index as i32).into()),
     ];
     
-    exec_daemon_stmt(sql, params, None, daemon_client)
+    exec_daemon_stmt(sql, params, db_filename, daemon_client)
 }
 
 /// Add a new column to a table (main or structure) and insert its metadata row with given index.

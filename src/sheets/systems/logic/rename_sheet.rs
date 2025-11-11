@@ -148,7 +148,7 @@ pub fn handle_rename_request(
                                                     };
 
                                                     // Update parent's metadata column name in DB by old name
-                                                    match crate::sheets::database::writer::DbWriter::update_metadata_column_name_by_name(&conn, &parent_table, &parent_col_old, &new_header, daemon_client.client()) {
+                                                    match crate::sheets::database::writer::DbWriter::update_metadata_column_name_by_name(&conn, &parent_table, &parent_col_old, &new_header, db_path.file_name().and_then(|n| n.to_str()), daemon_client.client()) {
                                                         Ok(_) => {
                                                             // Update child _Metadata parent_column to reflect new header using daemon
                                                             let statements = vec![

@@ -159,6 +159,7 @@ pub fn handle_update_column_name(
             };
 
             // If changing real header, attempt DB rename first; else update display name in DB first
+            let db_filename = db_path.file_name().and_then(|n| n.to_str());
             let db_result = if header_change_intended {
                 if is_structure {
                     crate::sheets::database::writer::DbWriter::rename_structure_and_parent_metadata_atomic(
@@ -167,6 +168,7 @@ pub fn handle_update_column_name(
                         &old_header,
                         new_name,
                         col_index,
+                        db_filename,
                         daemon_client.client(),
                     )
                 } else {
@@ -175,6 +177,7 @@ pub fn handle_update_column_name(
                         sheet_name,
                         &old_header,
                         new_name,
+                        db_filename,
                         daemon_client.client(),
                     )
                 }
@@ -184,6 +187,7 @@ pub fn handle_update_column_name(
                     sheet_name,
                     col_index,
                     new_name,
+                    db_filename,
                     daemon_client.client(),
                 )
             };
@@ -206,6 +210,7 @@ pub fn handle_update_column_name(
                     sheet_name,
                     col_index,
                     new_name,
+                    db_filename,
                     daemon_client.client(),
                 );
             }

@@ -106,9 +106,10 @@ impl DbWriter {
         table_name: &str,
         old_name: &str,
         new_name: &str,
+        db_filename: Option<&str>,
         daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
     ) -> DbResult<()> {
-        renames::rename_data_column(conn, table_name, old_name, new_name, daemon_client)
+        renames::rename_data_column(conn, table_name, old_name, new_name, db_filename, daemon_client)
     }
 
     /// Atomically rename a structure table and update the parent table's metadata column name.
@@ -119,6 +120,7 @@ impl DbWriter {
         old_column_name: &str,
         new_column_name: &str,
         parent_column_index: usize,
+        db_filename: Option<&str>,
         daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
     ) -> DbResult<()> {
         use crate::sheets::database::daemon_client::Statement;
@@ -128,7 +130,7 @@ impl DbWriter {
             sql: "BEGIN IMMEDIATE".to_string(),
             params: vec![],
         };
-        daemon_client.exec_batch(vec![begin_stmt], None)
+        daemon_client.exec_batch(vec![begin_stmt], db_filename)
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
                 std::io::ErrorKind::Other,
                 e
@@ -143,6 +145,7 @@ impl DbWriter {
                 parent_table,
                 parent_column_index,
                 new_column_name,
+                db_filename,
                 daemon_client,
             )?;
             // Clean up: if a physical column with the old structure name exists on the parent table, drop it
@@ -157,7 +160,7 @@ impl DbWriter {
                     sql: "COMMIT".to_string(),
                     params: vec![],
                 };
-                daemon_client.exec_batch(vec![commit_stmt], None)
+                daemon_client.exec_batch(vec![commit_stmt], db_filename)
                     .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
                         std::io::ErrorKind::Other,
                         e
@@ -202,9 +205,10 @@ impl DbWriter {
         table_name: &str,
         old_name: &str,
         new_name: &str,
+        db_filename: Option<&str>,
         daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
     ) -> DbResult<()> {
-        renames::update_metadata_column_name_by_name(conn, table_name, old_name, new_name, daemon_client)
+        renames::update_metadata_column_name_by_name(conn, table_name, old_name, new_name, db_filename, daemon_client)
     }
 
     pub fn cascade_key_value_change_to_children(
@@ -289,9 +293,10 @@ impl DbWriter {
         table_name: &str,
         column_index: usize,
         display_name: &str,
+        db_filename: Option<&str>,
         daemon_client: &super::daemon_client::DaemonClient,
     ) -> DbResult<()> {
-        metadata::update_column_display_name(conn, table_name, column_index, display_name, daemon_client)
+        metadata::update_column_display_name(conn, table_name, column_index, display_name, db_filename, daemon_client)
     }
 
     /// Update AI include flag for a column

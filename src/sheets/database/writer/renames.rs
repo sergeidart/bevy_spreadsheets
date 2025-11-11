@@ -18,6 +18,7 @@ pub fn rename_data_column(
     table_name: &str,
     old_name: &str,
     new_name: &str,
+    db_filename: Option<&str>,
     daemon_client: &super::super::daemon_client::DaemonClient,
 ) -> DbResult<()> {
     // Check if a column with new_name already exists in the DB schema
@@ -102,7 +103,7 @@ pub fn rename_data_column(
             meta_table, new_name, source_idx
         );
         
-        let count = update_metadata_column_name_by_index(conn, &meta_table, source_idx, new_name, daemon_client)?;
+        let count = update_metadata_column_name_by_index(conn, &meta_table, source_idx, new_name, db_filename, daemon_client)?;
         bevy::log::debug!(
             "rename_data_column (metadata-only): UPDATE affected {} row(s)",
             count
@@ -141,7 +142,7 @@ pub fn rename_data_column(
         table_name, old_name, new_name
     );
     
-    rename_column(conn, table_name, old_name, new_name, daemon_client)?;
+    rename_column(conn, table_name, old_name, new_name, db_filename, daemon_client)?;
     
     // Validate the physical rename succeeded
     validate_physical_rename(conn, table_name, old_name, new_name)?;
@@ -152,7 +153,7 @@ pub fn rename_data_column(
         meta_table, new_name, source_idx
     );
     
-    let _count = update_metadata_column_name_by_index(conn, &meta_table, source_idx, new_name, daemon_client)?;
+    let _count = update_metadata_column_name_by_index(conn, &meta_table, source_idx, new_name, db_filename, daemon_client)?;
     
     Ok(())
 }
@@ -164,6 +165,7 @@ pub fn update_metadata_column_name(
     table_name: &str,
     column_index: usize,
     new_name: &str,
+    db_filename: Option<&str>,
     daemon_client: &super::super::daemon_client::DaemonClient,
 ) -> DbResult<()> {
     // Convert runtime column index to persisted index
@@ -212,7 +214,7 @@ pub fn update_metadata_column_name(
         meta_table, new_name, persisted_index
     );
     
-    let count = update_metadata_column_name_by_index(conn, &meta_table, persisted_index as i32, new_name, daemon_client)?;
+    let count = update_metadata_column_name_by_index(conn, &meta_table, persisted_index as i32, new_name, db_filename, daemon_client)?;
     bevy::log::debug!(
         "update_metadata_column_name: UPDATE affected {} row(s)",
         count
@@ -340,6 +342,7 @@ pub fn update_metadata_column_name_by_name(
     table_name: &str,
     old_name: &str,
     new_name: &str,
+    db_filename: Option<&str>,
     daemon_client: &super::super::daemon_client::DaemonClient,
 ) -> DbResult<()> {
     let meta_table = metadata_table_name(table_name);
@@ -360,7 +363,7 @@ pub fn update_metadata_column_name_by_name(
     handle_column_conflict(conn, &meta_table, table_name, new_name, source_idx, daemon_client)?;
 
     // Update the row's name
-    let updated = update_metadata_column_name_by_index(conn, &meta_table, source_idx, new_name, daemon_client)?;
+    let updated = update_metadata_column_name_by_index(conn, &meta_table, source_idx, new_name, db_filename, daemon_client)?;
     bevy::log::info!(
         "update_metadata_column_name_by_name: updated {} row(s) for '{}.{}' -> '{}.{}'",
         updated, table_name, old_name, table_name, new_name
