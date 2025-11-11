@@ -50,9 +50,10 @@ impl DbWriter {
         table_name: &str,
         row_data: &[String],
         column_names: &[String],
+        db_filename: Option<&str>, // Database filename for daemon (e.g., "optima.db")
         daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
     ) -> DbResult<i64> {
-        insertions::prepend_row(conn, table_name, row_data, column_names, daemon_client)
+        insertions::prepend_row(conn, table_name, row_data, column_names, db_filename, daemon_client)
     }
 
     /// Batch prepend multiple rows with single row_index calculation
@@ -62,9 +63,10 @@ impl DbWriter {
         table_name: &str,
         rows_data: &[Vec<String>],
         column_names: &[String],
+        db_filename: Option<&str>, // Database filename for daemon (e.g., "optima.db")
         daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
     ) -> DbResult<Vec<i64>> {
-        insertions::prepend_rows_batch(conn, table_name, rows_data, column_names, daemon_client)
+        insertions::prepend_rows_batch(conn, table_name, rows_data, column_names, db_filename, daemon_client)
     }
 
     // ============================================================================
@@ -78,9 +80,10 @@ impl DbWriter {
         row_id: i64,
         column_name: &str,
         value: &str,
+        db_filename: Option<&str>,
         daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
     ) -> DbResult<()> {
-        updates::update_structure_cell_by_id(conn, table_name, row_id, column_name, value, daemon_client)
+        updates::update_structure_cell_by_id(conn, table_name, row_id, column_name, value, db_filename, daemon_client)
     }
 
     /// Update column ordering in metadata
@@ -125,7 +128,7 @@ impl DbWriter {
             sql: "BEGIN IMMEDIATE".to_string(),
             params: vec![],
         };
-        daemon_client.exec_batch(vec![begin_stmt])
+        daemon_client.exec_batch(vec![begin_stmt], None)
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
                 std::io::ErrorKind::Other,
                 e
@@ -154,7 +157,7 @@ impl DbWriter {
                     sql: "COMMIT".to_string(),
                     params: vec![],
                 };
-                daemon_client.exec_batch(vec![commit_stmt])
+                daemon_client.exec_batch(vec![commit_stmt], None)
                     .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
                         std::io::ErrorKind::Other,
                         e
@@ -166,7 +169,7 @@ impl DbWriter {
                     sql: "ROLLBACK".to_string(),
                     params: vec![],
                 };
-                let _ = daemon_client.exec_batch(vec![rollback_stmt]);
+                let _ = daemon_client.exec_batch(vec![rollback_stmt], None);
                 Err(e)
             }
         }
@@ -261,6 +264,7 @@ impl DbWriter {
         filter_expr: Option<&str>,
         ai_context: Option<&str>,
         ai_include_in_send: Option<bool>,
+        db_filename: Option<&str>,
         daemon_client: &super::daemon_client::DaemonClient,
     ) -> DbResult<()> {
         metadata::update_column_metadata(
@@ -270,6 +274,7 @@ impl DbWriter {
             filter_expr,
             ai_context,
             ai_include_in_send,
+            db_filename,
             daemon_client,
         )
     }
@@ -419,7 +424,7 @@ mod tests {
         let data = vec!["New".to_string()];
         let mock_daemon = create_mock_daemon_client();
         
-        DbWriter::prepend_row(&conn, table, &data, &cols, &mock_daemon).unwrap();
+        DbWriter::prepend_row(&conn, table, &data, &cols, None, &mock_daemon).unwrap();
         
         let mut stmt = conn
             .prepare(&format!(

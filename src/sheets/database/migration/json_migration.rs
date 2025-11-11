@@ -83,7 +83,7 @@ impl JsonMigration {
                         ),
                         params: vec![],
                     };
-                    daemon_client.exec_batch(vec![create_meta_stmt])
+                    daemon_client.exec_batch(vec![create_meta_stmt], None)
                         .map_err(|e| DbError::MigrationFailed(format!("Failed to create structure metadata table: {}", e)))?;
 
                     // Insert structure fields metadata (index starts at 0 for first structure field)
@@ -113,7 +113,7 @@ impl JsonMigration {
                         });
                     }
                     if !insert_stmts.is_empty() {
-                        daemon_client.exec_batch(insert_stmts)
+                        daemon_client.exec_batch(insert_stmts, None)
                             .map_err(|e| DbError::MigrationFailed(format!("Failed to insert structure field metadata: {}", e)))?;
                     }
 
@@ -322,7 +322,7 @@ impl JsonMigration {
                             }
                         }
                         let insert_stmt = DStatement { sql: insert_sql.clone(), params: json_params };
-                        daemon_client.exec_batch(vec![insert_stmt])
+                        daemon_client.exec_batch(vec![insert_stmt], None)
                             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))))?;
                     }
                     struct_total_inserted += 1;

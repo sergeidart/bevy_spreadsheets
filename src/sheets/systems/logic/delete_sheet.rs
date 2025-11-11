@@ -176,7 +176,7 @@ pub fn handle_delete_request(
                                             },
                                         ];
                                         
-                                        match daemon_client.client().exec_batch(statements) {
+                                        match daemon_client.client().exec_batch(statements, db_path.file_name().and_then(|n| n.to_str())) {
                                             Ok(response) => {
                                                 if response.error.is_some() {
                                                     warn!("Daemon error cascade deleting child '{:?}/{}': {:?}", 
@@ -293,7 +293,7 @@ pub fn handle_delete_request(
                                     },
                                 ];
                                 
-                                match daemon_client.client().exec_batch(statements) {
+                                match daemon_client.client().exec_batch(statements, db_path.file_name().and_then(|n| n.to_str())) {
                                     Ok(response) => {
                                         if response.error.is_some() {
                                             error!("Daemon error deleting table '{}' from database '{}': {:?}", 

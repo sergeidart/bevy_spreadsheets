@@ -168,6 +168,7 @@ pub fn handle_rename_category_request(
     mut events: EventReader<RequestRenameCategory>,
     mut registry: ResMut<SheetRegistry>,
     mut feedback: EventWriter<SheetOperationFeedback>,
+    daemon_client: Res<SharedDaemonClient>,
 ) {
     for ev in events.read() {
         let old_name = ev.old_name.trim();
@@ -197,17 +198,28 @@ pub fn handle_rename_category_request(
 
         match registry.rename_category(old_name, new_name) {
             Ok(_) => {
-                // Rename database file on disk
+                // Rename database file on disk with proper daemon coordination
                 let old_db_path = base_path.join(format!("{}.db", old_name));
+                let old_db_filename = format!("{}.db", old_name);
+                let new_db_filename = format!("{}.db", new_name);
 
                 if old_db_path.exists() {
-                    match std::fs::rename(&old_db_path, &new_db_path) {
+                    // Use daemon's safe file operation helper
+                    let client = daemon_client.client();
+                    let rename_result = client.with_safe_file_operation(
+                        Some(&old_db_filename),
+                        || std::fs::rename(&old_db_path, &new_db_path),
+                        Some(&new_db_filename)
+                    );
+                    
+                    match rename_result {
                         Ok(_) => {
                             info!(
                                 "Renamed database file from '{}' to '{}'",
                                 old_db_path.display(),
                                 new_db_path.display()
                             );
+                            
                             feedback.write(SheetOperationFeedback {
                                 message: format!(
                                     "Database '{}' renamed to '{}'",
@@ -218,6 +230,7 @@ pub fn handle_rename_category_request(
                         }
                         Err(e) => {
                             error!("Failed to rename database file: {}", e);
+                            
                             // Rollback registry change
                             let _ = registry.rename_category(new_name, old_name);
                             feedback.write(SheetOperationFeedback {

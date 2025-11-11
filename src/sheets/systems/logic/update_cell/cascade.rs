@@ -38,7 +38,6 @@ pub fn is_key_column(
 pub fn cascade_key_change_if_needed(
     conn: &rusqlite::Connection,
     metadata: &crate::sheets::definitions::SheetMetadata,
-    sheet_name: &str,
     col_idx: usize,
     col_header: &str,
     old_value: &str,
@@ -46,13 +45,15 @@ pub fn cascade_key_change_if_needed(
     daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
 ) {
     if is_key_column(metadata, col_idx) && old_value != new_value {
+        // Use sheet_name as table name (data_filename has .json extension which DB tables don't have)
+        let table_name = &metadata.sheet_name;
         info!(
             "Key column '{}' changed from '{}' to '{}' in table '{}'. Cascading to children...",
-            col_header, old_value, new_value, sheet_name
+            col_header, old_value, new_value, table_name
         );
         let _ = crate::sheets::database::writer::DbWriter::cascade_key_value_change_to_children(
             conn,
-            sheet_name,
+            table_name,
             col_header,
             old_value,
             new_value,

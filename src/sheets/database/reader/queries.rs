@@ -17,8 +17,11 @@ pub fn add_column_if_missing(
     column_type: &str,
     default_value: &str,
 ) -> DbResult<()> {
+    // Note: We don't check table existence here because this function is only called
+    // after explicitly verifying the table exists in read_metadata().
+    // If the table doesn't exist, this will fail gracefully and be caught by the caller.
     daemon_client
-        .exec_alter_table(table_name, column_name, column_type, default_value)
+        .exec_alter_table(table_name, column_name, column_type, default_value, None)
         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
             std::io::ErrorKind::Other,
             e,
@@ -96,7 +99,7 @@ pub fn insert_orphaned_column_metadata(
     data_type: &str,
 ) -> DbResult<()> {
     daemon_client
-        .exec_insert_metadata(meta_table, column_index, column_name, data_type)
+        .exec_insert_metadata(meta_table, column_index, column_name, data_type, None)
         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
             std::io::ErrorKind::Other,
             e,

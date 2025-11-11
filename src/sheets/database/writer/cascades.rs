@@ -101,7 +101,7 @@ pub fn cascade_key_value_change_to_children(
             ],
         };
         
-        let response = daemon_client.exec_batch(vec![stmt])
+        let response = daemon_client.exec_batch(vec![stmt], None)
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
                 std::io::ErrorKind::Other,
                 e
@@ -199,7 +199,7 @@ fn cascade_value_to_descendants(
                 ],
             };
             
-            let response = daemon_client.exec_batch(vec![stmt])
+            let response = daemon_client.exec_batch(vec![stmt], None)
                 .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
                     std::io::ErrorKind::Other,
                     e
@@ -237,7 +237,7 @@ fn cascade_value_to_descendants(
                     ],
                 };
                 
-                let response = daemon_client.exec_batch(vec![stmt])
+                let response = daemon_client.exec_batch(vec![stmt], None)
                     .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
                         std::io::ErrorKind::Other,
                         e

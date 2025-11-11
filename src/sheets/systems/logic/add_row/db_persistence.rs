@@ -5,7 +5,7 @@ use crate::sheets::definitions::{ColumnValidator, SheetMetadata};
 use rusqlite::OptionalExtension;
 use bevy::prelude::*;
 
-/// Prepends a row to the database table
+///  Prepends a row to the database table
 pub(super) fn persist_row_to_db(
     metadata: &SheetMetadata,
     sheet_name: &str,
@@ -77,9 +77,11 @@ pub(super) fn persist_row_to_db(
 
         // Backward compatibility: some older DBs still have NOT NULL parent_id in structure tables.
         // If the physical table has parent_id, compute it from the parent table using parent_key (row_index) and include it.
+        // Use sheet_name as table name (data_filename has .json extension which DB tables don't have)
+        let physical_table_name = &metadata.sheet_name;
         let has_parent_id: bool = conn
             .query_row(
-                &format!("SELECT COUNT(*) FROM pragma_table_info(\"{}\") WHERE name = 'parent_id'", sheet_name),
+                &format!("SELECT COUNT(*) FROM pragma_table_info(\"{}\") WHERE name = 'parent_id'", physical_table_name),
                 [],
                 |row| row.get::<_, i32>(0).map(|c| c > 0),
             )
@@ -110,15 +112,18 @@ pub(super) fn persist_row_to_db(
 
         crate::sheets::database::writer::DbWriter::prepend_row(
             &conn,
-            sheet_name,
+            physical_table_name,
             &row_data,
             &column_names,
+            db_path.file_name().and_then(|n| n.to_str()),
             daemon_client,
         )
         .map_err(|e| format!("Failed to prepend row to structure table: {:?}", e))?;
 
     } else {
         // Regular table: build column names and row_data for DB insert
+        // Use sheet_name as table name (data_filename has .json extension which DB tables don't have)
+        let physical_table_name = &metadata.sheet_name;
         let mut column_names: Vec<String> = Vec::new();
         let mut row_data: Vec<String> = Vec::new();
         
@@ -137,9 +142,10 @@ pub(super) fn persist_row_to_db(
 
         crate::sheets::database::writer::DbWriter::prepend_row(
             &conn,
-            sheet_name,
+            physical_table_name,
             &row_data,
             &column_names,
+            db_path.file_name().and_then(|n| n.to_str()),
             daemon_client,
         )
         .map_err(|e| format!("Failed to prepend row to database: {:?}", e))?;
@@ -203,14 +209,16 @@ pub(super) fn persist_rows_batch_to_db(
         let mut column_names: Vec<String> = Vec::new();
         let mut batch_rows: Vec<Vec<String>> = Vec::with_capacity(num_rows);
         // Backward compatibility: detect parent_id presence once
+        // Use sheet_name as table name (data_filename has .json extension which DB tables don't have)
+        let physical_table_name = &metadata.sheet_name;
         let has_parent_id: bool = conn
             .query_row(
-                &format!("SELECT COUNT(*) FROM pragma_table_info(\"{}\") WHERE name = 'parent_id'", sheet_name),
+                &format!("SELECT COUNT(*) FROM pragma_table_info(\"{}\") WHERE name = 'parent_id'", physical_table_name),
                 [],
                 |row| row.get::<_, i32>(0).map(|c| c > 0),
             )
             .unwrap_or(false);
-        let parent_table_opt = sheet_name.rsplit_once('_').map(|(p, _)| p.to_string());
+        let parent_table_opt = physical_table_name.rsplit_once('_').map(|(p, _)| p.to_string());
         
         // Process each row in grid
         for row_idx in 0..num_rows {
@@ -261,15 +269,18 @@ pub(super) fn persist_rows_batch_to_db(
 
         crate::sheets::database::writer::DbWriter::prepend_rows_batch(
             &conn,
-            sheet_name,
+            physical_table_name,  // Use physical table name for database operations
             &batch_rows,
             &column_names,
+            db_path.file_name().and_then(|n| n.to_str()), // Pass database filename to daemon
             daemon_client,
         )
         .map_err(|e| format!("Failed to batch prepend rows to structure table: {:?}", e))?;
 
     } else {
         // Regular table: batch insert
+        // Use sheet_name as table name (data_filename has .json extension which DB tables don't have)
+        let physical_table_name = &metadata.sheet_name;
         let mut column_names: Vec<String> = Vec::new();
         let mut batch_rows: Vec<Vec<String>> = Vec::with_capacity(num_rows);
         
@@ -296,9 +307,10 @@ pub(super) fn persist_rows_batch_to_db(
 
         crate::sheets::database::writer::DbWriter::prepend_rows_batch(
             &conn,
-            sheet_name,
+            physical_table_name,  // Use physical table name for database operations
             &batch_rows,
             &column_names,
+            db_path.file_name().and_then(|n| n.to_str()), // Pass database filename to daemon
             daemon_client,
         )
         .map_err(|e| format!("Failed to batch prepend rows to database: {:?}", e))?;
@@ -415,6 +427,7 @@ pub(super) fn update_column_metadata_db(
         None,
         None,
         ai_include_in_send,
+        db_path.file_name().and_then(|n| n.to_str()),
         daemon_client,
     )
     .map_err(|e| format!("Failed to update column metadata: {:?}", e))?;

@@ -114,9 +114,7 @@ pub fn show_column_options_popup(
                 debug!("Column rename skipped: name unchanged");
             }
         }
-
         if actions_ok {
-            // Build filter from multi-term list (ignore empties)
             let joined_terms: String = state
                 .options_column_filter_terms
                 .iter()
@@ -125,7 +123,6 @@ pub fn show_column_options_popup(
                 .collect::<Vec<_>>()
                 .join("|");
             state.options_column_filter_input = joined_terms.clone();
-            // Store None in memory when empty, but pass an explicit empty string to DB update to clear persisted value
             let filter_to_store: Option<String> = if joined_terms.is_empty() {
                 None
             } else {
@@ -165,17 +162,21 @@ pub fn show_column_options_popup(
                                 // Persist filter to DB if this is DB-backed
                                 if meta.category.is_some() {
                                     if let Some(cat) = category {
+                                        // Use sheet_name as the table name (not data_filename which has .json extension)
+                                        let table_name = &meta.sheet_name;
                                         // Use centralized helper which opens/creates DB and persists metadata
-                                        let _ = crate::sheets::database::persist_column_metadata(
+                                        if let Err(e) = crate::sheets::database::persist_column_metadata(
                                             cat,
-                                            sheet_name,
+                                            table_name,
                                             col_index,
                                             // Pass empty string when clearing to force DB NULL
                                             if let Some(s) = col_def.filter.as_deref() { Some(s) } else { Some("") },
                                             None,
                                             None,
                                             daemon_client,
-                                        ).map_err(|e| error!("Persist column metadata failed: {}", e));
+                                        ) {
+                                            error!("Persist column metadata (filter) failed: {}", e);
+                                        }
                                     }
                                 }
                             }
@@ -190,17 +191,21 @@ pub fn show_column_options_popup(
                                 // Persist AI context to DB if this is DB-backed
                                 if meta.category.is_some() {
                                     if let Some(cat) = category {
+                                        // Use sheet_name as the table name (not data_filename which has .json extension)
+                                        let table_name = &meta.sheet_name;
                                         // Use centralized helper to persist AI context
-                                        let _ = crate::sheets::database::persist_column_metadata(
+                                        if let Err(e) = crate::sheets::database::persist_column_metadata(
                                             cat,
-                                            sheet_name,
+                                            table_name,
                                             col_index,
                                             None,
                                             // Pass empty string when clearing to force DB NULL
                                             if let Some(s) = col_def.ai_context.as_deref() { Some(s) } else { Some("") },
                                             None,
                                             daemon_client,
-                                        ).map_err(|e| error!("Persist column metadata failed: {}", e));
+                                        ) {
+                                            error!("Persist column metadata (AI context) failed: {}", e);
+                                        }
                                     }
                                 }
                             }

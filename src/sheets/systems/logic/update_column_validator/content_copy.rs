@@ -23,6 +23,7 @@ pub fn copy_parent_content_to_structure_table(
     structure_table_name: &str,
     parent_col_def: &ColumnDefinition,
     structure_columns: &[ColumnDefinition],
+    db_path: &std::path::Path,
     daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
 ) -> Result<(), String> {
     use crate::sheets::database::daemon_client::Statement;
@@ -254,7 +255,7 @@ pub fn copy_parent_content_to_structure_table(
     
     // Execute all inserts through daemon
     if !insert_statements.is_empty() {
-        daemon_client.exec_batch(insert_statements)
+        daemon_client.exec_batch(insert_statements, db_path.file_name().and_then(|n| n.to_str()))
             .map_err(|e| format!("Failed to insert child rows: {}", e))?;
     }
     

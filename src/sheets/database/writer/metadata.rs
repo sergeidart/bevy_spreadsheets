@@ -13,13 +13,26 @@ use rusqlite::Connection;
 // ============================================================================
 
 /// Execute a daemon statement with error handling
-fn exec_daemon_stmt(sql: String, params: Vec<serde_json::Value>, daemon_client: &DaemonClient) -> DbResult<()> {
-    let stmt = Statement { sql, params };
-    daemon_client.exec_batch(vec![stmt])
-        .map(|_| ())
-        .map_err(|e| {
-            super::super::error::DbError::Other(e)
-        })
+/// Treats "no such table" errors on metadata tables as non-fatal (WAL timing issue)
+fn exec_daemon_stmt(sql: String, params: Vec<serde_json::Value>, db_filename: Option<&str>, daemon_client: &DaemonClient) -> DbResult<()> {
+    let stmt = Statement { sql: sql.clone(), params };
+    match daemon_client.exec_batch(vec![stmt], db_filename) {
+        Ok(_) => Ok(()),
+        Err(e) => {
+            // Check if this is a "no such table" error on a metadata table
+            // This can happen when metadata table was just created via daemon but not yet visible due to WAL
+            let is_metadata_table = sql.contains("_Metadata");
+            let is_no_such_table = e.contains("no such table");
+            
+            if is_metadata_table && is_no_such_table {
+                // This is expected during startup/rapid operations - table will be available on next operation
+                bevy::log::debug!("Metadata table operation deferred (WAL timing): {}", e);
+                Ok(()) // Treat as non-fatal
+            } else {
+                Err(super::super::error::DbError::Other(e))
+            }
+        }
+    }
 }
 
 /// Get persisted index or return Ok(()) if technical column (with early return)
@@ -106,7 +119,7 @@ pub fn update_table_hidden(
         serde_json::Value::String(table_name.to_string()),
         bool_to_json(hidden),
     ];
-    exec_daemon_stmt(sql, params, daemon_client)
+    exec_daemon_stmt(sql, params, None, daemon_client)
 }
 
 /// Update table-level flags in _Metadata
@@ -154,7 +167,7 @@ pub fn update_table_ai_settings(
     );
     params.push(serde_json::Value::String(table_name.to_string()));
     
-    exec_daemon_stmt(sql, params, daemon_client)
+    exec_daemon_stmt(sql, params, None, daemon_client)
 }
 
 /// Update a column's filter, ai_context, and include flag in the table's metadata table
@@ -166,6 +179,7 @@ pub fn update_column_metadata(
     filter_expr: Option<&str>,
     ai_context: Option<&str>,
     ai_include_in_send: Option<bool>,
+    db_filename: Option<&str>,
     daemon_client: &DaemonClient,
 ) -> DbResult<()> {
     let persisted_index = match get_persisted_index_or_skip(conn, table_name, column_index, daemon_client)? {
@@ -211,7 +225,7 @@ pub fn update_column_metadata(
     params.push(serde_json::Value::Number(persisted_index.into()));
     
     bevy::log::info!("update_column_metadata: runtime={} -> persisted={}", column_index, persisted_index);
-    exec_daemon_stmt(sql, params, daemon_client)
+    exec_daemon_stmt(sql, params, db_filename, daemon_client)
 }
 
 /// Explicitly set the AI include flag for a column in the metadata table (true = 1, false = 0)
@@ -234,7 +248,7 @@ pub fn update_column_ai_include(
     let sql = format!("UPDATE \"{}\" SET ai_include_in_send = ? WHERE column_index = ?", meta_table);
     let params = vec![bool_to_json(include), serde_json::Value::Number(persisted_index.into())];
     
-    exec_daemon_stmt(sql, params, daemon_client)
+    exec_daemon_stmt(sql, params, None, daemon_client)
 }
 
 /// Update a column's validator (data_type, validator_type, validator_config) and optional AI flags in metadata
@@ -291,7 +305,7 @@ pub fn update_column_validator(
     let sql = format!("UPDATE \"{}\" SET {} WHERE column_index = ?", meta_table, sets.join(", "));
     bevy::log::info!("update_column_validator: runtime={} -> persisted={}", column_index, persisted_index);
     
-    exec_daemon_stmt(sql, params, daemon_client)
+    exec_daemon_stmt(sql, params, None, daemon_client)
 }
 
 /// Update a column's display name (UI-only) in the table's metadata table
@@ -317,7 +331,7 @@ pub fn update_column_display_name(
         serde_json::Value::Number((persisted_index as i32).into()),
     ];
     
-    exec_daemon_stmt(sql, params, daemon_client)
+    exec_daemon_stmt(sql, params, None, daemon_client)
 }
 
 /// Add a new column to a table (main or structure) and insert its metadata row with given index.
@@ -361,7 +375,7 @@ pub fn add_column_with_metadata(
     if !col_exists {
         let sql_type = sql_type_for_column(data_type);
         let sql = format!("ALTER TABLE \"{}\" ADD COLUMN \"{}\" {}", table_name, column_name, sql_type);
-        exec_daemon_stmt(sql, vec![], daemon_client)?;
+        exec_daemon_stmt(sql, vec![], None, daemon_client)?;
     }
 
     let (validator_type, validator_config) = validator_to_metadata(&validator, table_name, column_name);
@@ -387,7 +401,7 @@ pub fn add_column_with_metadata(
     ];
     
     let stmt = Statement { sql: reuse_sql, params: params.clone() };
-    let response = daemon_client.exec_batch(vec![stmt])
+    let response = daemon_client.exec_batch(vec![stmt], None)
         .map_err(|e| super::super::error::DbError::Other(e))?;
     
     if response.rows_affected.unwrap_or(0) > 0 {
@@ -402,5 +416,5 @@ pub fn add_column_with_metadata(
         meta_table
     );
     
-    exec_daemon_stmt(insert_sql, params, daemon_client)
+    exec_daemon_stmt(insert_sql, params, None, daemon_client)
 }

@@ -43,7 +43,7 @@ impl MigrationFix for HideTempNewRowIndexInMetadata {
                 params: vec![],
             };
             
-            match daemon_client.exec_batch(vec![update_stmt]) {
+            match daemon_client.exec_batch(vec![update_stmt], None) {
                 Ok(_) => {
                     affected += 1;
                     info!("  ✓ Marked temp columns deleted in '{}'", meta_table);

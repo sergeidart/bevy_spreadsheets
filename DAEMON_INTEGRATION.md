@@ -21,7 +21,7 @@ pub fn ping(&self) -> bool
 ```
 
 #### `daemon_manager.rs` - Lifecycle Management  
-- **Auto-download** from GitHub releases: https://github.com/sergeidart/sqlite_daemon/releases/tag/v1
+- **Auto-download** from GitHub releases: https://github.com/sergeidart/sqlite_daemon/releases/tag/V1.2
 - **Installation** to `Documents\SkylineDB\skylinedb-daemon.exe`
 - **Process spawning** with CREATE_NO_WINDOW flag
 - **Health checks** to verify daemon status

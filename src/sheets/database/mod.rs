@@ -3,7 +3,9 @@
 pub mod checkpoint;
 pub mod connection;
 pub mod daemon_client;
+pub mod daemon_connection;
 pub mod daemon_manager;
+pub mod daemon_protocol;
 pub mod daemon_resource;
 pub mod error;
 pub mod migration;
@@ -85,6 +87,7 @@ pub fn persist_column_metadata(
     ai_include: Option<bool>,
     daemon_client: &daemon_client::DaemonClient,
 ) -> Result<(), String> {
+    let db_filename = format!("{}.db", category);
     match open_or_create_db_for_category(category) {
         Ok(conn) => {
             let _ = crate::sheets::database::schema::ensure_global_metadata_table(&conn, daemon_client)
@@ -96,6 +99,7 @@ pub fn persist_column_metadata(
                 filter_expr,
                 ai_context,
                 ai_include,
+                Some(&db_filename),
                 daemon_client,
             )
             .map_err(|e| e.to_string())

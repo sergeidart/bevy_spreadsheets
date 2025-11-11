@@ -306,6 +306,8 @@ pub fn handle_update_column_validator(
 
                 // Persist to DB if this sheet belongs to a database category
                 if let Some(cat_str) = &meta_mut.category {
+                    // Use physical table name for database operations
+                    let physical_table_name = &meta_mut.data_filename;
                     // Persist by column name to avoid index mismatch when metadata contains technical columns
                     let column_name = meta_mut.columns[col_index].header.clone();
                     
@@ -317,7 +319,7 @@ pub fn handle_update_column_validator(
                     
                     let _ = crate::sheets::database::persist_column_validator_by_name(
                         cat_str,
-                        sheet_name,
+                        physical_table_name,
                         &column_name,
                         meta_mut.columns[col_index].data_type,
                         &meta_mut.columns[col_index].validator,
@@ -445,6 +447,7 @@ pub fn handle_update_column_validator(
                                     &struct_sheet_name,
                                     &parent_col_def,
                                     &struct_columns,
+                                    &db_path,
                                     daemon_client.client(),
                                 ) {
                                     error!("Failed to copy content to structure table '{}': {}", struct_sheet_name, e);

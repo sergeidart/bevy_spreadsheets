@@ -12,6 +12,7 @@ pub fn update_structure_cell_by_id(
     row_id: i64,
     column_name: &str,
     value: &str,
+    db_filename: Option<&str>,
     daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
 ) -> DbResult<()> {
     // WRITE through daemon
@@ -27,7 +28,7 @@ pub fn update_structure_cell_by_id(
         ],
     };
     
-    daemon_client.exec_batch(vec![stmt])
+    daemon_client.exec_batch(vec![stmt], db_filename)
         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
             std::io::ErrorKind::Other,
             e
@@ -94,7 +95,7 @@ pub fn update_column_indices(
     let mut all_stmts = vec![stmt0, stmt1];
     all_stmts.extend(phase2_stmts);
     
-    daemon_client.exec_batch(all_stmts)
+    daemon_client.exec_batch(all_stmts, None)
         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
             std::io::ErrorKind::Other,
             e

@@ -265,7 +265,7 @@ fn migrate_table_remove_grands(
         sql: format!("DROP TABLE IF EXISTS \"{}\"", temp_table),
         params: vec![],
     };
-    let _ = daemon_client.exec_batch(vec![drop_temp_stmt]);
+    let _ = daemon_client.exec_batch(vec![drop_temp_stmt], None);
 
     // Build CREATE TABLE statement for new table
     let create_sql = build_create_table_sql(conn, table_name, &keep_columns)?;
@@ -279,7 +279,7 @@ fn migrate_table_remove_grands(
         sql: create_sql_temp,
         params: vec![],
     };
-    daemon_client.exec_batch(vec![create_stmt])
+    daemon_client.exec_batch(vec![create_stmt], None)
         .map_err(|e| DbError::MigrationFailed(format!("Failed to create temp table: {}", e)))?;
 
     // Copy data from old table to new table (excluding grand columns)
@@ -299,7 +299,7 @@ fn migrate_table_remove_grands(
         sql: copy_sql,
         params: vec![],
     };
-    daemon_client.exec_batch(vec![copy_stmt])
+    daemon_client.exec_batch(vec![copy_stmt], None)
         .map_err(|e| DbError::MigrationFailed(format!("Failed to copy data: {}", e)))?;
     
     // Query row count for verification (READ - stays direct)
@@ -316,7 +316,7 @@ fn migrate_table_remove_grands(
         sql: format!("DROP TABLE \"{}\"", table_name),
         params: vec![],
     };
-    daemon_client.exec_batch(vec![drop_old_stmt])
+    daemon_client.exec_batch(vec![drop_old_stmt], None)
         .map_err(|e| DbError::MigrationFailed(format!("Failed to drop old table: {}", e)))?;
 
     // Rename temp table to original name
@@ -325,7 +325,7 @@ fn migrate_table_remove_grands(
         sql: format!("ALTER TABLE \"{}\" RENAME TO \"{}\"", temp_table, table_name),
         params: vec![],
     };
-    daemon_client.exec_batch(vec![rename_stmt])
+    daemon_client.exec_batch(vec![rename_stmt], None)
         .map_err(|e| DbError::MigrationFailed(format!("Failed to rename temp table: {}", e)))?;
 
     // Recreate unique index (if it doesn't exist)
@@ -338,7 +338,7 @@ fn migrate_table_remove_grands(
         sql: create_index_sql,
         params: vec![],
     };
-    daemon_client.exec_batch(vec![index_stmt])
+    daemon_client.exec_batch(vec![index_stmt], None)
         .map_err(|e| DbError::MigrationFailed(format!("Failed to create index: {}", e)))?;
     info!("  Recreated unique index: {}", index_name);
 
@@ -469,7 +469,7 @@ fn update_metadata_remove_grand_columns(
                 params: vec![serde_json::Value::String(grand_col.clone())],
             };
             
-            match daemon_client.exec_batch(vec![delete_stmt]) {
+            match daemon_client.exec_batch(vec![delete_stmt], None) {
                 Ok(_) => {
                     info!("  Deleted metadata row for column '{}'", grand_col);
                 }
@@ -492,7 +492,7 @@ fn update_metadata_remove_grand_columns(
             params: vec![serde_json::Value::String(grand_col.clone())],
         };
 
-        match daemon_client.exec_batch(vec![update_stmt]) {
+        match daemon_client.exec_batch(vec![update_stmt], None) {
             Ok(_) => {
                 info!("  Marked column '{}' as deleted in metadata", grand_col);
                 marked_count += 1;

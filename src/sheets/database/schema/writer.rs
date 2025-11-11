@@ -24,7 +24,7 @@ pub fn add_column_if_missing(
             params: vec![],
         };
         
-        daemon_client.exec_batch(vec![stmt])
+        daemon_client.exec_batch(vec![stmt], None)
             .map_err(|e| super::super::error::DbError::Other(e))?;
         bevy::log::info!("Added column '{}' to table '{}'", column_name, table_name);
     }
@@ -54,7 +54,7 @@ pub fn create_global_metadata_table(daemon_client: &DaemonClient) -> DbResult<()
         params: vec![],
     };
     
-    daemon_client.exec_batch(vec![stmt])
+    daemon_client.exec_batch(vec![stmt], None)
         .map_err(|e| super::super::error::DbError::Other(e))?;
     Ok(())
 }
@@ -84,7 +84,7 @@ pub fn create_main_data_table(
         Statement { sql: index_sql, params: vec![] },
     ];
     
-    daemon_client.exec_batch(stmts)
+    daemon_client.exec_batch(stmts, None)
         .map_err(|e| super::super::error::DbError::Other(e))?;
     Ok(())
 }
@@ -116,7 +116,7 @@ pub fn create_sheet_metadata_table(
         params: vec![],
     };
     
-    daemon_client.exec_batch(vec![stmt])
+    daemon_client.exec_batch(vec![stmt], None)
         .map_err(|e| super::super::error::DbError::Other(e))?;
     Ok(())
 }
@@ -158,7 +158,7 @@ pub fn insert_column_metadata(
         ],
     };
     
-    daemon_client.exec_batch(vec![stmt])
+    daemon_client.exec_batch(vec![stmt], None)
         .map_err(|e| super::super::error::DbError::Other(e))?;
     Ok(())
 }
@@ -184,7 +184,7 @@ pub fn insert_column_metadata_if_missing(
         ],
     };
     
-    daemon_client.exec_batch(vec![stmt])
+    daemon_client.exec_batch(vec![stmt], None)
         .map_err(|e| super::super::error::DbError::Other(e))?;
     Ok(())
 }
@@ -211,7 +211,7 @@ pub fn create_ai_groups_table(
         params: vec![],
     };
     
-    daemon_client.exec_batch(vec![stmt])
+    daemon_client.exec_batch(vec![stmt], None)
         .map_err(|e| super::super::error::DbError::Other(e))?;
     Ok(())
 }
@@ -237,7 +237,7 @@ pub fn insert_ai_group_column(
         ],
     };
     
-    daemon_client.exec_batch(vec![stmt])
+    daemon_client.exec_batch(vec![stmt], None)
         .map_err(|e| super::super::error::DbError::Other(e))?;
     Ok(())
 }
@@ -269,7 +269,7 @@ pub fn create_structure_data_table(
         Statement { sql: index_sql, params: vec![] },
     ];
     
-    daemon_client.exec_batch(stmts)
+    daemon_client.exec_batch(stmts, None)
         .map_err(|e| super::super::error::DbError::Other(e))?;
     Ok(())
 }
@@ -285,7 +285,7 @@ pub fn drop_table(
         params: vec![],
     };
     
-    daemon_client.exec_batch(vec![stmt])
+    daemon_client.exec_batch(vec![stmt], None)
         .map_err(|e| super::super::error::DbError::Other(e))?;
     Ok(())
 }
@@ -308,7 +308,7 @@ pub fn register_structure_table(
         ],
     };
     
-    daemon_client.exec_batch(vec![stmt])
+    daemon_client.exec_batch(vec![stmt], None)
         .map_err(|e| super::super::error::DbError::Other(e))?;
     Ok(())
 }
@@ -340,7 +340,7 @@ pub fn upsert_table_metadata(
         ],
     };
     
-    daemon_client.exec_batch(vec![stmt])
+    daemon_client.exec_batch(vec![stmt], None)
         .map_err(|e| super::super::error::DbError::Other(e))?;
     Ok(())
 }
@@ -356,7 +356,7 @@ pub fn update_table_metadata_hidden(
         params: vec![],
     };
     
-    daemon_client.exec_batch(vec![stmt])
+    daemon_client.exec_batch(vec![stmt], None)
         .map_err(|e| super::super::error::DbError::Other(e))?;
     Ok(())
 }

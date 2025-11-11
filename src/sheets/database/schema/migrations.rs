@@ -19,7 +19,7 @@ pub fn ensure_migration_tracking(
         params: vec![],
     };
     
-    daemon_client.exec_batch(vec![stmt])
+    daemon_client.exec_batch(vec![stmt], None)
         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
             std::io::ErrorKind::Other,
             e
@@ -54,7 +54,7 @@ pub fn mark_migration_applied(
         ],
     };
     
-    daemon_client.exec_batch(vec![stmt])
+    daemon_client.exec_batch(vec![stmt], None)
         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
             std::io::ErrorKind::Other,
             e

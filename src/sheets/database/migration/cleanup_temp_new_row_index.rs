@@ -85,7 +85,7 @@ impl MigrationFix for CleanupTempNewRowIndex {
                     ),
                     params: vec![],
                 };
-                match daemon_client.exec_batch(vec![drop_stmt]) {
+                match daemon_client.exec_batch(vec![drop_stmt], None) {
                     Ok(_) => {
                         info!("Dropped column 'temp_new_row_index' from '{}'", table_name);
                         dropped += 1;
@@ -108,7 +108,7 @@ impl MigrationFix for CleanupTempNewRowIndex {
                 ),
                 params: vec![],
             };
-            match daemon_client.exec_batch(vec![rename_stmt]) {
+            match daemon_client.exec_batch(vec![rename_stmt], None) {
                 Ok(_) => {
                     info!(
                         "Renamed 'temp_new_row_index' -> '_obsolete_temp_new_row_index' in '{}'",

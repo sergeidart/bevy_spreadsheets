@@ -50,6 +50,7 @@ pub fn handle_delete_rows_request(
             String,      /*db_name*/
             bool,        /*is_structure_table*/
             Vec<i64>,    /*row_index values to delete*/
+            String,      /*physical_table_name*/
         )> = None;
         if let Some(sheet_ro) = registry.get_sheet(category, sheet_name) {
             info!("delete_rows: Got sheet '{:?}/{}' from registry: grid.len()={}, row_indices.len()={}",
@@ -107,7 +108,7 @@ pub fn handle_delete_rows_request(
                             }
                         }
                     }
-                    db_backed = Some((db_name.clone(), is_structure, row_index_values));
+                    db_backed = Some((db_name.clone(), is_structure, row_index_values, meta.data_filename.clone()));
                 }
             }
         }
@@ -270,7 +271,7 @@ pub fn handle_delete_rows_request(
             }
 
             // Persist deletions to database when sheet is DB-backed
-            if let Some((db_name, is_structure, row_index_values)) = db_backed {
+            if let Some((db_name, is_structure, row_index_values, physical_table_name)) = db_backed {
                 let base = crate::sheets::systems::io::get_default_data_base_path();
                 let db_path = base.join(format!("{}.db", db_name));
                 if db_path.exists() {
@@ -278,31 +279,31 @@ pub fn handle_delete_rows_request(
                         Ok(_conn) => {
                             // Use daemon for DELETE operations
                             let table_type = if is_structure { "structure" } else { "regular" };
-                            info!("Deleting {} {} table rows from '{}' with row_index values: {:?}", 
-                                  row_index_values.len(), table_type, sheet_name, row_index_values);
+                            info!("Deleting {} {} table rows from '{}' (physical: '{}') with row_index values: {:?}", 
+                                  row_index_values.len(), table_type, sheet_name, physical_table_name, row_index_values);
                             
                             // Build batch of DELETE statements for daemon
                             let delete_statements: Vec<_> = row_index_values
                                 .iter()
                                 .map(|row_index_val| {
                                     crate::sheets::database::daemon_client::Statement {
-                                        sql: format!("DELETE FROM \"{}\" WHERE row_index = ?", sheet_name),
+                                        sql: format!("DELETE FROM \"{}\" WHERE row_index = ?", physical_table_name),
                                         params: vec![serde_json::json!(row_index_val)],
                                     }
                                 })
                                 .collect();
                             
-                            match daemon_client.client().exec_batch(delete_statements) {
+                            match daemon_client.client().exec_batch(delete_statements, db_path.file_name().and_then(|n| n.to_str())) {
                                 Ok(response) => {
                                     if response.error.is_some() {
-                                        error!("Daemon DELETE error for '{}': {:?}", sheet_name, response.error);
+                                        error!("Daemon DELETE error for '{}': {:?}", physical_table_name, response.error);
                                     } else {
                                         info!("Successfully deleted {} rows from '{}' via daemon", 
-                                              row_index_values.len(), sheet_name);
+                                              row_index_values.len(), physical_table_name);
                                     }
                                 }
                                 Err(e) => {
-                                    error!("Failed to execute DELETE batch via daemon for '{}': {:?}", sheet_name, e);
+                                    error!("Failed to execute DELETE batch via daemon for '{}': {:?}", physical_table_name, e);
                                 }
                             }
                         }

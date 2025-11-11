@@ -158,6 +158,13 @@ pub fn handle_delete_columns_request(
     // Cascade delete structure sheets
     if !structure_sheets_to_delete.is_empty() {
         for (struct_category, struct_sheet_name) in structure_sheets_to_delete {
+            // Capture physical table name BEFORE removing from registry
+            let physical_table_name = if let Some(sheet) = registry.get_sheet(&struct_category, &struct_sheet_name) {
+                sheet.metadata.as_ref().map(|m| m.data_filename.clone())
+            } else {
+                None
+            };
+            
             // Remove from registry
             if let Ok(_removed) = registry.delete_sheet(&struct_category, &struct_sheet_name) {
                 info!(
@@ -186,43 +193,45 @@ pub fn handle_delete_columns_request(
 
                 // If DB-backed, also remove the structure table and its metadata rows
                 if let Some(cat) = &struct_category {
-                    let base = crate::sheets::systems::io::get_default_data_base_path();
-                    let db_path = base.join(format!("{}.db", cat));
-                    if db_path.exists() {
-                        if let Ok(_conn) = crate::sheets::database::connection::DbConnection::open_existing(&db_path) {
-                            // Use daemon for all write operations
-                            let meta_table = format!("{}_Metadata", struct_sheet_name);
-                            
-                            let statements = vec![
-                                // Drop the structure data table if exists
-                                crate::sheets::database::daemon_client::Statement {
-                                    sql: format!("DROP TABLE IF EXISTS \"{}\"", struct_sheet_name),
-                                    params: vec![],
-                                },
-                                // Remove metadata entry for the structure table from _Metadata
-                                crate::sheets::database::daemon_client::Statement {
-                                    sql: "DELETE FROM _Metadata WHERE table_name = ?".to_string(),
-                                    params: vec![serde_json::json!(struct_sheet_name)],
-                                },
-                                // Drop per-table metadata table if exists
-                                crate::sheets::database::daemon_client::Statement {
-                                    sql: format!("DROP TABLE IF EXISTS \"{}\"", meta_table),
-                                    params: vec![],
-                                },
-                            ];
-                            
-                            match daemon_client.client().exec_batch(statements) {
-                                Ok(response) => {
-                                    if response.error.is_some() {
-                                        warn!("Daemon error dropping structure table '{}' in DB '{}': {:?}", 
-                                              struct_sheet_name, db_path.display(), response.error);
-                                    } else {
-                                        info!("Dropped structure table '{}', metadata entry, and metadata table from DB '{}'.", 
-                                              struct_sheet_name, db_path.display());
+                    if let Some(phys_name) = physical_table_name {
+                        let base = crate::sheets::systems::io::get_default_data_base_path();
+                        let db_path = base.join(format!("{}.db", cat));
+                        if db_path.exists() {
+                            if let Ok(_conn) = crate::sheets::database::connection::DbConnection::open_existing(&db_path) {
+                                // Use daemon for all write operations
+                                let meta_table = format!("{}_Metadata", phys_name);
+                                
+                                let statements = vec![
+                                    // Drop the structure data table if exists
+                                    crate::sheets::database::daemon_client::Statement {
+                                        sql: format!("DROP TABLE IF EXISTS \"{}\"", phys_name),
+                                        params: vec![],
+                                    },
+                                    // Remove metadata entry for the structure table from _Metadata
+                                    crate::sheets::database::daemon_client::Statement {
+                                        sql: "DELETE FROM _Metadata WHERE table_name = ?".to_string(),
+                                        params: vec![serde_json::json!(phys_name)],
+                                    },
+                                    // Drop per-table metadata table if exists
+                                    crate::sheets::database::daemon_client::Statement {
+                                        sql: format!("DROP TABLE IF EXISTS \"{}\"", meta_table),
+                                        params: vec![],
+                                    },
+                                ];
+                                
+                                match daemon_client.client().exec_batch(statements, db_path.file_name().and_then(|n| n.to_str())) {
+                                    Ok(response) => {
+                                        if response.error.is_some() {
+                                            warn!("Daemon error dropping structure table '{}' in DB '{}': {:?}", 
+                                                  phys_name, db_path.display(), response.error);
+                                        } else {
+                                            info!("Dropped structure table '{}', metadata entry, and metadata table from DB '{}'.", 
+                                                  phys_name, db_path.display());
+                                        }
                                     }
-                                }
-                                Err(e) => {
-                                    warn!("Failed to execute DROP/DELETE batch via daemon for '{}': {:?}", struct_sheet_name, e);
+                                    Err(e) => {
+                                        warn!("Failed to execute DROP/DELETE batch via daemon for '{}': {:?}", phys_name, e);
+                                    }
                                 }
                             }
                         }
@@ -250,6 +259,9 @@ pub fn handle_delete_columns_request(
     if !db_column_deletions.is_empty() {
         info!("Marking {} DB-backed column(s) deleted: {:?}", db_column_deletions.len(), db_column_deletions);
         for (cat, table_name, column_name) in db_column_deletions {
+            let base = crate::sheets::systems::io::get_default_data_base_path();
+            let db_path = base.join(format!("{}.db", cat));
+            
             match open_or_create_db_for_category(&cat) {
                 Ok(conn) => {
                     let meta_table = format!("{}_Metadata", table_name);
@@ -297,7 +309,7 @@ pub fn handle_delete_columns_request(
                         });
                     }
                     
-                    match daemon_client.client().exec_batch(statements) {
+                    match daemon_client.client().exec_batch(statements, db_path.file_name().and_then(|n| n.to_str())) {
                         Ok(response) => {
                             if response.error.is_some() {
                                 warn!("Daemon error during column deletion for '{}.{}': {:?}", table_name, column_name, response.error);

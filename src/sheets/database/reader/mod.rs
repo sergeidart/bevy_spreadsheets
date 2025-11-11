@@ -19,15 +19,32 @@ impl DbReader {
         let meta_table = format!("{}_Metadata", table_name);
 
         // Ensure metadata table exists
-        if !super::schema::queries::table_exists(conn, &meta_table)? {
+        let metadata_table_exists = super::schema::queries::table_exists(conn, &meta_table)?;
+        bevy::log::debug!(
+            "read_metadata: table_name='{}', meta_table='{}', exists={}",
+            table_name, meta_table, metadata_table_exists
+        );
+        
+        let freshly_created = if !metadata_table_exists {
             Self::create_metadata_from_physical_table(conn, table_name, daemon_client)?;
-        }
+            true
+        } else {
+            false
+        };
 
         // NOTE: These add_column_if_missing calls are ARCHITECTURE VIOLATIONS
         // Readers should not write! This needs to be fixed in a separate refactor.
         // For now, these go through daemon (proper write path)
-        queries::add_column_if_missing(daemon_client, &meta_table, "deleted", "INTEGER", "0")?;
-        queries::add_column_if_missing(daemon_client, &meta_table, "display_name", "TEXT", "NULL")?;
+        // If daemon is unavailable, we continue anyway since these are optional migrations
+        // Skip adding columns to freshly-created tables (they already have the latest schema)
+        if metadata_table_exists && !freshly_created {
+            if let Err(e) = queries::add_column_if_missing(daemon_client, &meta_table, "deleted", "INTEGER", "0") {
+                bevy::log::debug!("Could not add 'deleted' column to '{}': {}. Continuing anyway.", meta_table, e);
+            }
+            if let Err(e) = queries::add_column_if_missing(daemon_client, &meta_table, "display_name", "TEXT", "NULL") {
+                bevy::log::debug!("Could not add 'display_name' column to '{}': {}. Continuing anyway.", meta_table, e);
+            }
+        }
 
         let table_type = super::schema::queries::get_table_type(conn, table_name)?;
         let is_structure = matches!(table_type.as_deref(), Some("structure"));

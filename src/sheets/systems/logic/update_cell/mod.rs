@@ -92,7 +92,7 @@ pub fn handle_cell_update(
 
                                 // Persist to database
                                 if let Some(final_val) = &update_result.final_value {
-                                    let _ = db_persistence::persist_cell_to_database(
+                                    if let Err(e) = db_persistence::persist_cell_to_database(
                                         metadata,
                                         &sheet_name,
                                         &category,
@@ -105,7 +105,12 @@ pub fn handle_cell_update(
                                         col_meta.is_structure_col,
                                         col_meta.looks_like_real_structure,
                                         daemon_client.client(),
-                                    );
+                                    ) {
+                                        error!(
+                                            "Failed to persist cell update to database for '{:?}/{}' cell[{},{}]: {}",
+                                            category, sheet_name, row_idx, col_idx, e
+                                        );
+                                    }
                                 }
                             } else {
                                 warn!(

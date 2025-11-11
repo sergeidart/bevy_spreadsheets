@@ -53,7 +53,7 @@ pub trait MigrationFix {
             )".to_string(),
             params: vec![],
         };
-        daemon_client.exec_batch(vec![create_stmt])
+        daemon_client.exec_batch(vec![create_stmt], None)
             .map_err(|e| DbError::MigrationFailed(format!("Failed to create migration_fixes table: {}", e)))?;
 
         // Write through daemon (no direct DB writes)
@@ -65,7 +65,7 @@ pub trait MigrationFix {
             ],
         };
         daemon_client
-            .exec_batch(vec![insert_stmt])
+            .exec_batch(vec![insert_stmt], None)
             .map_err(|e| DbError::MigrationFailed(format!("Failed to mark migration fix as applied: {}", e)))?;
 
         Ok(())

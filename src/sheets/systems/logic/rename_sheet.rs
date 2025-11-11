@@ -157,7 +157,7 @@ pub fn handle_rename_request(
                                                                 },
                                                             ];
                                                             
-                                                            match daemon_client.client().exec_batch(statements) {
+                                                            match daemon_client.client().exec_batch(statements, db_path.file_name().and_then(|n| n.to_str())) {
                                                                 Ok(response) => {
                                                                     if response.error.is_some() {
                                                                         warn!("Daemon error updating _Metadata parent_column for '{}': {:?}", new_name, response.error);

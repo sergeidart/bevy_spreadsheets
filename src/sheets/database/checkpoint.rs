@@ -18,9 +18,11 @@
 //! ## The Solution
 //! This module provides utilities to force WAL checkpoints at critical moments:
 //! - On app exit (most critical)
-//! - Periodically every 30 seconds (additional safety)
+//! - Periodically every 15 minutes (additional safety, reduced CPU overhead)
 //! - After write-heavy operations (rows, batch operations)
 //! 
+//! WAL mode is designed for delayed checkpoints - readers can directly access
+//! data from both the database file and WAL, so infrequent checkpoints are safe.
 //! This ensures data is durably written to the main database file.
 
 use super::error::DbResult;
@@ -151,8 +153,9 @@ pub fn checkpoint_on_exit(app_exit: EventReader<bevy::app::AppExit>) {
     }
 }
 
-/// Periodic checkpoint system (runs every 30 seconds)
+/// Periodic checkpoint system (runs every 15 minutes)
 /// This provides additional safety by periodically flushing WAL to disk
+/// WAL mode is designed for this - it's safe to delay checkpoints when reads are direct
 #[derive(Resource)]
 pub struct CheckpointTimer {
     pub timer: Timer,
@@ -161,7 +164,7 @@ pub struct CheckpointTimer {
 impl Default for CheckpointTimer {
     fn default() -> Self {
         Self {
-            timer: Timer::from_seconds(30.0, TimerMode::Repeating),
+            timer: Timer::from_seconds(900.0, TimerMode::Repeating), // 15 minutes
         }
     }
 }

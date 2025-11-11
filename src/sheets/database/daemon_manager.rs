@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::fs;
 use std::io::Write;
 
-const DAEMON_RELEASE_URL: &str = "https://github.com/sergeidart/sqlite_daemon/releases/download/v1";
+const DAEMON_RELEASE_URL: &str = "https://github.com/sergeidart/sqlite_daemon/releases/download/V1.2";
 const DAEMON_EXE_NAME: &str = "skylinedb-daemon.exe";
 
 /// Get the path where daemon executable should be located
@@ -80,7 +80,7 @@ pub fn is_daemon_running() -> bool {
     use super::daemon_client::DaemonClient;
     
     let client = DaemonClient::new(None, get_daemon_path().to_string_lossy().to_string());
-    client.ping()
+    client.ping(None)  // Ping the router daemon without specifying a database
 }
 
 #[cfg(test)]

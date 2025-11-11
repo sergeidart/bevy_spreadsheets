@@ -8,24 +8,28 @@ use rusqlite::Connection;
 /// Persists a structure table cell update to the database
 pub fn persist_structure_cell_update(
     conn: &Connection,
-    sheet_name: &str,
+    metadata: &SheetMetadata,
     row: &[String],
     col_idx: usize,
     col_header: &str,
     updated_value: &str,
+    db_path: &std::path::Path,
     daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
 ) -> Result<(), String> {
     if col_idx < 2 {
         return Ok(()); // Skip id (0) and parent_key (1)
     }
     
+    // Use sheet_name as table name (data_filename has .json extension which DB tables don't have)
+    let table_name = &metadata.sheet_name;
+    
     // Validate that the column exists before attempting to update
     use crate::sheets::database::schema::queries::column_exists;
-    if !column_exists(conn, sheet_name, col_header)
+    if !column_exists(conn, table_name, col_header)
         .map_err(|e| format!("Failed to verify column existence: {}", e))? {
         return Err(format!(
             "Structure changed: Column '{}' does not exist in table '{}'",
-            col_header, sheet_name
+            col_header, table_name
         ));
     }
     
@@ -35,10 +39,11 @@ pub fn persist_structure_cell_update(
     
     crate::sheets::database::writer::DbWriter::update_structure_cell_by_id(
         conn,
-        sheet_name,
+        table_name,
         row_id,
         col_header,
         updated_value,
+        db_path.file_name().and_then(|n| n.to_str()),
         daemon_client,
     ).map_err(|e| format!("Failed to update structure cell: {}", e))?;
     
@@ -48,23 +53,26 @@ pub fn persist_structure_cell_update(
 /// Persists a regular table cell update to the database
 pub fn persist_regular_cell_update(
     conn: &Connection,
-    sheet_name: &str,
+    metadata: &SheetMetadata,
     row_idx: usize,
     col_header: &str,
     updated_value: &str,
     old_value: Option<&str>,
-    metadata: &SheetMetadata,
     col_idx: usize,
     category: &Option<String>,
+    db_path: &std::path::Path,
     daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
 ) -> Result<(), String> {
+    // Use sheet_name as table name (data_filename has .json extension which DB tables don't have)
+    let table_name = &metadata.sheet_name;
+    
     // Validate that the column exists before attempting to update
     use crate::sheets::database::schema::queries::column_exists;
-    if !column_exists(conn, sheet_name, col_header)
+    if !column_exists(conn, table_name, col_header)
         .map_err(|e| format!("Failed to verify column existence: {}", e))? {
         return Err(format!(
             "Structure changed: Column '{}' does not exist in table '{}'",
-            col_header, sheet_name
+            col_header, table_name
         ));
     }
     
@@ -73,12 +81,12 @@ pub fn persist_regular_cell_update(
     let row_id: i64 = conn.query_row(
         &format!(
             "SELECT id FROM \"{}\" ORDER BY row_index DESC LIMIT 1 OFFSET {}",
-            sheet_name, row_idx
+            table_name, row_idx
         ),
         [],
         |row| row.get(0),
     ).map_err(|e| format!("Could not find row ID for visual index {} in '{:?}/{}': {}", 
-                         row_idx, category, sheet_name, e))?;
+                         row_idx, category, metadata.sheet_name, e))?;
     
     // Update by ID instead of row_index - WRITE goes through daemon
     use crate::sheets::database::daemon_client::Statement;
@@ -86,7 +94,7 @@ pub fn persist_regular_cell_update(
     let stmt = Statement {
         sql: format!(
             "UPDATE \"{}\" SET \"{}\" = ? WHERE id = ?",
-            sheet_name, col_header
+            table_name, col_header
         ),
         params: vec![
             serde_json::Value::String(updated_value.to_string()),
@@ -94,7 +102,7 @@ pub fn persist_regular_cell_update(
         ],
     };
     
-    daemon_client.exec_batch(vec![stmt])
+    daemon_client.exec_batch(vec![stmt], db_path.file_name().and_then(|n| n.to_str()))
         .map_err(|e| format!("Failed to update cell via daemon: {}", e))?;
     
     // Check if cascade is needed (if this column is a structure key)
@@ -102,7 +110,6 @@ pub fn persist_regular_cell_update(
         super::cascade::cascade_key_change_if_needed(
             conn,
             metadata,
-            sheet_name,
             col_idx,
             col_header,
             old_val,
@@ -219,6 +226,7 @@ pub fn persist_structure_json_update(
     metadata: &SheetMetadata,
     col_def: &crate::sheets::definitions::ColumnDefinition,
     updated_json: &str,
+    db_path: &std::path::Path,
     daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
 ) -> Result<(), String> {
     let schema = col_def.structure_schema.as_ref()
@@ -317,7 +325,7 @@ pub fn persist_structure_json_update(
     }
     
     // Execute all statements atomically through daemon
-    daemon_client.exec_batch(statements)
+    daemon_client.exec_batch(statements, db_path.file_name().and_then(|n| n.to_str()))
         .map_err(|e| format!("Failed to execute structure update via daemon: {}", e))?;
     
     Ok(())
@@ -350,18 +358,18 @@ pub fn persist_cell_to_database(
         .map_err(|e| format!("Failed to open database: {}", e))?;
     
     if looks_like_real_structure {
-        persist_structure_cell_update(&conn, sheet_name, row, col_idx, col_header, updated_value, daemon_client)?;
+        persist_structure_cell_update(&conn, metadata, row, col_idx, col_header, updated_value, &db_path, daemon_client)?;
     } else if !is_structure_col {
         persist_regular_cell_update(
             &conn,
-            sheet_name,
+            metadata,
             row_idx,
             col_header,
             updated_value,
             old_value,
-            metadata,
             col_idx,
             category,
+            &db_path,
             daemon_client,
         )?;
     } else {
@@ -376,6 +384,7 @@ pub fn persist_cell_to_database(
                     metadata,
                     col_def,
                     updated_value,
+                    &db_path,
                     daemon_client,
                 )?;
             }

@@ -104,7 +104,7 @@ impl MigrationFix for FixRowIndexDuplicates {
                 sql: format!("ALTER TABLE \"{}\" ADD COLUMN temp_new_row_index INTEGER", table_name),
                 params: vec![],
             };
-            let _ = daemon_client.exec_batch(vec![alter_stmt]); // Ignore error if column already exists
+            let _ = daemon_client.exec_batch(vec![alter_stmt], None); // Ignore error if column already exists
 
             // Calculate new row_index values using ROW_NUMBER() window function
             let update_temp_stmt = Statement {
@@ -117,7 +117,7 @@ impl MigrationFix for FixRowIndexDuplicates {
                 ),
                 params: vec![],
             };
-            daemon_client.exec_batch(vec![update_temp_stmt])
+            daemon_client.exec_batch(vec![update_temp_stmt], None)
                 .map_err(|e| DbError::MigrationFailed(format!("Failed to calculate new row_index: {}", e)))?;
 
             // Copy temp values to actual row_index
@@ -128,7 +128,7 @@ impl MigrationFix for FixRowIndexDuplicates {
                 ),
                 params: vec![],
             };
-            daemon_client.exec_batch(vec![copy_stmt])
+            daemon_client.exec_batch(vec![copy_stmt], None)
                 .map_err(|e| DbError::MigrationFailed(format!("Failed to copy row_index: {}", e)))?;
 
             // Drop temporary column

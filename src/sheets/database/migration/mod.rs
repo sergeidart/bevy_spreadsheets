@@ -7,6 +7,7 @@ pub mod json_migration;
 pub mod occasional_fixes;
 pub mod fix_row_index_duplicates;
 pub mod parent_key_to_row_index;
+pub mod parent_key_helpers;
 pub mod cleanup_temp_new_row_index;
 pub mod hide_temp_new_row_index_in_metadata;
 pub mod remove_grand_parent_columns;

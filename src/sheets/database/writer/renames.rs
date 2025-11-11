@@ -54,6 +54,7 @@ pub fn rename_data_column(
                 format!("DELETE FROM \"{}\" WHERE column_name = ?", meta_table),
                 vec![serde_json::Value::String(new_name.to_string())],
                 daemon_client,
+                conn,
             )?;
         } else {
             return Err(super::super::error::DbError::Other(format!(
@@ -318,6 +319,7 @@ pub fn rename_structure_table(
             serde_json::Value::String(old_struct.clone()),
         ],
         daemon_client,
+        conn,
     )?;
     
     let updated = 0; // exec_simple_statement returns rows_affected but we stored it
@@ -438,6 +440,7 @@ pub fn rename_table_and_descendants(
                 serde_json::Value::String(old_table.to_string()),
             ],
             daemon_client,
+            conn,
         )?;
             
         // Descendants: update any row whose parent_table equals a renamed table
@@ -449,6 +452,7 @@ pub fn rename_table_and_descendants(
                     serde_json::Value::String(old_name.clone()),
                 ],
                 daemon_client,
+                conn,
             )?;
         }
 

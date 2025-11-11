@@ -82,7 +82,7 @@ pub fn delete_conflicting_deleted_column(_conn: &Connection, meta_table: &str, c
         sql: format!("DELETE FROM \"{}\" WHERE column_name = ? AND deleted = 1", meta_table),
         params: vec![serde_json::Value::String(column_name.to_string())],
     };
-    daemon_client.exec_batch(vec![stmt]).map_err(daemon_error_to_rusqlite)?;
+    daemon_client.exec_batch(vec![stmt], None).map_err(daemon_error_to_rusqlite)?;
     Ok(())
 }
 
@@ -108,7 +108,7 @@ pub fn rename_table(_conn: &Connection, old_name: &str, new_name: &str, daemon_c
         sql: format!("ALTER TABLE \"{}\" RENAME TO \"{}\"", old_name, new_name),
         params: vec![],
     };
-    daemon_client.exec_batch(vec![stmt]).map_err(daemon_error_to_rusqlite)?;
+    daemon_client.exec_batch(vec![stmt], None).map_err(daemon_error_to_rusqlite)?;
     Ok(())
 }
 
@@ -119,7 +119,7 @@ pub fn rename_column(_conn: &Connection, table_name: &str, old_name: &str, new_n
         sql: format!("ALTER TABLE \"{}\" RENAME COLUMN \"{}\" TO \"{}\"", table_name, old_name, new_name),
         params: vec![],
     };
-    daemon_client.exec_batch(vec![stmt]).map_err(daemon_error_to_rusqlite)?;
+    daemon_client.exec_batch(vec![stmt], None).map_err(daemon_error_to_rusqlite)?;
     Ok(())
 }
 
@@ -133,7 +133,7 @@ pub fn update_metadata_column_name_by_index(_conn: &Connection, meta_table: &str
             serde_json::Value::Number(column_index.into()),
         ],
     };
-    let response = daemon_client.exec_batch(vec![stmt]).map_err(daemon_error_to_rusqlite)?;
+    let response = daemon_client.exec_batch(vec![stmt], None).map_err(daemon_error_to_rusqlite)?;
     Ok(response.rows_affected.unwrap_or(0))
 }
 
@@ -160,12 +160,12 @@ pub fn drop_column_with_fallback(_conn: &Connection, table_name: &str, column_na
         sql: format!("UPDATE \"{}\" SET \"{}\" = NULL", table_name, column_name),
         params: vec![],
     };
-    let _ = daemon_client.exec_batch(vec![update_stmt]);
+    let _ = daemon_client.exec_batch(vec![update_stmt], None);
     let drop_stmt = Statement {
         sql: format!("ALTER TABLE \"{}\" DROP COLUMN \"{}\"", table_name, column_name),
         params: vec![],
     };
-    match daemon_client.exec_batch(vec![drop_stmt]) {
+    match daemon_client.exec_batch(vec![drop_stmt], None) {
         Ok(_) => bevy::log::info!("drop_column_with_fallback: successfully dropped column '{}.{}'", table_name, column_name),
         Err(e) => bevy::log::warn!("drop_column_with_fallback: failed to drop column '{}.{}': {} (column may persist with NULL values)", table_name, column_name, e),
     }
@@ -178,17 +178,17 @@ where F: FnOnce(&Connection) -> DbResult<()>
 {
     use crate::sheets::database::daemon_client::Statement;
     let begin_stmt = Statement { sql: "BEGIN IMMEDIATE".to_string(), params: vec![] };
-    daemon_client.exec_batch(vec![begin_stmt]).map_err(daemon_error_to_rusqlite)?;
+    daemon_client.exec_batch(vec![begin_stmt], None).map_err(daemon_error_to_rusqlite)?;
     let result = f(conn);
     match result {
         Ok(_) => {
             let commit_stmt = Statement { sql: "COMMIT".to_string(), params: vec![] };
-            daemon_client.exec_batch(vec![commit_stmt]).map_err(daemon_error_to_rusqlite)?;
+            daemon_client.exec_batch(vec![commit_stmt], None).map_err(daemon_error_to_rusqlite)?;
             Ok(())
         }
         Err(e) => {
             let rollback_stmt = Statement { sql: "ROLLBACK".to_string(), params: vec![] };
-            let _ = daemon_client.exec_batch(vec![rollback_stmt]);
+            let _ = daemon_client.exec_batch(vec![rollback_stmt], None);
             Err(e)
         }
     }
@@ -204,14 +204,14 @@ pub fn rename_table_triplet(conn: &Connection, old_name: &str, new_name: &str, d
     if new_meta_exists && !new_data_exists {
         bevy::log::warn!("Found orphan metadata table '{}' without data table '{}'; dropping before rename.", new_meta, new_name);
         let drop_stmt = Statement { sql: format!("DROP TABLE IF EXISTS \"{}\"", new_meta), params: vec![] };
-        daemon_client.exec_batch(vec![drop_stmt]).map_err(daemon_error_to_rusqlite)?;
+        daemon_client.exec_batch(vec![drop_stmt], None).map_err(daemon_error_to_rusqlite)?;
     }
     let new_groups = format!("{}_AIGroups", new_name);
     let new_groups_exists = table_exists(conn, &new_groups)?;
     if new_groups_exists && !new_data_exists {
         bevy::log::warn!("Found orphan AI groups table '{}' without data table '{}'; dropping before rename.", new_groups, new_name);
         let drop_stmt = Statement { sql: format!("DROP TABLE IF EXISTS \"{}\"", new_groups), params: vec![] };
-        daemon_client.exec_batch(vec![drop_stmt]).map_err(daemon_error_to_rusqlite)?;
+        daemon_client.exec_batch(vec![drop_stmt], None).map_err(daemon_error_to_rusqlite)?;
     }
     let data_exists = table_exists(conn, old_name)?;
     if data_exists {
@@ -244,6 +244,6 @@ pub fn rename_table_triplet(conn: &Connection, old_name: &str, new_name: &str, d
             serde_json::Value::String(old_name.to_string()),
         ],
     };
-    daemon_client.exec_batch(vec![delete_stmt, update_stmt]).map_err(daemon_error_to_rusqlite)?;
+    daemon_client.exec_batch(vec![delete_stmt, update_stmt], None).map_err(daemon_error_to_rusqlite)?;
     Ok(())
 }

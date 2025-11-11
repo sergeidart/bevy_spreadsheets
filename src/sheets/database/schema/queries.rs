@@ -16,6 +16,21 @@ pub fn table_exists(conn: &Connection, table_name: &str) -> DbResult<bool> {
             |row| row.get::<_, i32>(0).map(|v| v > 0),
         )
         .unwrap_or(false);
+    
+    // Debug: If table doesn't exist, log what tables DO exist
+    if !exists {
+        if let Ok(tables) = conn.query_row(
+            "SELECT GROUP_CONCAT(name, ', ') FROM sqlite_master WHERE type='table'",
+            [],
+            |row| row.get::<_, String>(0)
+        ) {
+            bevy::log::debug!(
+                "Table '{}' not found. Existing tables: {}",
+                table_name, tables
+            );
+        }
+    }
+    
     Ok(exists)
 }
 
@@ -40,6 +55,10 @@ pub fn get_table_columns(conn: &Connection, table_name: &str) -> DbResult<Vec<St
 
 /// Check if a column exists in a table
 pub fn column_exists(conn: &Connection, table_name: &str, column_name: &str) -> DbResult<bool> {
+    // If table doesn't exist, column doesn't exist
+    if !table_exists(conn, table_name)? {
+        return Ok(false);
+    }
     let columns = get_table_columns(conn, table_name)?;
     Ok(columns.iter().any(|c| c.eq_ignore_ascii_case(column_name)))
 }

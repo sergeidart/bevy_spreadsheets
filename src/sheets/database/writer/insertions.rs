@@ -69,7 +69,7 @@ pub fn insert_grid_data_with_progress<F: FnMut(usize)>(
             if !chunk.is_empty() {
                 // Use connection to verify table still present before write (read-only)
                 // Read-only check skipped in batch mode; schema validated earlier.
-                daemon_client.exec_batch(chunk)
+                daemon_client.exec_batch(chunk, None)
                     .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))))?;
             }
             on_chunk(row_idx);
@@ -77,7 +77,7 @@ pub fn insert_grid_data_with_progress<F: FnMut(usize)>(
     }
     // Flush remaining statements
     if !batch.is_empty() {
-        daemon_client.exec_batch(batch)
+        daemon_client.exec_batch(batch, None)
             .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))))?;
     }
 
@@ -110,6 +110,7 @@ fn insert_row_with_index(
     row_index: i32,
     row_data: &[String],
     column_names: &[String],
+    db_filename: Option<&str>, // Database filename for daemon (e.g., "optima.db")
     daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
 ) -> DbResult<i64> {
     use crate::sheets::database::daemon_client::Statement;
@@ -127,8 +128,8 @@ fn insert_row_with_index(
         params,
     };
     
-    // Execute through daemon
-    let _response = daemon_client.exec_batch(vec![stmt])
+    // Execute through daemon with explicit database filename
+    let _response = daemon_client.exec_batch(vec![stmt], db_filename)
         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
             std::io::ErrorKind::Other,
             e
@@ -164,6 +165,7 @@ pub fn prepend_row(
     table_name: &str,
     row_data: &[String],
     column_names: &[String],
+    db_filename: Option<&str>, // Database filename for daemon (e.g., "optima.db")
     daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
 ) -> DbResult<i64> {
     // Validate that all columns exist before attempting to insert
@@ -219,7 +221,7 @@ pub fn prepend_row(
     
     // Insert new row at max_index (no shifting needed!)
     info!("prepend_row: Inserting row with row_index={} into '{}'", max_index, table_name);
-    let inserted = insert_row_with_index(&tx, table_name, max_index, row_data, column_names, daemon_client)?;
+    let inserted = insert_row_with_index(&tx, table_name, max_index, row_data, column_names, db_filename, daemon_client)?;
     tx.commit()?;
     Ok(inserted)
 }
@@ -233,6 +235,7 @@ pub fn prepend_rows_batch(
     table_name: &str,
     rows_data: &[Vec<String>],
     column_names: &[String],
+    db_filename: Option<&str>, // Database filename for daemon (e.g., "optima.db")
     daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
 ) -> DbResult<Vec<i64>> {
     if rows_data.is_empty() {
@@ -291,7 +294,7 @@ pub fn prepend_rows_batch(
     let mut row_indices = Vec::with_capacity(rows_data.len());
     for (i, row_data) in rows_data.iter().enumerate() {
         let row_index = start_index + i as i32;
-        let id = insert_row_with_index(&tx, table_name, row_index, row_data, column_names, daemon_client)?;
+        let id = insert_row_with_index(&tx, table_name, row_index, row_data, column_names, db_filename, daemon_client)?;
         inserted_ids.push(id);
         row_indices.push(row_index);
     }
