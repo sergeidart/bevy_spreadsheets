@@ -41,12 +41,23 @@ pub fn reload_sheet_cache_from_db(
     
     state.force_cache_reload = false;
     
+    // Clear linked_column_cache when reloading sheet data
+    // This ensures validation and dropdowns will work with fresh data from newly loaded sheets
+    if !state.linked_column_cache.is_empty() {
+        debug!("Clearing linked_column_cache ({} entries) due to sheet reload", state.linked_column_cache.len());
+        state.linked_column_cache.clear();
+        state.linked_column_cache_normalized.clear();
+    }
+    
     let Some(sheet_name) = &state.selected_sheet_name else {
         state.sheet_is_loading = false;
         return;
     };
     
+    // Clone to avoid borrow checker issues when passing to load_linked_target_sheets
+    let sheet_name_owned = sheet_name.clone();
     let category = &state.selected_category;
+    let category_owned = category.clone();
     
     // Check if this is a DB-backed sheet
     let sheet_data = registry.get_sheet(category, sheet_name);
@@ -95,6 +106,8 @@ pub fn reload_sheet_cache_from_db(
                             sheet_name.clone(),
                             sheet_data,
                         );
+                        // Proactively load linked target sheets
+                        load_linked_target_sheets(state, registry, daemon_client, &sheet_name_owned, &category_owned);
                         state.sheet_is_loading = false; // Data loaded successfully
                     }
                     Err(e) => {
@@ -121,6 +134,8 @@ pub fn reload_sheet_cache_from_db(
                             sheet_name.clone(),
                             sheet_data,
                         );
+                        // Proactively load linked target sheets
+                        load_linked_target_sheets(state, registry, daemon_client, &sheet_name_owned, &category_owned);
                         state.sheet_is_loading = false; // Data loaded successfully
                     }
                     Err(e) => {
@@ -133,6 +148,88 @@ pub fn reload_sheet_cache_from_db(
                 error!("Failed to open DB for cache reload: {}", e);
                 state.sheet_is_loading = false; // Failed but stop showing loading state
             }
+        }
+    }
+}
+
+/// Proactively load target sheets for all linked columns in the current sheet
+/// This ensures validation and dropdowns work immediately without requiring navigation
+fn load_linked_target_sheets(
+    _state: &mut EditorWindowState,
+    registry: &mut SheetRegistry,
+    daemon_client: &DaemonClient,
+    current_sheet_name: &str,
+    category: &Option<String>,
+) {
+    use crate::sheets::definitions::ColumnValidator;
+    
+    // Get current sheet metadata to find linked columns
+    let linked_targets = if let Some(sheet) = registry.get_sheet(category, current_sheet_name) {
+        if let Some(metadata) = &sheet.metadata {
+            // Collect all unique target sheets from linked columns
+            metadata.columns.iter()
+                .filter_map(|col| {
+                    if let Some(ColumnValidator::Linked { target_sheet_name, .. }) = &col.validator {
+                        Some(target_sheet_name.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<std::collections::HashSet<_>>()
+        } else {
+            std::collections::HashSet::new()
+        }
+    } else {
+        std::collections::HashSet::new()
+    };
+    
+    if linked_targets.is_empty() {
+        return;
+    }
+    
+    debug!("Sheet '{}' has {} linked target sheet(s) to load: {:?}", 
+           current_sheet_name, linked_targets.len(), linked_targets);
+    
+    // Load each target sheet if not already loaded or is a stub
+    let Some(cat_str) = category.as_ref() else { return; };
+    let base_path = crate::sheets::systems::io::get_default_data_base_path();
+    let db_path = base_path.join(format!("{}.db", cat_str));
+    
+    if !db_path.exists() {
+        warn!("Database file not found for loading linked targets: {:?}", db_path);
+        return;
+    }
+    
+    for target_sheet_name in linked_targets {
+        // Check if target sheet needs loading (doesn't exist or is a stub)
+        let needs_load = registry.get_sheet(category, &target_sheet_name)
+            .map(|sheet| sheet.grid.is_empty())
+            .unwrap_or(true);
+        
+        if needs_load {
+            debug!("Loading linked target sheet: '{}'", target_sheet_name);
+            match rusqlite::Connection::open(&db_path) {
+                Ok(conn) => {
+                    match crate::sheets::database::reader::DbReader::read_sheet(&conn, &target_sheet_name, daemon_client, Some(cat_str)) {
+                        Ok(sheet_data) => {
+                            info!("Loaded {} rows for linked target sheet '{}'", sheet_data.grid.len(), target_sheet_name);
+                            registry.add_or_replace_sheet(
+                                category.clone(),
+                                target_sheet_name.clone(),
+                                sheet_data,
+                            );
+                        }
+                        Err(e) => {
+                            error!("Failed to load linked target sheet '{}': {}", target_sheet_name, e);
+                        }
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to open DB for loading linked target sheet '{}': {}", target_sheet_name, e);
+                }
+            }
+        } else {
+            debug!("Linked target sheet '{}' already loaded", target_sheet_name);
         }
     }
 }

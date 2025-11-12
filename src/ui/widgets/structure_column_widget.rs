@@ -279,4 +279,9 @@ fn build_and_push_navigation_context(
     state.structure_navigation_stack.push(nav_context);
     state.selected_category = category.clone();
     state.selected_sheet_name = Some(structure_sheet_name.to_string());
+    
+    // Trigger cache reload and revalidation for the newly selected child sheet
+    // This ensures the parent lookup cache is built correctly and rows are properly filtered
+    state.force_cache_reload = true;
+    state.pending_sheet_revalidation = true;
 }

@@ -180,6 +180,10 @@ pub fn edit_cell_widget(
                                                         Some(target_sheet_name.clone());
                                                     state.reset_interaction_modes_and_selections();
                                                     state.force_filter_recalculation = true;
+                                                    // Trigger cache reload and revalidation for the newly selected linked sheet
+                                                    // This ensures the sheet data is loaded and validation can access it
+                                                    state.force_cache_reload = true;
+                                                    state.pending_sheet_revalidation = true;
                                                 }
                                                 (new_val, resp)
                                             })
