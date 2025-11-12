@@ -230,6 +230,13 @@ impl Plugin for SheetsPlugin {
                 .in_set(SheetSystemSet::ApplyChanges),
         );
 
+        // Add lazy loading system before async results
+        app.add_systems(
+            Update,
+            systems::io::lazy_load::lazy_load_category_tables
+                .before(SheetSystemSet::ProcessAsyncResults),
+        );
+
         app.add_systems(
             Update,
             (

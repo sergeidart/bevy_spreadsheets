@@ -8,12 +8,23 @@ use crate::ui::elements::editor::state::EditorWindowState;
 pub fn handle_category_selection(
     state: &mut EditorWindowState,
     new_category: Option<String>,
+    registry: &SheetRegistry,
 ) {
     if state.selected_category != new_category {
-        state.selected_category = new_category;
+        state.selected_category = new_category.clone();
         state.selected_sheet_name = None;
         state.reset_interaction_modes_and_selections();
         state.force_filter_recalculation = true;
+        
+        // Check if category needs table list loaded (lazy loading)
+        if let Some(cat_name) = &new_category {
+            let sheet_names = registry.get_sheet_names_in_category(&new_category);
+            if sheet_names.is_empty() {
+                // Category has no sheets loaded yet - mark for lazy load
+                state.category_needs_table_list_load = true;
+                info!("Category '{}' selected - will load table list on demand", cat_name);
+            }
+        }
     }
 }
 

@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 
 // --- Submodule Declarations ---
 pub mod load; // Runtime uploads
+pub mod lazy_load; // Lazy loading of database tables
 pub mod metadata_persistence;
 pub mod parsers;
 pub mod save;

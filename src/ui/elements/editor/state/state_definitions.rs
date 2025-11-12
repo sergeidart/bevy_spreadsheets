@@ -388,6 +388,12 @@ pub struct EditorWindowState {
     /// Cleared when switching databases or categories to ensure fresh data
     pub parent_lineage_cache: HashMap<(Option<String>, String, usize), Vec<(String, String, usize)>>,
 
+    /// Flag to indicate that the selected category needs its table list loaded (lazy loading)
+    pub category_needs_table_list_load: bool,
+    
+    /// Flag to indicate that a sheet is currently loading (prevents rendering empty state)
+    pub sheet_is_loading: bool,
+
     // Core Interaction Mode
     pub current_interaction_mode: SheetInteractionState,
     pub selected_columns_for_deletion: HashSet<usize>,

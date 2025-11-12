@@ -83,7 +83,7 @@ pub fn render_category_popup(
             }
             
             if cat_resp.clicked() && !is_selected_cat {
-                category_handlers::handle_category_selection(state, Some(cat_name.clone()));
+                category_handlers::handle_category_selection(state, Some(cat_name.clone()), registry);
                 popup_ui.memory_mut(|mem| mem.close_popup());
             }
         }

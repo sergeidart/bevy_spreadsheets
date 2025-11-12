@@ -8,13 +8,12 @@ use bevy::prelude::*;
 use std::path::Path;
 use walkdir::WalkDir;
 
-use super::schema_handlers::infer_schema_and_load_table;
 use crate::sheets::systems::io::get_default_data_base_path;
 
-/// Scan for SQLite database files and load tables as sheets
+/// Scan for SQLite database files and register them as categories (lazy loading)
 pub fn scan_and_load_database_files(
     registry: &mut SheetRegistry,
-    revalidate_writer: &mut EventWriter<RequestSheetRevalidation>,
+    _revalidate_writer: &mut EventWriter<RequestSheetRevalidation>,
     daemon_client: &DaemonClient,
 ) {
     let base_path = get_default_data_base_path();
@@ -52,16 +51,15 @@ pub fn scan_and_load_database_files(
 
     info!("Startup DB Scan: Found {} database file(s)", db_files.len());
 
-    // Load tables from each database
+    // Register databases as categories without loading tables (lazy loading)
     for db_path in db_files {
-        load_database_tables(registry, revalidate_writer, &db_path, daemon_client);
+        register_database_as_category(registry, &db_path, daemon_client);
     }
 }
 
-/// Load all tables from a single database file
-fn load_database_tables(
+/// Register a database as a category without loading tables (lazy loading optimization)
+fn register_database_as_category(
     registry: &mut SheetRegistry,
-    revalidate_writer: &mut EventWriter<RequestSheetRevalidation>,
     db_path: &Path,
     daemon_client: &DaemonClient,
 ) {
@@ -71,15 +69,96 @@ fn load_database_tables(
         .unwrap_or_else(|| "Unknown".to_string());
 
     info!(
-        "Startup DB Scan: Loading tables from database: {}",
-        db_path.display()
+        "Startup DB Scan: Registering database '{}' as category (lazy loading)",
+        db_name
     );
 
-    let mut conn = match crate::sheets::database::connection::DbConnection::open_existing(db_path) {
-        Ok(conn) => conn,
+    // Just verify the database can be opened
+    match crate::sheets::database::connection::DbConnection::open_existing(db_path) {
+        Ok(mut conn) => {
+            // Check if this is a SkylineDB database (has _Metadata table)
+            let has_metadata_table = check_has_metadata_table(&conn);
+
+            // If SkylineDB metadata exists, ensure it's migrated to latest schema
+            if has_metadata_table {
+                if let Err(e) = crate::sheets::database::schema::ensure_global_metadata_table(&conn, daemon_client) {
+                    error!(
+                        "Startup DB Scan: Failed to ensure _Metadata schema in '{}': {}",
+                        db_name, e
+                    );
+                    return;
+                }
+
+                // Apply migration fixes to ensure data integrity
+                info!("Startup DB Scan: Applying migration fixes to '{}'...", db_name);
+                let mut fix_manager = crate::sheets::database::migration::OccasionalFixManager::new();
+                fix_manager.register_fix(Box::new(
+                    crate::sheets::database::migration::fix_row_index_duplicates::FixRowIndexDuplicates
+                ));
+                fix_manager.register_fix(Box::new(
+                    crate::sheets::database::migration::parent_key_to_row_index::MigrateParentKeyToRowIndex
+                ));
+                fix_manager.register_fix(Box::new(
+                    crate::sheets::database::migration::cleanup_temp_new_row_index::CleanupTempNewRowIndex
+                ));
+                fix_manager.register_fix(Box::new(
+                    crate::sheets::database::migration::hide_temp_new_row_index_in_metadata::HideTempNewRowIndexInMetadata
+                ));
+                fix_manager.register_fix(Box::new(
+                    crate::sheets::database::migration::remove_grand_parent_columns::RemoveGrandParentColumns
+                ));
+
+                match fix_manager.apply_all_fixes(&mut conn, &daemon_client) {
+                    Ok(applied) => {
+                        if !applied.is_empty() {
+                            info!("Startup DB Scan: Applied migration fixes to '{}': {:?}", db_name, applied);
+                        }
+                    }
+                    Err(e) => {
+                        error!("Startup DB Scan: Failed to apply migration fixes to '{}': {}", db_name, e);
+                    }
+                }
+            }
+
+            // Just create the category, don't load tables yet
+            let _ = registry.create_category(db_name.clone());
+            info!(
+                "Startup DB Scan: Database '{}' registered as empty category (tables will load on demand)",
+                db_name
+            );
+        }
         Err(e) => {
             error!(
                 "Startup DB Scan: Failed to open database '{}': {}",
+                db_path.display(),
+                e
+            );
+        }
+    }
+}
+
+/// Load all tables from a single database file (called on-demand when category is selected)
+pub fn load_database_tables(
+    registry: &mut SheetRegistry,
+    _revalidate_writer: &mut EventWriter<RequestSheetRevalidation>,
+    db_path: &Path,
+    _daemon_client: &DaemonClient,
+) {
+    let db_name = db_path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "Unknown".to_string());
+
+    info!(
+        "Lazy Load: Loading table list from database: {}",
+        db_path.display()
+    );
+
+    let conn = match crate::sheets::database::connection::DbConnection::open_existing(db_path) {
+        Ok(conn) => conn,
+        Err(e) => {
+            error!(
+                "Lazy Load: Failed to open database '{}': {}",
                 db_path.display(),
                 e
             );
@@ -90,77 +169,26 @@ fn load_database_tables(
     // Check if this is a SkylineDB database (has _Metadata table)
     let has_metadata_table = check_has_metadata_table(&conn);
 
-    // If SkylineDB metadata exists, ensure it's migrated to latest schema
-    if has_metadata_table {
-        if let Err(e) = crate::sheets::database::schema::ensure_global_metadata_table(&conn, daemon_client) {
-            error!(
-                "Startup DB Scan: Failed to ensure _Metadata schema in '{}': {}",
-                db_name, e
-            );
-        }
-
-        // Apply migration fixes to ensure data integrity
-        info!("Startup DB Scan: Applying migration fixes to '{}'...", db_name);
-        let mut fix_manager = crate::sheets::database::migration::OccasionalFixManager::new();
-        fix_manager.register_fix(Box::new(
-            crate::sheets::database::migration::fix_row_index_duplicates::FixRowIndexDuplicates
-        ));
-        fix_manager.register_fix(Box::new(
-            crate::sheets::database::migration::parent_key_to_row_index::MigrateParentKeyToRowIndex
-        ));
-        fix_manager.register_fix(Box::new(
-            crate::sheets::database::migration::cleanup_temp_new_row_index::CleanupTempNewRowIndex
-        ));
-        fix_manager.register_fix(Box::new(
-            crate::sheets::database::migration::hide_temp_new_row_index_in_metadata::HideTempNewRowIndexInMetadata
-        ));
-        fix_manager.register_fix(Box::new(
-            crate::sheets::database::migration::remove_grand_parent_columns::RemoveGrandParentColumns
-        ));
-
-        match fix_manager.apply_all_fixes(&mut conn, &daemon_client) {
-            Ok(applied) => {
-                if !applied.is_empty() {
-                    info!("Startup DB Scan: Applied migration fixes to '{}': {:?}", db_name, applied);
-                }
-            }
-            Err(e) => {
-                error!("Startup DB Scan: Failed to apply migration fixes to '{}': {}", db_name, e);
-            }
-        }
-    }
-
     // Get list of tables
     let table_names = get_table_names(&conn, has_metadata_table, &db_name);
 
-    // Always create the category (database) even if empty
-    let _ = registry.create_category(db_name.clone());
-
     if table_names.is_empty() {
         info!(
-            "Startup DB Scan: No tables found in '{}' (empty database)",
+            "Lazy Load: No tables found in '{}' (empty database)",
             db_name
         );
         return;
     }
 
     info!(
-        "Startup DB Scan: Found {} table(s) in '{}'",
+        "Lazy Load: Found {} table(s) in '{}'",
         table_names.len(),
         db_name
     );
 
-    // Load each table
+    // Register table stubs (without loading data)
     for table_name in table_names {
-        load_single_table(
-            registry,
-            revalidate_writer,
-            &conn,
-            &table_name,
-            &db_name,
-            has_metadata_table,
-            daemon_client,
-        );
+        register_table_stub(registry, &conn, &table_name, &db_name);
     }
 }
 
@@ -221,86 +249,66 @@ fn get_table_names(
     }
 }
 
-/// Load a single table from the database
-fn load_single_table(
+/// Register a table as a stub (metadata only, no data) for lazy loading
+fn register_table_stub(
     registry: &mut SheetRegistry,
-    revalidate_writer: &mut EventWriter<RequestSheetRevalidation>,
     conn: &rusqlite::Connection,
     table_name: &str,
     db_name: &str,
-    has_metadata_table: bool,
-    daemon_client: &DaemonClient,
 ) {
-    // Try to load with metadata first
-    let (metadata, grid, row_indices) = if has_metadata_table {
-        // Load from SkylineDB metadata
-        match crate::sheets::database::reader::DbReader::read_metadata(conn, table_name, daemon_client, Some(db_name)) {
-            Ok(metadata) => {
-                // Load grid data
-                match crate::sheets::database::reader::DbReader::read_grid_data(
-                    conn,
-                    table_name,
-                    &metadata,
-                ) {
-                    Ok((grid, row_indices)) => (metadata, grid, row_indices),
-                    Err(e) => {
-                        error!(
-                            "Startup DB Scan: Failed to load grid data for '{}': {}",
-                            table_name, e
-                        );
-                        return;
-                    }
-                }
-            }
-            Err(e) => {
-                error!(
-                    "Startup DB Scan: Failed to load metadata for '{}': {}",
-                    table_name, e
-                );
-                return;
-            }
-        }
-    } else {
-        // No metadata - infer schema from SQLite table structure
-        info!(
-            "Startup DB Scan: Inferring schema for table '{}' from SQLite structure",
-            table_name
-        );
-
-        match infer_schema_and_load_table(conn, table_name, db_name) {
-            Ok((metadata, grid)) => (metadata, grid, Vec::new()), // Inferred schemas don't have row_indices yet
-            Err(e) => {
-                error!(
-                    "Startup DB Scan: Failed to infer schema for '{}': {}",
-                    table_name, e
-                );
-                return;
-            }
-        }
-    };
-
-    // Register the sheet in the registry
-    let sheet_data = crate::sheets::definitions::SheetGridData {
-        metadata: Some(metadata.clone()),
-        grid,
-        row_indices,
-    };
+    // Check if this is a structure table (child table)
+    // Structure tables should be hidden by default
+    let is_structure = crate::sheets::database::schema::queries::get_table_type(conn, table_name)
+        .ok()
+        .and_then(|t| t)
+        .map(|t| t == "structure")
+        .unwrap_or(false);
     
-    info!(
-        "Startup DB Scan: Registering table '{}' with {} rows and {} row_indices",
-        table_name, sheet_data.grid.len(), sheet_data.row_indices.len()
+    // Also check explicit hidden flag from _Metadata
+    let hidden_in_db = conn
+        .query_row(
+            "SELECT hidden FROM _Metadata WHERE table_name = ?",
+            [table_name],
+            |row| row.get::<_, Option<i32>>(0),
+        )
+        .ok()
+        .flatten();
+    
+    // If hidden is explicitly set in DB, use that; otherwise default based on is_structure
+    let hidden = hidden_in_db.map(|v| v != 0).unwrap_or(is_structure);
+    
+    // Create a minimal SheetGridData with just metadata, no actual data
+    let metadata = crate::sheets::definitions::SheetMetadata {
+        sheet_name: table_name.to_string(),
+        data_filename: format!("{}.json", table_name), // Not used for DB-backed sheets
+        category: Some(db_name.to_string()),
+        columns: vec![], // Will be loaded on demand
+        hidden,
+        ai_schema_groups: vec![],
+        ai_enable_row_generation: false,
+        ai_general_rule: None,
+        ai_model_id: String::from("gpt-4o-mini"),
+        ai_temperature: None,
+        requested_grounding_with_google_search: None,
+        ai_active_schema_group: None,
+        random_picker: None,
+        structure_parent: None,
+    };
+
+    let sheet_data = crate::sheets::definitions::SheetGridData {
+        metadata: Some(metadata),
+        grid: Vec::new(), // Empty - will be loaded on demand
+        row_indices: Vec::new(),
+    };
+
+    registry.add_or_replace_sheet(
+        Some(db_name.to_string()),
+        table_name.to_string(),
+        sheet_data,
     );
 
-    registry.add_or_replace_sheet(Some(db_name.to_string()), table_name.to_string(), sheet_data);
-
-    info!(
-        "Startup DB Scan: Successfully loaded table '{}' from category '{}'",
+    debug!(
+        "Lazy Load: Registered table stub '{}' in category '{}'",
         table_name, db_name
     );
-
-    // Trigger render cache build for the newly loaded sheet
-    revalidate_writer.write(RequestSheetRevalidation {
-        category: Some(db_name.to_string()),
-        sheet_name: table_name.to_string(),
-    });
 }

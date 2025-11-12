@@ -167,7 +167,7 @@ fn render_category_tabs(
                         }
                         
                         if resp.clicked() && !is_sel {
-                            category_handlers::handle_category_selection(state, Some(cat.clone()));
+                            category_handlers::handle_category_selection(state, Some(cat.clone()), registry);
                         }
                     }
                 }

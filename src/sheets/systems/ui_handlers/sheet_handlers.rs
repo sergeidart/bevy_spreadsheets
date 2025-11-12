@@ -14,13 +14,15 @@ pub fn handle_sheet_selection(
         state.selected_sheet_name = new_sheet;
         if state.selected_sheet_name.is_none() {
             state.reset_interaction_modes_and_selections();
+            state.sheet_is_loading = false;
         } else {
             // On direct sheet open, clear hidden navigation filters
             state.structure_navigation_stack.clear();
             state.filtered_row_indices_cache.clear();
             
-            // Mark that cache needs to be reloaded from DB
+            // Mark that cache needs to be reloaded from DB and sheet is loading
             state.force_cache_reload = true;
+            state.sheet_is_loading = true; // Prevent rendering until data is loaded
         }
         state.force_filter_recalculation = true;
         state.show_column_options_popup = false;
@@ -40,55 +42,97 @@ pub fn reload_sheet_cache_from_db(
     state.force_cache_reload = false;
     
     let Some(sheet_name) = &state.selected_sheet_name else {
+        state.sheet_is_loading = false;
         return;
     };
     
     let category = &state.selected_category;
     
     // Check if this is a DB-backed sheet
-    let is_db_backed = registry
-        .get_sheet(category, sheet_name)
+    let sheet_data = registry.get_sheet(category, sheet_name);
+    let is_db_backed = sheet_data
         .and_then(|s| s.metadata.as_ref())
         .and_then(|m| m.category.as_ref())
         .is_some();
     
     if !is_db_backed {
         debug!("Sheet '{}' is not DB-backed, skipping cache reload", sheet_name);
+        state.sheet_is_loading = false;
         return;
     }
+
+    // Check if the sheet is a stub (empty grid) - needs full load
+    let is_stub = sheet_data
+        .map(|s| s.grid.is_empty() && s.metadata.as_ref().map_or(false, |m| m.columns.is_empty()))
+        .unwrap_or(false);
     
     // Reload from database
     let Some(cat_str) = category.as_ref() else {
+        state.sheet_is_loading = false;
         return;
     };
     
-    info!("Reloading cache for sheet '{}' from DB", sheet_name);
     let base_path = crate::sheets::systems::io::get_default_data_base_path();
     let db_path = base_path.join(format!("{}.db", cat_str));
     
     if !db_path.exists() {
         warn!("Database file not found for cache reload: {:?}", db_path);
+        state.sheet_is_loading = false;
         return;
     }
-    
-    match rusqlite::Connection::open(&db_path) {
-        Ok(conn) => {
-            match crate::sheets::database::reader::DbReader::read_sheet(&conn, sheet_name, daemon_client, Some(cat_str)) {
-                Ok(sheet_data) => {
-                    info!("Successfully reloaded {} rows from DB for sheet '{}'", sheet_data.grid.len(), sheet_name);
-                    registry.add_or_replace_sheet(
-                        category.clone(),
-                        sheet_name.clone(),
-                        sheet_data,
-                    );
-                }
-                Err(e) => {
-                    error!("Failed to reload sheet data from DB: {}", e);
+
+    if is_stub {
+        info!("Loading full data for table stub '{}'", sheet_name);
+        // Load full table data from database - we can't easily create an EventWriter here,
+        // so we'll reload the data directly without the convenience function
+        match rusqlite::Connection::open(&db_path) {
+            Ok(conn) => {
+                match crate::sheets::database::reader::DbReader::read_sheet(&conn, sheet_name, daemon_client, Some(cat_str)) {
+                    Ok(sheet_data) => {
+                        info!("Successfully loaded full table data: {} rows from DB for sheet '{}'", sheet_data.grid.len(), sheet_name);
+                        registry.add_or_replace_sheet(
+                            category.clone(),
+                            sheet_name.clone(),
+                            sheet_data,
+                        );
+                        state.sheet_is_loading = false; // Data loaded successfully
+                    }
+                    Err(e) => {
+                        error!("Failed to load full table data from DB: {}", e);
+                        state.sheet_is_loading = false; // Failed but stop showing loading state
+                    }
                 }
             }
+            Err(e) => {
+                error!("Failed to open DB for full table load: {}", e);
+                state.sheet_is_loading = false; // Failed but stop showing loading state
+            }
         }
-        Err(e) => {
-            error!("Failed to open DB for cache reload: {}", e);
+    } else {
+        info!("Reloading cache for sheet '{}' from DB", sheet_name);
+        // Just reload the data (already has metadata)
+        match rusqlite::Connection::open(&db_path) {
+            Ok(conn) => {
+                match crate::sheets::database::reader::DbReader::read_sheet(&conn, sheet_name, daemon_client, Some(cat_str)) {
+                    Ok(sheet_data) => {
+                        info!("Successfully reloaded {} rows from DB for sheet '{}'", sheet_data.grid.len(), sheet_name);
+                        registry.add_or_replace_sheet(
+                            category.clone(),
+                            sheet_name.clone(),
+                            sheet_data,
+                        );
+                        state.sheet_is_loading = false; // Data loaded successfully
+                    }
+                    Err(e) => {
+                        error!("Failed to reload sheet data from DB: {}", e);
+                        state.sheet_is_loading = false; // Failed but stop showing loading state
+                    }
+                }
+            }
+            Err(e) => {
+                error!("Failed to open DB for cache reload: {}", e);
+                state.sheet_is_loading = false; // Failed but stop showing loading state
+            }
         }
     }
 }

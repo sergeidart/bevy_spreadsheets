@@ -95,8 +95,11 @@ impl Default for EditorWindowState {
             filtered_row_indices_cache: HashMap::new(),
             force_filter_recalculation: false,
             request_scroll_to_new_row: false,
+            force_cache_reload: false,
             scroll_to_row_index: None,
             parent_lineage_cache: HashMap::new(),
+            category_needs_table_list_load: false,
+            sheet_is_loading: false,
             current_interaction_mode: SheetInteractionState::Idle,
             selected_columns_for_deletion: HashSet::new(),
             column_drag_state: ColumnDragState::default(),
@@ -159,7 +162,6 @@ impl Default for EditorWindowState {
             structure_recreation_parent_sheet_name: String::new(),
             structure_recreation_parent_col_def: None,
             structure_recreation_struct_columns: Vec::new(),
-            force_cache_reload: false,
         }
     }
 }

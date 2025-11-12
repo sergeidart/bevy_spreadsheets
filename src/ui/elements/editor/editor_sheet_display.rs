@@ -59,6 +59,13 @@ pub(super) fn show_sheet_table(
     if let Some(selected_name) = &state.selected_sheet_name.clone() {
         let current_category = state.selected_category.clone();
 
+        // Show loading message if sheet is being loaded
+        if state.sheet_is_loading {
+            render_loading_message(ui, &current_category, selected_name);
+            restore_original_selection(state, backup_sheet, used_virtual_override);
+            return;
+        }
+
         // Check if sheet exists
         let sheet_data_ref_opt = registry.get_sheet(&current_category, selected_name);
 
@@ -104,6 +111,25 @@ pub(super) fn show_sheet_table(
 
     // Restore original selection if virtual override was used
     restore_original_selection(state, backup_sheet, used_virtual_override);
+}
+
+/// Renders a loading message while sheet data is being fetched
+fn render_loading_message(
+    ui: &mut egui::Ui,
+    category: &Option<String>,
+    sheet_name: &str,
+) {
+    ui.vertical_centered(|ui| {
+        ui.add_space(50.0);
+        ui.heading("Loading...");
+        ui.add_space(10.0);
+        ui.label(format!(
+            "Loading data for '{:?}/{}'",
+            category, sheet_name
+        ));
+        ui.add_space(10.0);
+        ui.spinner();
+    });
 }
 
 /// Renders error message when sheet is not found
