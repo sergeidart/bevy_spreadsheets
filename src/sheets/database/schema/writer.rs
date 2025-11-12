@@ -14,6 +14,7 @@ pub fn add_column_if_missing(
     column_name: &str,
     column_type: &str,
     daemon_client: &DaemonClient,
+    db_name: Option<&str>,
 ) -> DbResult<()> {
     if !column_exists(conn, table_name, column_name)? {
         let stmt = Statement {
@@ -24,7 +25,7 @@ pub fn add_column_if_missing(
             params: vec![],
         };
         
-        daemon_client.exec_batch(vec![stmt], None)
+        daemon_client.exec_batch(vec![stmt], db_name)
             .map_err(|e| super::super::error::DbError::Other(e))?;
         bevy::log::info!("Added column '{}' to table '{}'", column_name, table_name);
     }
@@ -94,6 +95,7 @@ pub fn create_main_data_table(
 pub fn create_sheet_metadata_table(
     meta_table: &str,
     daemon_client: &DaemonClient,
+    db_name: Option<&str>,
 ) -> DbResult<()> {
     let stmt = Statement {
         sql: format!(
@@ -116,7 +118,7 @@ pub fn create_sheet_metadata_table(
         params: vec![],
     };
     
-    daemon_client.exec_batch(vec![stmt], None)
+    daemon_client.exec_batch(vec![stmt], db_name)
         .map_err(|e| super::super::error::DbError::Other(e))?;
     Ok(())
 }
@@ -136,6 +138,7 @@ pub fn insert_column_metadata(
     ai_include_in_send: i32,
     deleted: i32,
     daemon_client: &DaemonClient,
+    db_name: Option<&str>,
 ) -> DbResult<()> {
     let stmt = Statement {
         sql: format!(
@@ -158,7 +161,7 @@ pub fn insert_column_metadata(
         ],
     };
     
-    daemon_client.exec_batch(vec![stmt], None)
+    daemon_client.exec_batch(vec![stmt], db_name)
         .map_err(|e| super::super::error::DbError::Other(e))?;
     Ok(())
 }
@@ -248,6 +251,7 @@ pub fn create_structure_data_table(
     structure_table: &str,
     column_defs: &[String],
     daemon_client: &DaemonClient,
+    db_name: Option<&str>,
 ) -> DbResult<()> {
     let create_sql = format!(
         "CREATE TABLE IF NOT EXISTS \"{}\" ({})",
@@ -269,7 +273,7 @@ pub fn create_structure_data_table(
         Statement { sql: index_sql, params: vec![] },
     ];
     
-    daemon_client.exec_batch(stmts, None)
+    daemon_client.exec_batch(stmts, db_name)
         .map_err(|e| super::super::error::DbError::Other(e))?;
     Ok(())
 }
@@ -279,13 +283,14 @@ pub fn create_structure_data_table(
 pub fn drop_table(
     table_name: &str,
     daemon_client: &DaemonClient,
+    db_name: Option<&str>,
 ) -> DbResult<()> {
     let stmt = Statement {
         sql: format!("DROP TABLE IF EXISTS \"{}\"", table_name),
         params: vec![],
     };
     
-    daemon_client.exec_batch(vec![stmt], None)
+    daemon_client.exec_batch(vec![stmt], db_name)
         .map_err(|e| super::super::error::DbError::Other(e))?;
     Ok(())
 }
@@ -297,7 +302,13 @@ pub fn register_structure_table(
     parent_table: &str,
     parent_column: &str,
     daemon_client: &DaemonClient,
+    db_name: Option<&str>,
 ) -> DbResult<()> {
+    bevy::log::info!(
+        "Registering structure table '{}' in _Metadata (parent='{}', column='{}')",
+        structure_table, parent_table, parent_column
+    );
+    
     let stmt = Statement {
         sql: "INSERT OR REPLACE INTO _Metadata (table_name, table_type, parent_table, parent_column, hidden)
               VALUES (?, 'structure', ?, ?, 1)".to_string(),
@@ -308,8 +319,19 @@ pub fn register_structure_table(
         ],
     };
     
-    daemon_client.exec_batch(vec![stmt], None)
-        .map_err(|e| super::super::error::DbError::Other(e))?;
+    daemon_client.exec_batch(vec![stmt], db_name)
+        .map_err(|e| {
+            bevy::log::error!(
+                "Failed to register structure table '{}' in _Metadata: {}",
+                structure_table, e
+            );
+            super::super::error::DbError::Other(e)
+        })?;
+    
+    bevy::log::info!(
+        "Successfully registered structure table '{}' in _Metadata",
+        structure_table
+    );
     Ok(())
 }
 

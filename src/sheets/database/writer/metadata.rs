@@ -6,7 +6,7 @@ use super::super::schema::{sql_type_for_column, runtime_to_persisted_column_inde
 use super::helpers::metadata_table_name;
 use crate::sheets::definitions::{ColumnDataType, ColumnValidator};
 use crate::sheets::database::daemon_client::{DaemonClient, Statement};
-use rusqlite::Connection;
+use rusqlite::{Connection, params, OptionalExtension};
 
 // ============================================================================
 // Helper Functions
@@ -16,8 +16,16 @@ use rusqlite::Connection;
 /// Treats "no such table" errors on metadata tables as non-fatal (WAL timing issue)
 fn exec_daemon_stmt(sql: String, params: Vec<serde_json::Value>, db_filename: Option<&str>, daemon_client: &DaemonClient) -> DbResult<()> {
     let stmt = Statement { sql: sql.clone(), params };
-    match daemon_client.exec_batch(vec![stmt], db_filename) {
-        Ok(_) => Ok(()),
+    let result = daemon_client.exec_batch(vec![stmt], db_filename);
+    
+    bevy::log::info!("🔧 exec_daemon_stmt result: {:?}", result);
+    
+    match result {
+        Ok(response) => {
+            bevy::log::info!("🔧 Daemon response: status={}, rows_affected={:?}, error={:?}", 
+                response.status, response.rows_affected, response.error);
+            Ok(())
+        },
         Err(e) => {
             // Check if this is a "no such table" error on a metadata table
             // This can happen when metadata table was just created via daemon but not yet visible due to WAL
@@ -29,6 +37,7 @@ fn exec_daemon_stmt(sql: String, params: Vec<serde_json::Value>, db_filename: Op
                 bevy::log::debug!("Metadata table operation deferred (WAL timing): {}", e);
                 Ok(()) // Treat as non-fatal
             } else {
+                bevy::log::error!("🔧 Daemon error: {}", e);
                 Err(super::super::error::DbError::Other(e))
             }
         }
@@ -191,7 +200,7 @@ pub fn update_column_metadata(
     
     // Defensive: ensure metadata tables exist
     let _ = crate::sheets::database::schema::ensure_global_metadata_table(conn, daemon_client);
-    let inferred_meta = match crate::sheets::database::reader::DbReader::read_metadata(conn, table_name, daemon_client) {
+    let inferred_meta = match crate::sheets::database::reader::DbReader::read_metadata(conn, table_name, daemon_client, db_filename) {
         Ok(m) => m,
         Err(_) => crate::sheets::definitions::SheetMetadata::create_generic(
             table_name.to_string(),
@@ -200,7 +209,7 @@ pub fn update_column_metadata(
             None,
         ),
     };
-    let _ = crate::sheets::database::schema::ensure_table_metadata_schema(conn, table_name, &inferred_meta, daemon_client);
+    let _ = crate::sheets::database::schema::ensure_table_metadata_schema(conn, table_name, &inferred_meta, daemon_client, db_filename);
     
     let mut sets: Vec<&str> = Vec::new();
     let mut params: Vec<serde_json::Value> = Vec::new();
@@ -263,6 +272,7 @@ pub fn update_column_validator(
     validator: &Option<ColumnValidator>,
     ai_include_in_send: Option<bool>,
     ai_enable_row_generation: Option<bool>,
+    db_filename: Option<&str>,
     daemon_client: &DaemonClient,
 ) -> DbResult<()> {
     let persisted_index = match get_persisted_index_or_skip(conn, table_name, column_index, daemon_client)? {
@@ -272,7 +282,7 @@ pub fn update_column_validator(
     
     // Defensive: ensure metadata tables exist
     let _ = crate::sheets::database::schema::ensure_global_metadata_table(conn, daemon_client);
-    let inferred_meta = match crate::sheets::database::reader::DbReader::read_metadata(conn, table_name, daemon_client) {
+    let inferred_meta = match crate::sheets::database::reader::DbReader::read_metadata(conn, table_name, daemon_client, None) {
         Ok(m) => m,
         Err(_) => crate::sheets::definitions::SheetMetadata::create_generic(
             table_name.to_string(),
@@ -281,17 +291,31 @@ pub fn update_column_validator(
             None,
         ),
     };
-    let _ = crate::sheets::database::schema::ensure_table_metadata_schema(conn, table_name, &inferred_meta, daemon_client);
+    let _ = crate::sheets::database::schema::ensure_table_metadata_schema(conn, table_name, &inferred_meta, daemon_client, None);
     
     let meta_table = metadata_table_name(table_name);
-    let (validator_type, validator_config) = validator_to_metadata(validator, table_name, "");
+    
+    // Get the column name from metadata to properly construct Structure validator config
+    let column_name: String = conn
+        .query_row(
+            &format!("SELECT column_name FROM \"{}\" WHERE column_index = ?", meta_table),
+            [persisted_index as i32],
+            |row| row.get(0),
+        )
+        .unwrap_or_else(|_| format!("column_{}", persisted_index));
+    
+    let (validator_type, validator_config) = validator_to_metadata(validator, table_name, &column_name);
     
     let mut sets = vec!["data_type = ?", "validator_type = ?", "validator_config = ?"];
     let mut params = vec![
         serde_json::Value::String(format!("{:?}", data_type)),
-        opt_string_to_json(validator_type),
-        opt_string_to_json(validator_config),
+        opt_string_to_json(validator_type.clone()),
+        opt_string_to_json(validator_config.clone()),
     ];
+    
+    // DEBUG: Log what we're trying to set
+    bevy::log::info!("🔧 update_column_validator SQL prep: table={}, col_idx={}, validator_type={:?}, validator_config={:?}", 
+        table_name, persisted_index, validator_type, validator_config);
     
     if let Some(v) = ai_include_in_send {
         sets.push("ai_include_in_send = ?");
@@ -306,8 +330,42 @@ pub fn update_column_validator(
     
     let sql = format!("UPDATE \"{}\" SET {} WHERE column_index = ?", meta_table, sets.join(", "));
     bevy::log::info!("update_column_validator: runtime={} -> persisted={}", column_index, persisted_index);
+    bevy::log::info!("🔧 UPDATE SQL: {}", sql);
+    bevy::log::info!("🔧 UPDATE params: {:?}", params);
     
-    exec_daemon_stmt(sql, params, None, daemon_client)
+    // Check current state before UPDATE
+    if let Ok(Some(before_state)) = conn.query_row(
+        &format!("SELECT column_index, column_name, validator_type, validator_config FROM \"{}\" WHERE column_index = ?", meta_table),
+        params![persisted_index],
+        |row| Ok((
+            row.get::<_, i32>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, Option<String>>(3)?
+        ))
+    ).optional() {
+        bevy::log::info!("🔍 BEFORE UPDATE: idx={}, name='{}', validator_type={:?}, validator_config={:?}", 
+            before_state.0, before_state.1, before_state.2, before_state.3);
+    }
+    
+    let result = exec_daemon_stmt(sql, params, db_filename, daemon_client);
+    
+    // Check state after UPDATE
+    if let Ok(Some(after_state)) = conn.query_row(
+        &format!("SELECT column_index, column_name, validator_type, validator_config FROM \"{}\" WHERE column_index = ?", meta_table),
+        params![persisted_index],
+        |row| Ok((
+            row.get::<_, i32>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, Option<String>>(3)?
+        ))
+    ).optional() {
+        bevy::log::info!("🔍 AFTER UPDATE: idx={}, name='{}', validator_type={:?}, validator_config={:?}", 
+            after_state.0, after_state.1, after_state.2, after_state.3);
+    }
+    
+    result
 }
 
 /// Update a column's display name (UI-only) in the table's metadata table

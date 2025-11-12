@@ -163,19 +163,19 @@ pub fn validate_physical_rename(conn: &Connection, table_name: &str, old_name: &
 }
 
 /// Drop a column from a table, with fallback handling for older SQLite versions.
-pub fn drop_column_with_fallback(_conn: &Connection, table_name: &str, column_name: &str, daemon_client: &super::super::daemon_client::DaemonClient) -> DbResult<()> {
+pub fn drop_column_with_fallback(_conn: &Connection, table_name: &str, column_name: &str, db_filename: Option<&str>, daemon_client: &super::super::daemon_client::DaemonClient) -> DbResult<()> {
     use crate::sheets::database::daemon_client::Statement;
     bevy::log::info!("drop_column_with_fallback: attempting to drop '{}.{}'", table_name, column_name);
     let update_stmt = Statement {
         sql: format!("UPDATE \"{}\" SET \"{}\" = NULL", table_name, column_name),
         params: vec![],
     };
-    let _ = daemon_client.exec_batch(vec![update_stmt], None);
+    let _ = daemon_client.exec_batch(vec![update_stmt], db_filename);
     let drop_stmt = Statement {
         sql: format!("ALTER TABLE \"{}\" DROP COLUMN \"{}\"", table_name, column_name),
         params: vec![],
     };
-    match daemon_client.exec_batch(vec![drop_stmt], None) {
+    match daemon_client.exec_batch(vec![drop_stmt], db_filename) {
         Ok(_) => bevy::log::info!("drop_column_with_fallback: successfully dropped column '{}.{}'", table_name, column_name),
         Err(e) => bevy::log::warn!("drop_column_with_fallback: failed to drop column '{}.{}': {} (column may persist with NULL values)", table_name, column_name, e),
     }

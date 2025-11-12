@@ -65,7 +65,7 @@ pub fn poll_migration_background(
                                         .map(|s| s.to_string_lossy().into_owned())
                                         .unwrap_or_else(|| "Unknown".to_string());
                                     for table_name in table_names.iter() {
-                                        match crate::sheets::database::reader::DbReader::read_metadata(&conn, table_name, daemon_client.client()) {
+                                        match crate::sheets::database::reader::DbReader::read_metadata(&conn, table_name, daemon_client.client(), Some(&db_name)) {
                                     Ok(mut metadata) => {
                                         metadata.category = Some(db_name.clone());
                                         match crate::sheets::database::reader::DbReader::read_grid_data(&conn, table_name, &metadata) {

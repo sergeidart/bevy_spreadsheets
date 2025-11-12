@@ -466,4 +466,12 @@ pub struct EditorWindowState {
     
     // Flag to trigger revalidation when a sheet is opened/re-opened
     pub pending_sheet_revalidation: bool,
+    
+    // Structure table recreation popup state
+    pub show_structure_recreation_popup: bool,
+    pub structure_recreation_category: Option<String>,
+    pub structure_recreation_sheet_name: String,
+    pub structure_recreation_parent_sheet_name: String,
+    pub structure_recreation_parent_col_def: Option<crate::sheets::definitions::ColumnDefinition>,
+    pub structure_recreation_struct_columns: Vec<crate::sheets::definitions::ColumnDefinition>,
 }

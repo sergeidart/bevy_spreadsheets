@@ -50,7 +50,7 @@ pub fn rename_data_column(
             bevy::log::info!("Column '{}' exists in DB but is marked deleted - dropping it first", new_name);
             
             // Drop the deleted column from the table (with fallback for old SQLite)
-            drop_column_with_fallback(conn, table_name, new_name, daemon_client)?;
+            drop_column_with_fallback(conn, table_name, new_name, db_filename, daemon_client)?;
             
             // Also remove from metadata
             exec_simple_statement(
@@ -379,6 +379,7 @@ pub fn drop_physical_column_if_exists(
     conn: &Connection,
     table_name: &str,
     column_name: &str,
+    db_filename: Option<&str>,
     daemon_client: &super::super::daemon_client::DaemonClient,
 ) -> DbResult<()> {
     use super::super::schema::queries::get_table_columns;
@@ -391,7 +392,7 @@ pub fn drop_physical_column_if_exists(
         return Ok(());
     }
 
-    drop_column_with_fallback(conn, table_name, column_name, daemon_client)
+    drop_column_with_fallback(conn, table_name, column_name, db_filename, daemon_client)
 }
 
 /// Rename a main table and all of its descendant structure tables by prefix replacement.

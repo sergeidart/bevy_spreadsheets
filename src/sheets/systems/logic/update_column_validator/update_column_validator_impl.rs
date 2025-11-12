@@ -18,9 +18,11 @@ use std::collections::HashMap;
 use super::cell_population::{
     ensure_structure_cells_not_empty, handle_structure_conversion_from, populate_structure_rows,
 };
-use super::content_copy::copy_parent_content_to_structure_table;
+use super::db_operations::create_db_structure_table;
 use super::hierarchy::calculate_hierarchy_depth;
+use super::persistence::persist_non_structure_validator;
 use super::structure_conversion::handle_structure_conversion_to;
+use super::validation::validate_column_update;
 
 /// Handles requests to update the validator (and derived base data type) for a specific column.
 /// Supports the new Structure validator which snapshots selected source columns into a JSON object
@@ -53,66 +55,18 @@ pub fn handle_update_column_validator(
         let new_validator_opt = &event.new_validator;
 
         info!(
-            "RequestUpdateColumnValidator EVENT: col={}, validator={:?}, structure_source_columns={:?}, key_parent_column_index={:?}",
-            col_index, new_validator_opt, event.structure_source_columns, event.key_parent_column_index
+            "RequestUpdateColumnValidator EVENT: sheet='{:?}/{}', col={}, validator={:?}, structure_source_columns={:?}, key_parent_column_index={:?}",
+            category, sheet_name, col_index, new_validator_opt, event.structure_source_columns, event.key_parent_column_index
         );
 
         // --- Phase 1: Validation (immutable) ---
-        let validation_result: Result<(), String> = (|| {
-            let sheet_data = registry
-                .get_sheet(category, sheet_name)
-                .ok_or_else(|| format!("Sheet '{:?}/{}' not found.", category, sheet_name))?;
-            let metadata = sheet_data
-                .metadata
-                .as_ref()
-                .ok_or_else(|| "Metadata missing.".to_string())?;
-            if col_index >= metadata.columns.len() {
-                return Err(format!(
-                    "Column index {} out of bounds ({} columns).",
-                    col_index,
-                    metadata.columns.len()
-                ));
-            }
-            if let Some(v) = new_validator_opt {
-                match v {
-                    ColumnValidator::Basic(_) => {}
-                    ColumnValidator::Linked {
-                        target_sheet_name,
-                        target_column_index,
-                    } => {
-                        // Look for target sheet anywhere (category-agnostic) for convenience
-                        let mut found_sheet_meta = None;
-                        for (_cat, name, data) in registry.iter_sheets() {
-                            if name == target_sheet_name {
-                                found_sheet_meta = data.metadata.as_ref();
-                                break;
-                            }
-                        }
-                        let target_meta = found_sheet_meta.ok_or_else(|| {
-                            format!("Target sheet '{}' not found.", target_sheet_name)
-                        })?;
-                        if *target_column_index >= target_meta.columns.len() {
-                            return Err(format!(
-                                "Target column index {} out of bounds for sheet '{}' ({} columns).",
-                                target_column_index,
-                                target_sheet_name,
-                                target_meta.columns.len()
-                            ));
-                        }
-                        // Prevent linking to itself (same category, same sheet, same column)
-                        if target_sheet_name == sheet_name
-                            && *target_column_index == col_index
-                            && target_meta.category == *category
-                        {
-                            return Err("Cannot link column to itself.".to_string());
-                        }
-                    }
-                    ColumnValidator::Structure => { /* Schema validated separately when schema provided */
-                    }
-                }
-            }
-            Ok(())
-        })();
+        let validation_result = validate_column_update(
+            &registry,
+            category,
+            sheet_name,
+            col_index,
+            new_validator_opt,
+        );
 
         if let Err(err_msg) = validation_result {
             let msg = format!(
@@ -257,6 +211,11 @@ pub fn handle_update_column_validator(
                             let structure_sheet_name =
                                 format!("{}_{}", sheet_name, meta_mut.columns[col_index].header);
 
+                            info!(
+                                "📋 Queueing structure sheet for creation: '{}'",
+                                structure_sheet_name
+                            );
+
                             structure_sheets_to_create.push((
                                 category.clone(),
                                 structure_sheet_name,
@@ -305,29 +264,27 @@ pub fn handle_update_column_validator(
                 sheets_to_save.insert((category.clone(), sheet_name.clone()), meta_mut.clone());
 
                 // Persist to DB if this sheet belongs to a database category
-                if let Some(cat_str) = &meta_mut.category {
-                    // Use sheet_name as the physical table name for database operations
-                    let physical_table_name = &meta_mut.sheet_name;
-                    // Persist by column name to avoid index mismatch when metadata contains technical columns
-                    let column_name = meta_mut.columns[col_index].header.clone();
-                    
-                    // Skip technical columns (row_index, parent_key) - they're not in metadata table
-                    if column_name.eq_ignore_ascii_case("row_index") || column_name.eq_ignore_ascii_case("parent_key") {
-                        // These are runtime-only columns, not persisted in metadata table
-                        continue;
-                    }
-                    
-                    let _ = crate::sheets::database::persist_column_validator_by_name(
-                        cat_str,
-                        physical_table_name,
-                        &column_name,
+                // IMPORTANT: For Structure validators, defer persistence until after structure table is created
+                // in Phase 2.5. This prevents the parent from being marked as Structure before the child
+                // table exists, which would cause issues if the user cancels or if creation fails.
+                let is_structure_validator = matches!(
+                    meta_mut.columns[col_index].validator,
+                    Some(ColumnValidator::Structure)
+                );
+                
+                if !is_structure_validator {
+                    persist_non_structure_validator(
+                        &meta_mut.category,
+                        &meta_mut.sheet_name,
+                        &meta_mut.columns[col_index].header,
                         meta_mut.columns[col_index].data_type,
                         &meta_mut.columns[col_index].validator,
                         meta_mut.columns[col_index].ai_include_in_send,
                         meta_mut.columns[col_index].ai_enable_row_generation,
                         daemon_client.client(),
-                    )
-                    .map_err(|e| error!("Persist column validator failed: {}", e));
+                    );
+                } else {
+                    info!("⏸️  Deferring Structure validator persistence until structure table is created");
                 }
 
         // Request revalidation (render cache rebuild etc.)
@@ -353,10 +310,39 @@ pub fn handle_update_column_validator(
     }
 
     // --- Phase 2.5: Create structure sheets ---
+    if !structure_sheets_to_create.is_empty() {
+        info!(
+            "🏗️  Phase 2.5: Processing {} structure sheets to create",
+            structure_sheets_to_create.len()
+        );
+    }
     for (cat, struct_sheet_name, parent_sheet_name, parent_col_def, struct_columns) in structure_sheets_to_create {
         // Check if sheet already exists
-        if registry.get_sheet(&cat, &struct_sheet_name).is_none() {
-            info!("Creating structure sheet: {:?}/{}", cat, struct_sheet_name);
+        if registry.get_sheet(&cat, &struct_sheet_name).is_some() {
+            info!("⚠️  Structure sheet '{:?}/{}' already exists - prompting user for action", cat, struct_sheet_name);
+            
+            // Show popup to let user choose: Careful Recreation, Clean Start, or Cancel
+            if let Some(ref mut state) = editor_state {
+                state.show_structure_recreation_popup = true;
+                state.structure_recreation_category = cat.clone();
+                state.structure_recreation_sheet_name = struct_sheet_name.clone();
+                state.structure_recreation_parent_sheet_name = parent_sheet_name.clone();
+                state.structure_recreation_parent_col_def = Some(parent_col_def.clone());
+                state.structure_recreation_struct_columns = struct_columns.clone();
+            }
+            
+            feedback_writer.write(SheetOperationFeedback {
+                message: format!(
+                    "Structure table '{}' already exists. Please choose how to proceed.",
+                    struct_sheet_name
+                ),
+                is_error: false,
+            });
+            
+            continue;
+        }
+        
+        info!("Creating structure sheet: {:?}/{}", cat, struct_sheet_name);
 
             let data_filename = format!("{}.json", struct_sheet_name);
             let structure_metadata = SheetMetadata::create_generic(
@@ -390,70 +376,33 @@ pub fn handle_update_column_validator(
                 save_single_sheet(registry_immut_temp, &structure_metadata);
             } else if let Some(cat_str) = &cat {
                 // DB-backed: create table
-                info!("Creating DB table for structure sheet: {}", struct_sheet_name);
                 let base_path = crate::sheets::systems::io::get_default_data_base_path();
                 let db_path = base_path.join(format!("{}.db", cat_str));
                 
                 if db_path.exists() {
                     match rusqlite::Connection::open(&db_path) {
                         Ok(conn) => {
-                            // Log what we're passing
-                            info!(
-                                "About to create structure table with parent_col_def: header='{}', structure_schema.len()={}, structure_key_parent_column_index={:?}, struct_columns.len()={}",
-                                parent_col_def.header,
-                                parent_col_def.structure_schema.as_ref().map(|s| s.len()).unwrap_or(0),
-                                parent_col_def.structure_key_parent_column_index,
-                                struct_columns.len()
-                            );
-                            
-                            // Create the structure table with multi-level support, passing full column list
-                            if let Err(e) = crate::sheets::database::schema::create_structure_table(
+                            if let Err(e) = create_db_structure_table(
                                 &conn,
+                                cat_str,
+                                &struct_sheet_name,
                                 &parent_sheet_name,
                                 &parent_col_def,
-                                Some(&struct_columns),
+                                &struct_columns,
+                                &structure_metadata,
+                                &db_path,
                                 daemon_client.client(),
+                                &mut registry,
+                                &mut data_modified_writer,
                             ) {
-                                error!("Failed to create structure table '{}': {}", struct_sheet_name, e);
+                                error!("Failed to create DB structure table: {}", e);
                             } else {
-                                info!("Successfully created DB structure table: {}", struct_sheet_name);
-                                // Ensure per-table metadata exists for the structure sheet so later renames find it
-                                if let Err(e) = crate::sheets::database::schema::create_metadata_table(
-                                    &struct_sheet_name,
-                                    &structure_metadata,
-                                    daemon_client.client(),
-                                ) {
-                                    warn!(
-                                        "Failed to create metadata table for structure '{}': {} (will continue)",
-                                        struct_sheet_name,
-                                        e
-                                    );
-                                }
-
-                                // Best-effort cleanup: drop the parent table's physical column if it existed.
-                                // Structure columns should not remain as physical columns on the parent table,
-                                // otherwise orphan recovery will resurrect them on reload.
-                                let _ = crate::sheets::database::writer::DbWriter::drop_physical_column_if_exists(
-                                    &conn,
-                                    &parent_sheet_name,
-                                    &parent_col_def.header,
-                                    daemon_client.client(),
-                                );
-                                
-                                // Copy content from parent table to structure table
-                                if let Err(e) = copy_parent_content_to_structure_table(
-                                    &conn,
-                                    &parent_sheet_name,
-                                    &struct_sheet_name,
-                                    &parent_col_def,
-                                    &struct_columns,
-                                    &db_path,
-                                    daemon_client.client(),
-                                ) {
-                                    error!("Failed to copy content to structure table '{}': {}", struct_sheet_name, e);
-                                } else {
-                                    info!("Successfully copied content to structure table: {}", struct_sheet_name);
-                                }
+                                // Request revalidation to rebuild render cache with the reloaded data
+                                revalidation_writer.write(RequestSheetRevalidation {
+                                    category: cat.clone(),
+                                    sheet_name: parent_sheet_name.clone(),
+                                });
+                                info!("🔄 Requested render cache rebuild for parent sheet '{}'", parent_sheet_name);
                             }
                         }
                         Err(e) => {
@@ -469,7 +418,6 @@ pub fn handle_update_column_validator(
                 category: cat.clone(),
                 sheet_name: struct_sheet_name.clone(),
             });
-        }
     }
 
     // --- Phase 3: Saving (immutable borrow) ---

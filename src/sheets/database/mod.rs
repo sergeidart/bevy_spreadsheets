@@ -158,6 +158,14 @@ pub fn persist_column_validator_by_name(
                     persisted_ci as usize + 1
                 };
                 
+                // Get the database filename for daemon operations
+                // conn.path() returns the full path, we need just the filename
+                let db_filename = conn.path()
+                    .and_then(|p| std::path::Path::new(p).file_name())
+                    .and_then(|n| n.to_str());
+                
+                bevy::log::info!("🔧 persist_column_validator_by_name: db_filename={:?}", db_filename);
+                
                 crate::sheets::database::writer::DbWriter::update_column_validator(
                     &conn,
                     table_name,
@@ -166,6 +174,7 @@ pub fn persist_column_validator_by_name(
                     validator,
                     ai_include_in_send,
                     ai_enable_row_generation,
+                    db_filename,
                     daemon_client,
                 )
                 .map_err(|e| e.to_string())

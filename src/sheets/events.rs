@@ -349,3 +349,25 @@ pub struct RequestExportSheetToJson {
     pub table_name: String,
     pub output_folder: PathBuf,
 }
+
+/// Structure table recreation strategy when table already exists
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StructureRecreationStrategy {
+    /// Keep existing data, update schema if needed
+    CarefulRecreation,
+    /// Delete and recreate from scratch
+    CleanStart,
+    /// Cancel the operation
+    Cancel,
+}
+
+/// Event to handle structure table recreation with user choice
+#[derive(Event, Debug, Clone)]
+pub struct RequestStructureTableRecreation {
+    pub category: Option<String>,
+    pub structure_sheet_name: String,
+    pub parent_sheet_name: String,
+    pub parent_col_def: crate::sheets::definitions::ColumnDefinition,
+    pub structure_columns: Vec<crate::sheets::definitions::ColumnDefinition>,
+    pub strategy: StructureRecreationStrategy,
+}

@@ -311,7 +311,7 @@ pub fn handle_update_column_name(
                         let db_path = base.join(format!("{}.db", cat_name));
                         if db_path.exists() {
                             match crate::sheets::database::connection::DbConnection::open_existing(&db_path) {
-                                Ok(conn2) => match crate::sheets::database::reader::DbReader::read_sheet(&conn2, &child_new, daemon_client.client()) {
+                                Ok(conn2) => match crate::sheets::database::reader::DbReader::read_sheet(&conn2, &child_new, daemon_client.client(), Some(cat_name)) {
                                     Ok(child_data) => {
                                         registry.add_or_replace_sheet(category.clone(), child_new.clone(), child_data);
                                         info!(

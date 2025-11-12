@@ -130,10 +130,12 @@ pub fn handle_create_new_sheet_request(
                     }
 
                     // Create the per-table metadata and data tables
+                    let db_name = db_path.file_name().and_then(|n| n.to_str());
                     if let Err(e) = crate::sheets::database::schema::create_metadata_table(
                         desired_name,
                         &new_metadata,
                         daemon_client.client(),
+                        db_name,
                     ) {
                         error!(
                             "Failed to create metadata table for '{:?}/{}': {}",
@@ -161,7 +163,8 @@ pub fn handle_create_new_sheet_request(
 
                     // Immediately reload runtime metadata from DB so technical columns
                     // (e.g., row_index) are present in-memory before any render cache builds.
-                    match crate::sheets::database::reader::DbReader::read_sheet(&conn, desired_name, daemon_client.client()) {
+                    let db_name = db_path.file_stem().and_then(|s| s.to_str());
+                    match crate::sheets::database::reader::DbReader::read_sheet(&conn, desired_name, daemon_client.client(), db_name) {
                         Ok(loaded) => {
                             registry.add_or_replace_sheet(category.clone(), desired_name.to_string(), loaded);
                             info!(

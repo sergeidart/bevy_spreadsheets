@@ -15,7 +15,7 @@ pub struct DbReader;
 
 impl DbReader {
     /// Read sheet metadata from database
-    pub fn read_metadata(conn: &Connection, table_name: &str, daemon_client: &super::daemon_client::DaemonClient) -> DbResult<SheetMetadata> {
+    pub fn read_metadata(conn: &Connection, table_name: &str, daemon_client: &super::daemon_client::DaemonClient, db_name: Option<&str>) -> DbResult<SheetMetadata> {
         let meta_table = format!("{}_Metadata", table_name);
 
         // Ensure metadata table exists
@@ -26,7 +26,7 @@ impl DbReader {
         );
         
         let freshly_created = if !metadata_table_exists {
-            Self::create_metadata_from_physical_table(conn, table_name, daemon_client)?;
+            Self::create_metadata_from_physical_table(conn, table_name, daemon_client, db_name)?;
             true
         } else {
             false
@@ -38,10 +38,10 @@ impl DbReader {
         // If daemon is unavailable, we continue anyway since these are optional migrations
         // Skip adding columns to freshly-created tables (they already have the latest schema)
         if metadata_table_exists && !freshly_created {
-            if let Err(e) = queries::add_column_if_missing(daemon_client, &meta_table, "deleted", "INTEGER", "0") {
+            if let Err(e) = queries::add_column_if_missing(daemon_client, &meta_table, "deleted", "INTEGER", "0", db_name) {
                 bevy::log::debug!("Could not add 'deleted' column to '{}': {}. Continuing anyway.", meta_table, e);
             }
-            if let Err(e) = queries::add_column_if_missing(daemon_client, &meta_table, "display_name", "TEXT", "NULL") {
+            if let Err(e) = queries::add_column_if_missing(daemon_client, &meta_table, "display_name", "TEXT", "NULL", db_name) {
                 bevy::log::debug!("Could not add 'display_name' column to '{}': {}. Continuing anyway.", meta_table, e);
             }
         }
@@ -138,8 +138,8 @@ impl DbReader {
         Ok((grid, row_indices))
     }
 
-    pub fn read_sheet(conn: &Connection, table_name: &str, daemon_client: &super::daemon_client::DaemonClient) -> DbResult<SheetGridData> {
-        let metadata = Self::read_metadata(conn, table_name, daemon_client)?;
+    pub fn read_sheet(conn: &Connection, table_name: &str, daemon_client: &super::daemon_client::DaemonClient, db_name: Option<&str>) -> DbResult<SheetGridData> {
+        let metadata = Self::read_metadata(conn, table_name, daemon_client, db_name)?;
         let (grid, row_indices) = Self::read_grid_data(conn, table_name, &metadata)?;
 
         Ok(SheetGridData {
@@ -219,6 +219,7 @@ impl DbReader {
         conn: &Connection,
         table_name: &str,
         daemon_client: &super::daemon_client::DaemonClient,
+        db_name: Option<&str>,
     ) -> DbResult<()> {
         use crate::sheets::database::schema::create_metadata_table;
 
@@ -270,7 +271,7 @@ impl DbReader {
             hidden: false,
         };
 
-        create_metadata_table(table_name, &sheet_meta, daemon_client)?;
+        create_metadata_table(table_name, &sheet_meta, daemon_client, db_name)?;
         Ok(())
     }
 

@@ -234,7 +234,7 @@ fn load_single_table(
     // Try to load with metadata first
     let (metadata, grid, row_indices) = if has_metadata_table {
         // Load from SkylineDB metadata
-        match crate::sheets::database::reader::DbReader::read_metadata(conn, table_name, daemon_client) {
+        match crate::sheets::database::reader::DbReader::read_metadata(conn, table_name, daemon_client, Some(db_name)) {
             Ok(metadata) => {
                 // Load grid data
                 match crate::sheets::database::reader::DbReader::read_grid_data(

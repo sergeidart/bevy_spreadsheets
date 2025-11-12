@@ -151,7 +151,7 @@ impl DbWriter {
             )?;
             // Clean up: if a physical column with the old structure name exists on the parent table, drop it
             // This prevents orphaned physical columns being "recovered" back into metadata on next load.
-            let _ = renames::drop_physical_column_if_exists(conn, parent_table, old_column_name, daemon_client);
+            let _ = renames::drop_physical_column_if_exists(conn, parent_table, old_column_name, db_filename, daemon_client);
             Ok(())
         })();
 
@@ -195,9 +195,10 @@ impl DbWriter {
         conn: &Connection,
         table_name: &str,
         column_name: &str,
+        db_filename: Option<&str>,
         daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
     ) -> DbResult<()> {
-        renames::drop_physical_column_if_exists(conn, table_name, column_name, daemon_client)
+        renames::drop_physical_column_if_exists(conn, table_name, column_name, db_filename, daemon_client)
     }
 
     /// Update parent table's metadata column_name by matching the old column name.
@@ -320,6 +321,7 @@ impl DbWriter {
         validator: &Option<ColumnValidator>,
         ai_include_in_send: Option<bool>,
         ai_enable_row_generation: Option<bool>,
+        db_filename: Option<&str>,
         daemon_client: &super::daemon_client::DaemonClient,
     ) -> DbResult<()> {
         metadata::update_column_validator(
@@ -330,6 +332,7 @@ impl DbWriter {
             validator,
             ai_include_in_send,
             ai_enable_row_generation,
+            db_filename,
             daemon_client,
         )
     }

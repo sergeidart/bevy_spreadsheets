@@ -1,5 +1,7 @@
 mod validator_confirm_popup;
 pub use validator_confirm_popup::show_validator_confirm_popup;
+mod structure_recreation_popup;
+pub use structure_recreation_popup::show_structure_recreation_popup;
 // src/ui/elements/popups/mod.rs
 
 // Declare the individual popup modules

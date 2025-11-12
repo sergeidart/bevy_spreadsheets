@@ -78,7 +78,7 @@ impl IoHelpers {
         output_folder: &Path,
         daemon_client: &super::super::daemon_client::DaemonClient,
     ) -> DbResult<()> {
-        let sheet_data = DbReader::read_sheet(conn, table_name, daemon_client)?;
+        let sheet_data = DbReader::read_sheet(conn, table_name, daemon_client, None)?;
 
         let metadata = sheet_data
             .metadata

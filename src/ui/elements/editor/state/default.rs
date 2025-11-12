@@ -153,6 +153,12 @@ impl Default for EditorWindowState {
             ui_structure_row_count_cache: std::collections::HashMap::new(),
             last_header_right_edge_x: 0.0,
             pending_sheet_revalidation: false,
+            show_structure_recreation_popup: false,
+            structure_recreation_category: None,
+            structure_recreation_sheet_name: String::new(),
+            structure_recreation_parent_sheet_name: String::new(),
+            structure_recreation_parent_col_def: None,
+            structure_recreation_struct_columns: Vec::new(),
             force_cache_reload: false,
         }
     }

@@ -187,8 +187,15 @@ pub fn execute_request(
         let is_no_such_table = response_str.contains("no such table");
         let is_expected_metadata_error = is_metadata_error && is_no_such_table;
         
+        // Duplicate column errors are also expected during metadata migrations when
+        // freshly-created tables already have the latest schema but migration code
+        // tries to add columns anyway. These are harmless and should be logged at debug level.
+        let is_duplicate_column = response_str.contains("duplicate column name");
+        
         if is_expected_metadata_error {
             bevy::log::debug!("Daemon could not find metadata table (WAL visibility issue - will retry later): {}", error_msg);
+        } else if is_duplicate_column {
+            bevy::log::debug!("Daemon reported duplicate column (expected during migrations): {}", error_msg);
         } else {
             bevy::log::error!("Daemon returned error: {}. Full response: {}", error_msg, response_str);
         }

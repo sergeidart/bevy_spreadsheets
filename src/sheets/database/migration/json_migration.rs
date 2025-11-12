@@ -45,7 +45,7 @@ impl JsonMigration {
 
         schema::ensure_global_metadata_table(&tx, daemon_client)?;
         schema::create_data_table(table_name, &metadata.columns, daemon_client)?;
-        schema::create_metadata_table(table_name, &metadata, daemon_client)?;
+        schema::create_metadata_table(table_name, &metadata, daemon_client, None)?;
         schema::create_ai_groups_table(&tx, table_name, &metadata, daemon_client)?;
         schema::insert_table_metadata(table_name, &metadata, display_order, daemon_client)?;
 
@@ -58,7 +58,7 @@ impl JsonMigration {
         for (col_idx, col) in metadata.columns.iter().enumerate() {
             if matches!(col.validator, Some(ColumnValidator::Structure)) {
                 if let Some(schema_fields) = &col.structure_schema {
-                    schema::create_structure_table(&tx, table_name, col, None, daemon_client)?;
+                    schema::create_structure_table(&tx, table_name, col, None, daemon_client, None)?;
 
                     let structure_table = format!("{}_{}", table_name, col.header);
 

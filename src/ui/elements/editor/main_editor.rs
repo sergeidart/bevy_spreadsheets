@@ -73,6 +73,8 @@ pub struct SheetEventWriters<'w> {
     // Database migration
     pub migrate_json_to_db: EventWriter<'w, crate::sheets::events::RequestMigrateJsonToDb>,
     pub feedback: EventWriter<'w, crate::sheets::events::SheetOperationFeedback>,
+    // Structure table recreation
+    pub structure_recreation: EventWriter<'w, crate::sheets::events::RequestStructureTableRecreation>,
 }
 
 // Quick Copy controls moved into Settings popup; no dedicated top-row event writers required here.

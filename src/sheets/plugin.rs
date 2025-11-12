@@ -142,7 +142,9 @@ impl Plugin for SheetsPlugin {
             .add_event::<RequestUploadJsonToCurrentDb>()
             .add_event::<MigrationCompleted>()
             .add_event::<crate::sheets::events::MigrationProgress>()
-            .add_event::<RequestExportSheetToJson>();
+            .add_event::<RequestExportSheetToJson>()
+            // Structure table recreation event
+            .add_event::<crate::sheets::events::RequestStructureTableRecreation>();
 
         app.add_systems(
             Startup,
@@ -208,6 +210,7 @@ impl Plugin for SheetsPlugin {
             systems::logic::handle_delete_columns_request,
             // Ensure validator changes (which can create structure tables) run before renames
             systems::logic::handle_update_column_validator,
+            systems::logic::handle_structure_table_recreation,
             systems::logic::handle_update_column_name,
             systems::logic::handle_cell_update,
             // Clipboard operations

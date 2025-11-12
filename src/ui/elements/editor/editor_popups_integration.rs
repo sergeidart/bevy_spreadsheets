@@ -7,7 +7,8 @@ use crate::ui::elements::popups::{
     show_add_table_popup, show_ai_rule_popup, show_column_options_popup,
     show_delete_category_confirm_popups, show_delete_confirm_popup, show_migration_popup,
     show_new_category_popup, show_new_sheet_popup, show_random_picker_popup, show_rename_popup,
-    show_settings_popup, show_validator_confirm_popup, MigrationPopupState,
+    show_settings_popup, show_structure_recreation_popup, show_validator_confirm_popup,
+    MigrationPopupState,
 };
 use crate::ui::UiFeedbackState;
 use crate::visual_copier::events::{
@@ -78,6 +79,8 @@ pub(super) fn display_active_popups(
     );
     // AI Rule (per-sheet AI Context) popup is now accessed from AI Mode via 'AI Context' button
     show_ai_rule_popup(ctx, state, registry, daemon_client);
+    // Structure Recreation popup (when converting column to Structure type and table already exists)
+    show_structure_recreation_popup(ctx, state, &mut sheet_writers.structure_recreation);
     show_new_sheet_popup(
         ctx,
         state,

@@ -16,12 +16,13 @@ pub fn add_column_if_missing(
     column_name: &str,
     column_type: &str,
     default_value: &str,
+    db_name: Option<&str>,
 ) -> DbResult<()> {
     // Note: We don't check table existence here because this function is only called
     // after explicitly verifying the table exists in read_metadata().
     // If the table doesn't exist, this will fail gracefully and be caught by the caller.
     daemon_client
-        .exec_alter_table(table_name, column_name, column_type, default_value, None)
+        .exec_alter_table(table_name, column_name, column_type, default_value, db_name)
         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
             std::io::ErrorKind::Other,
             e,
@@ -229,6 +230,32 @@ pub fn read_grid_with_structure_counts(
 
 /// List all main and structure tables
 pub fn list_all_tables(conn: &Connection) -> DbResult<Vec<String>> {
+    // First, log what's actually in _Metadata for diagnostics
+    if let Ok(mut debug_stmt) = conn.prepare(
+        "SELECT table_name, table_type, parent_table, parent_column, hidden FROM _Metadata ORDER BY table_name"
+    ) {
+        bevy::log::debug!("=== _Metadata contents ===");
+        if let Ok(rows) = debug_stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<i32>>(4)?,
+            ))
+        }) {
+            for (i, row_result) in rows.enumerate() {
+                if let Ok((name, typ, parent, col, hidden)) = row_result {
+                    bevy::log::debug!(
+                        "  [{}] table='{}', type={:?}, parent={:?}, column={:?}, hidden={:?}",
+                        i, name, typ, parent, col, hidden
+                    );
+                }
+            }
+        }
+        bevy::log::debug!("=== End _Metadata contents ===");
+    }
+    
     let mut stmt = conn.prepare(
         "SELECT table_name FROM _Metadata 
          WHERE table_type IN ('main','structure') OR table_type IS NULL
@@ -238,6 +265,11 @@ pub fn list_all_tables(conn: &Connection) -> DbResult<Vec<String>> {
     let tables = stmt
         .query_map([], |row| row.get(0))?
         .collect::<Result<Vec<String>, _>>()?;
+
+    bevy::log::info!("list_all_tables: Found {} tables to load", tables.len());
+    for (i, table) in tables.iter().enumerate() {
+        bevy::log::info!("  [{}] '{}'", i, table);
+    }
 
     Ok(tables)
 }

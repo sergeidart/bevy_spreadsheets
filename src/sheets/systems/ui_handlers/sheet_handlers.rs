@@ -73,7 +73,7 @@ pub fn reload_sheet_cache_from_db(
     
     match rusqlite::Connection::open(&db_path) {
         Ok(conn) => {
-            match crate::sheets::database::reader::DbReader::read_sheet(&conn, sheet_name, daemon_client) {
+            match crate::sheets::database::reader::DbReader::read_sheet(&conn, sheet_name, daemon_client, Some(cat_str)) {
                 Ok(sheet_data) => {
                     info!("Successfully reloaded {} rows from DB for sheet '{}'", sheet_data.grid.len(), sheet_name);
                     registry.add_or_replace_sheet(
