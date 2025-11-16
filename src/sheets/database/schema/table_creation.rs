@@ -77,6 +77,7 @@ pub fn create_data_table(
     table_name: &str,
     columns: &[ColumnDefinition],
     daemon_client: &DaemonClient,
+    db_name: Option<&str>,
 ) -> DbResult<()> {
     let mut col_defs = vec![
         "id INTEGER PRIMARY KEY AUTOINCREMENT".to_string(),
@@ -93,7 +94,7 @@ pub fn create_data_table(
         col_defs.push(format!("\"{}\" {}", col.header, sql_type));
     }
 
-    writer::create_main_data_table(table_name, &col_defs, daemon_client)?;
+    writer::create_main_data_table(table_name, &col_defs, daemon_client, db_name)?;
     Ok(())
 }
 
@@ -464,7 +465,24 @@ pub fn insert_table_metadata(
     display_order: Option<i32>,
     daemon_client: &DaemonClient,
 ) -> DbResult<()> {
-    writer::upsert_table_metadata(
+    insert_table_metadata_with_db(
+        table_name,
+        metadata,
+        display_order,
+        daemon_client,
+        None,
+    )
+}
+
+/// Insert table-level metadata with explicit database name
+pub fn insert_table_metadata_with_db(
+    table_name: &str,
+    metadata: &SheetMetadata,
+    display_order: Option<i32>,
+    daemon_client: &DaemonClient,
+    db_name: Option<&str>,
+) -> DbResult<()> {
+    writer::upsert_table_metadata_with_db(
         table_name,
         metadata.ai_enable_row_generation as i32,
         metadata.ai_general_rule.as_deref(),
@@ -473,6 +491,7 @@ pub fn insert_table_metadata(
         display_order,
         metadata.hidden as i32,
         daemon_client,
+        db_name,
     )?;
     Ok(())
 }

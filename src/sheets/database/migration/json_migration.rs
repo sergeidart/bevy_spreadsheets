@@ -43,9 +43,13 @@ impl JsonMigration {
         // 2. Create schema
         let tx = conn.transaction()?;
 
+        let db_name = json_data_path
+            .file_stem()
+            .and_then(|s| s.to_str());
+
         schema::ensure_global_metadata_table(&tx, daemon_client)?;
-        schema::create_data_table(table_name, &metadata.columns, daemon_client)?;
-        schema::create_metadata_table(table_name, &metadata, daemon_client, None)?;
+        schema::create_data_table(table_name, &metadata.columns, daemon_client, db_name)?;
+        schema::create_metadata_table(table_name, &metadata, daemon_client, db_name)?;
         schema::create_ai_groups_table(&tx, table_name, &metadata, daemon_client)?;
         schema::insert_table_metadata(table_name, &metadata, display_order, daemon_client)?;
 

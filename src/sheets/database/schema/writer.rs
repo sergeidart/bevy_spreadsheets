@@ -66,6 +66,7 @@ pub fn create_main_data_table(
     table_name: &str,
     column_defs: &[String],
     daemon_client: &DaemonClient,
+    db_name: Option<&str>,
 ) -> DbResult<()> {
     let create_sql = format!(
         "CREATE TABLE IF NOT EXISTS \"{}\" ({})",
@@ -85,7 +86,7 @@ pub fn create_main_data_table(
         Statement { sql: index_sql, params: vec![] },
     ];
     
-    daemon_client.exec_batch(stmts, None)
+    daemon_client.exec_batch(stmts, db_name)
         .map_err(|e| super::super::error::DbError::Other(e))?;
     Ok(())
 }
@@ -347,6 +348,31 @@ pub fn upsert_table_metadata(
     hidden: i32,
     daemon_client: &DaemonClient,
 ) -> DbResult<()> {
+    upsert_table_metadata_with_db(
+        table_name,
+        ai_allow_add_rows,
+        ai_table_context,
+        ai_active_group,
+        category,
+        display_order,
+        hidden,
+        daemon_client,
+        None,
+    )
+}
+
+/// ARCHITECTURE: Uses daemon for write operation with explicit database name
+pub fn upsert_table_metadata_with_db(
+    table_name: &str,
+    ai_allow_add_rows: i32,
+    ai_table_context: Option<&str>,
+    ai_active_group: Option<&str>,
+    category: Option<&str>,
+    display_order: Option<i32>,
+    hidden: i32,
+    daemon_client: &DaemonClient,
+    db_name: Option<&str>,
+) -> DbResult<()> {
     let stmt = Statement {
         sql: "INSERT OR REPLACE INTO _Metadata 
               (table_name, table_type, ai_allow_add_rows, ai_table_context, ai_active_group, category, display_order, hidden)
@@ -362,7 +388,7 @@ pub fn upsert_table_metadata(
         ],
     };
     
-    daemon_client.exec_batch(vec![stmt], None)
+    daemon_client.exec_batch(vec![stmt], db_name)
         .map_err(|e| super::super::error::DbError::Other(e))?;
     Ok(())
 }
