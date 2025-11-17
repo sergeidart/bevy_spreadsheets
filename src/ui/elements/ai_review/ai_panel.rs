@@ -250,6 +250,44 @@ pub fn draw_ai_panel(
     select_group_writer: &mut EventWriter<RequestSelectAiSchemaGroup>,
     delete_group_writer: &mut EventWriter<RequestDeleteAiSchemaGroup>,
 ) {
+    // NEW: Show navigation breadcrumb with back button when in child table drill-down
+    if !state.ai_navigation_stack.is_empty() {
+        ui.horizontal(|ui| {
+            use super::navigation::navigate_back;
+            
+            if ui.button("⬅ Back").clicked() {
+                navigate_back(state, registry);
+            }
+            
+            ui.separator();
+            
+            // Build breadcrumb trail
+            let mut breadcrumb = String::new();
+            for (idx, nav_ctx) in state.ai_navigation_stack.iter().enumerate() {
+                if idx > 0 {
+                    breadcrumb.push_str(" › ");
+                }
+                breadcrumb.push_str(&nav_ctx.sheet_name);
+                if let Some(ref display_name) = nav_ctx.parent_display_name {
+                    breadcrumb.push_str(&format!(" ({})", display_name));
+                }
+            }
+            breadcrumb.push_str(" › ");
+            breadcrumb.push_str(&state.ai_current_sheet);
+            
+            ui.label(egui::RichText::new(breadcrumb).color(egui::Color32::from_rgb(100, 150, 255)));
+            
+            if let Some(ref parent_filter) = state.ai_parent_filter {
+                ui.label(
+                    egui::RichText::new(format!("(filtered by parent_key={})", parent_filter.parent_row_index))
+                        .italics()
+                        .color(egui::Color32::GRAY)
+                );
+            }
+        });
+        ui.separator();
+    }
+    
     ui.horizontal_wrapped(|ui| {
         // Indent under the AI Mode toggle position for unified second-row layout
         if state.last_ai_button_min_x > 0.0 {
@@ -327,6 +365,9 @@ pub fn draw_ai_panel(
             {
                 state.ai_batch_review_active = true;
                 state.ai_mode = AiModeState::Reviewing;
+                // Initialize navigation context for drill_into_structure support
+                state.ai_current_category = state.ai_last_send_root_category.clone();
+                state.ai_current_sheet = state.ai_last_send_root_sheet.clone().unwrap_or_default();
             }
         }
 
@@ -344,6 +385,28 @@ pub fn draw_ai_panel(
             }
         }
     });
+
+    // When in structure-detail context, show a compact back bar above the table
+    if state.ai_batch_review_active && state.ai_structure_detail_context.is_some() {
+        egui::TopBottomPanel::top("ai_structure_back_bar")
+            .show_separator_line(false)
+            .show_inside(ui, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.button("⬅ Back to root AI review").clicked() {
+                        state.ai_structure_detail_context = None;
+                    }
+                    if let Some(detail) = &state.ai_structure_detail_context {
+                        let path = detail
+                            .structure_path
+                            .iter()
+                            .map(|idx| idx.to_string())
+                            .collect::<Vec<_>>()
+                            .join(" › ");
+                        ui.label(format!("Structure context: {}", path));
+                    }
+                });
+            });
+    }
 
     // AI Prompt Popup (when no rows selected)
     show_ai_prompt_popup(

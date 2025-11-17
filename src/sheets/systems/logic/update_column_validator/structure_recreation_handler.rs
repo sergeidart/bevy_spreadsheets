@@ -323,8 +323,7 @@ fn create_structure_table_impl(
                         // CRITICAL: Reload parent sheet from DB to sync in-memory state with database
                         // After creating structure table and updating metadata, the in-memory registry
                         // still has the old state. We need to reload to ensure UI displays current data.
-                        // IMPORTANT: After reload, we must restore structure_schema fields since they're
-                        // not persisted to the database and will be lost during reload.
+                        // The structure_schema is now populated automatically from child tables during read_sheet().
                         info!("🔄 Reloading parent sheet '{}' from database after structure table creation", parent_sheet_name);
                         match crate::sheets::database::reader::DbReader::read_sheet(
                             &conn,
@@ -332,37 +331,15 @@ fn create_structure_table_impl(
                             daemon_client.client(),
                             db_path.file_name().and_then(|n| n.to_str()),
                         ) {
-                            Ok(mut reloaded_parent) => {
-                                // CRITICAL: Restore structure_schema fields from parent_col_def
-                                // These fields are not persisted to DB, so they're lost on reload.
-                                // We must manually restore them from the original column definition.
-                                if let Some(ref mut meta) = reloaded_parent.metadata {
-                                    if let Some((_col_idx, col)) = meta.columns.iter_mut().enumerate()
-                                        .find(|(_, col)| col.header == parent_col_def.header)
-                                    {
-                                        info!("🔧 Restoring structure_schema fields for column '{}'", parent_col_def.header);
-                                        info!("  BEFORE restoration: validator={:?}, structure_schema.is_some()={}, structure_column_order.is_some()={}, key_parent_idx={:?}",
-                                            col.validator,
-                                            col.structure_schema.is_some(),
-                                            col.structure_column_order.is_some(),
+                            Ok(reloaded_parent) => {
+                                // Verify structure_schema was populated from DB
+                                if let Some(ref meta) = reloaded_parent.metadata {
+                                    if let Some(col) = meta.columns.iter().find(|c| c.header == parent_col_def.header) {
+                                        info!("✅ Structure schema populated from DB for '{}': schema_len={}, order_len={}, key_parent_idx={:?}",
+                                            parent_col_def.header,
+                                            col.structure_schema.as_ref().map(|s| s.len()).unwrap_or(0),
+                                            col.structure_column_order.as_ref().map(|o| o.len()).unwrap_or(0),
                                             col.structure_key_parent_column_index
-                                        );
-                                        
-                                        // Restore the structure-specific fields that aren't persisted to DB
-                                        col.structure_schema = parent_col_def.structure_schema.clone();
-                                        col.structure_column_order = parent_col_def.structure_column_order.clone();
-                                        col.structure_key_parent_column_index = parent_col_def.structure_key_parent_column_index;
-                                        
-                                        info!("  AFTER restoration: validator={:?}, structure_schema.is_some()={}, structure_column_order.is_some()={}, key_parent_idx={:?}",
-                                            col.validator,
-                                            col.structure_schema.is_some(),
-                                            col.structure_column_order.is_some(),
-                                            col.structure_key_parent_column_index
-                                        );
-                                        info!("✅ Structure schema fields restored: schema_len={}, order_len={}, key_parent_idx={:?}",
-                                            parent_col_def.structure_schema.as_ref().map(|s| s.len()).unwrap_or(0),
-                                            parent_col_def.structure_column_order.as_ref().map(|o| o.len()).unwrap_or(0),
-                                            parent_col_def.structure_key_parent_column_index
                                         );
                                     } else {
                                         error!("❌ Could not find column '{}' in reloaded parent metadata!", parent_col_def.header);

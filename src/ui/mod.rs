@@ -19,6 +19,8 @@ use elements::editor::state::EditorWindowState;
 // Import the new feedback handling system
 use systems::clear_ui_feedback_on_sheet_change;
 use systems::handle_ui_feedback;
+// Import child table loader system
+use crate::sheets::systems::ai_review::child_table_loader::load_structure_child_tables_system;
 
 #[derive(Resource, Default, Debug, Clone)]
 pub struct UiFeedbackState {
@@ -38,6 +40,8 @@ impl Plugin for EditorUiPlugin {
             // Load UI prefs on startup
             .add_systems(Startup, load_ui_prefs_startup)
             // --- END MODIFIED ---
+            // Load structure child tables once when AI Review starts (before UI)
+            .add_systems(Update, load_structure_child_tables_system)
             // Ensure we clear transient feedback on sheet changes before processing new feedback events
             .add_systems(Update, clear_ui_feedback_on_sheet_change)
             // Persist UI prefs when toggled

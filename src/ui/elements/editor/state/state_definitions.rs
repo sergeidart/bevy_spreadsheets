@@ -1,257 +1,15 @@
 // src/ui/elements/editor/state_definitions.rs
 // Type definitions and enums for editor state
 
+// Re-export types from sibling modules
+pub use super::ai_types::*;
+pub use super::navigation_types::*;
+pub use super::review_types::*;
+pub use super::ui_types::*;
+
 use crate::sheets::definitions::ColumnDataType;
 use bevy::prelude::Resource;
-use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::sync::Arc;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum AiModeState {
-    #[default]
-    Idle,
-    Preparing,
-    Submitting,
-    ResultsReady,
-    Reviewing,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum SheetInteractionState {
-    #[default]
-    Idle,
-    AiModeActive,
-    DeleteModeActive,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ValidatorTypeChoice {
-    #[default]
-    Basic,
-    Linked,
-    Structure,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReviewChoice {
-    Original,
-    AI,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum ToyboxMode {
-    #[default]
-    Randomizer,
-    Summarizer,
-}
-
-#[derive(Clone, Debug)]
-pub struct FilteredRowsCacheEntry {
-    pub rows: Arc<Vec<usize>>,
-    pub filters_hash: u64,
-    pub total_rows: usize,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum FpsSetting {
-    Thirty,
-    Sixty,
-    ScreenHz, // Auto
-}
-
-impl Default for FpsSetting {
-    fn default() -> Self {
-        FpsSetting::Sixty
-    }
-}
-
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub enum ThrottledAiAction {
-    UpdateCell {
-        row_index: usize,
-        col_index: usize,
-        value: String,
-    },
-    AddRow {
-        initial_values: Vec<(usize, String)>,
-    },
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct ColumnDragState {
-    pub source_index: Option<usize>,
-}
-
-/// Log entry for a single AI call (newest entries are added to the front)
-#[derive(Debug, Clone)]
-pub struct AiCallLogEntry {
-    /// Human-readable status (e.g., "2/4 received", "Completed", "Error")
-    pub status: String,
-    /// The full response JSON (if available)
-    pub response: Option<String>,
-    /// The full request payload that was sent
-    pub request: Option<String>,
-    /// Whether this is an error entry
-    pub is_error: bool,
-}
-
-/// Phase 1 intermediate data - stored after initial discovery call, before Phase 2 deep review
-#[derive(Debug, Clone)]
-pub struct Phase1IntermediateData {
-    /// All rows from Phase 1 AI response
-    pub all_ai_rows: Vec<Vec<String>>,
-    /// Indices of rows that are duplicates (in all_ai_rows, after originals)
-    pub duplicate_indices: Vec<usize>,
-    /// Number of original rows sent
-    pub original_count: usize,
-    /// Included column indices
-    pub included_columns: Vec<usize>,
-    /// Context for sending Phase 2
-    pub category: Option<String>,
-    pub sheet_name: String,
-    #[allow(dead_code)] // Used in other modules but compiler doesn't track cross-module usage
-    pub key_prefix_count: usize,
-    /// Original row indices from Phase 1 (for structure processing)
-    pub original_row_indices: Vec<usize>,
-}
-
-#[derive(Debug, Clone)]
-pub struct StructureParentContext {
-    pub parent_category: Option<String>,
-    pub parent_sheet: String,
-    pub parent_row: usize,
-    pub parent_col: usize,
-}
-
-/// Navigation context for real structure sheets (not virtual)
-/// When navigating into a structure column, we open the real structure sheet
-/// with a hidden filter that shows only rows related to the parent row
-#[derive(Debug, Clone)]
-pub struct StructureNavigationContext {
-    /// The real structure sheet name (e.g., "TacticalFrontlines_Items")
-    pub structure_sheet_name: String,
-    /// Parent sheet information
-    pub parent_category: Option<String>,
-    pub parent_sheet_name: String,
-    /// Parent row's primary key value (for filtering on parent_key column)
-    pub parent_row_key: String,
-    /// Ancestor display values for UI breadcrumb display
-    /// Order: [deepest_ancestor_display, ..., immediate_parent_display]
-    /// Example: ["Game Name", "Platform Name"] for Games -> Platforms -> Store navigation
-    pub ancestor_keys: Vec<String>,
-    /// Ancestor row_index values for AI parent chain filtering
-    /// Order matches ancestor_keys: [deepest_ancestor_row_index, ..., immediate_parent_row_index]
-    /// Example: ["3770", "1234"] - numeric strings that can be parsed as usize
-    pub ancestor_row_indices: Vec<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct RowReview {
-    pub row_index: usize,
-    pub original: Vec<String>,
-    pub ai: Vec<String>,
-    pub choices: Vec<ReviewChoice>, // length == editable (non-structure) columns shown order
-    pub non_structure_columns: Vec<usize>, // mapping for editable subset
-    /// Track which key columns (by position) have override enabled (default false)
-    pub key_overrides: std::collections::HashMap<usize, bool>,
-    /// Editable ancestor key values (indexed by ancestor key position)
-    pub ancestor_key_values: Vec<String>,
-    /// Cached dropdown options for each ancestor level
-    /// Key: ancestor index, Value: (cached_ancestors_snapshot, options)
-    pub ancestor_dropdown_cache: HashMap<usize, (Vec<String>, Vec<String>)>,
-}
-
-#[derive(Debug, Clone)]
-pub struct NewRowReview {
-    pub ai: Vec<String>,
-    pub non_structure_columns: Vec<usize>,
-    pub duplicate_match_row: Option<usize>,
-    pub choices: Option<Vec<ReviewChoice>>,
-    pub merge_selected: bool,
-    pub merge_decided: bool,
-    // Original row data for the matched duplicate row (used for merge comparison)
-    pub original_for_merge: Option<Vec<String>>,
-    /// Track which key columns (by position) have override enabled (default false)
-    pub key_overrides: std::collections::HashMap<usize, bool>,
-    /// Editable ancestor key values (indexed by ancestor key position)
-    pub ancestor_key_values: Vec<String>,
-    /// Cached dropdown options for each ancestor level
-    /// Key: ancestor index, Value: (cached_ancestors_snapshot, options)
-    pub ancestor_dropdown_cache: HashMap<usize, (Vec<String>, Vec<String>)>,
-}
-
-#[derive(Debug, Clone)]
-pub struct StructureSendJob {
-    pub root_category: Option<String>,
-    pub root_sheet: String,
-    /// Identifies the nested structure (first element is root column index)
-    pub structure_path: Vec<usize>,
-    /// Optional friendly label resolved from metadata for status logs
-    pub label: Option<String>,
-    /// Snapshot of row indices (within the root sheet) that triggered this job
-    pub target_rows: Vec<usize>,
-    pub generation_id: u64,
-}
-
-#[derive(Debug, Clone)]
-pub struct StructureNewRowContext {
-    pub new_row_index: usize,
-    pub non_structure_values: Vec<(usize, String)>,
-    /// Full AI row from Phase 1, including structure columns (stored as JSON strings)
-    pub full_ai_row: Option<Vec<String>>,
-}
-
-/// Context for navigating into structure detail view during AI review
-#[derive(Debug, Clone)]
-pub struct StructureDetailContext {
-    /// Root category of the sheet containing the structure
-    pub root_category: Option<String>,
-    /// Root sheet name containing the structure
-    pub root_sheet: String,
-    /// Index of parent row in ai_row_reviews (for existing rows)
-    pub parent_row_index: Option<usize>,
-    /// Index of parent row in ai_new_row_reviews (for new rows)
-    pub parent_new_row_index: Option<usize>,
-    /// Structure path to the structure being viewed
-    pub structure_path: Vec<usize>,
-    /// One-time hydration flag so we don't rebuild working RowReview vectors every frame
-    pub hydrated: bool,
-    /// Saved top-level reviews from before entering structure mode (restored on exit)
-    pub saved_row_reviews: Vec<RowReview>,
-    pub saved_new_row_reviews: Vec<NewRowReview>,
-}
-
-#[derive(Debug, Clone)]
-pub struct StructureReviewEntry {
-    pub root_category: Option<String>,
-    pub root_sheet: String,
-    pub parent_row_index: usize,
-    pub parent_new_row_index: Option<usize>,
-    /// Path from root sheet to this structure (first element is column index in root, subsequent are structure col indices)
-    pub structure_path: Vec<usize>,
-    pub has_changes: bool,
-    pub accepted: bool,
-    pub rejected: bool,
-    pub decided: bool,
-    /// The original structure rows parsed from the cell
-    pub original_rows: Vec<Vec<String>>,
-    /// The AI-suggested structure rows
-    pub ai_rows: Vec<Vec<String>>,
-    /// The merged rows (combines accepted changes)
-    pub merged_rows: Vec<Vec<String>>,
-    /// Per-row, per-column difference flags
-    pub differences: Vec<Vec<bool>>,
-    pub schema_headers: Vec<String>,
-    pub original_rows_count: usize,
-}
-
-impl StructureReviewEntry {
-    pub fn is_undecided(&self) -> bool {
-        self.has_changes && !self.decided
-    }
-}
 
 #[derive(Resource)]
 pub struct EditorWindowState {
@@ -289,9 +47,9 @@ pub struct EditorWindowState {
     pub options_link_target_column_index: Option<usize>,
     // NEW: Structure selection chain (always at least length 1 with possibly None meaning no selection yet)
     pub options_structure_source_columns: Vec<Option<usize>>,
-    pub linked_column_cache: HashMap<(String, usize), Arc<HashSet<String>>>,
+    pub linked_column_cache: LinkedColumnCache,
     // Normalized (lowercased, CR/LF removed) mirror of linked_column_cache for O(1) membership
-    pub linked_column_cache_normalized: HashMap<(String, usize), Arc<HashSet<String>>>,
+    pub linked_column_cache_normalized: LinkedColumnCacheNormalized,
 
     // NEW: State for New Sheet Popup
     pub show_new_sheet_popup: bool,
@@ -328,6 +86,19 @@ pub struct EditorWindowState {
     // Structure detail navigation context (when user dives into a structure review)
     pub ai_structure_detail_context: Option<StructureDetailContext>,
 
+    // NEW: Navigation-based AI review (replaces structure detail branching)
+    /// Navigation breadcrumb stack - each level represents a sheet we've drilled into
+    pub ai_navigation_stack: Vec<NavigationContext>,
+    /// Current sheet being reviewed (can be parent or child table)
+    pub ai_current_sheet: String,
+    /// Current category being reviewed
+    pub ai_current_category: Option<String>,
+    /// Optional filter for child table reviews (filters by parent_key)
+    pub ai_parent_filter: Option<ParentFilter>,
+    /// Map of (row_idx, col_idx) -> status for structure column drill-down indicators
+    #[allow(dead_code)]
+    pub ai_pending_structure_drilldowns: HashMap<(usize, usize), StructureStatus>,
+
     // Combined AI call log (chat-like format, newest first)
     pub ai_call_log: Vec<AiCallLogEntry>,
     // Removed dedicated structure detail view; field deleted.
@@ -358,6 +129,8 @@ pub struct EditorWindowState {
     pub ai_waiting_for_structure_results: bool,
     pub ai_structure_generation_counter: u64,
     pub ai_structure_active_generation: u64,
+    /// Flag to trigger loading of structure child tables when AI Review starts
+    pub ai_needs_structure_child_tables_loaded: bool,
     /// Total count of AI tasks for progress tracking (Phase 1 + Phase 2 + structures)
     pub ai_total_tasks: usize,
     /// Completed AI tasks for progress tracking

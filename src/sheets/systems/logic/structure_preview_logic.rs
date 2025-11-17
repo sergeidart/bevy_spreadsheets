@@ -112,15 +112,6 @@ pub fn generate_structure_preview(raw: &str) -> (String, bool) {
     (out, parse_failed)
 }
 
-/// Generate a preview string from structure rows (Vec<Vec<String>>)
-/// Similar to generate_structure_preview but takes rows directly instead of JSON
-/// Skips technical columns (row_index, parent_key) to show only data columns
-/// 
-/// headers: Optional column headers to identify technical columns by name
-pub fn generate_structure_preview_from_rows(rows: &[Vec<String>]) -> String {
-    generate_structure_preview_from_rows_with_headers(rows, None)
-}
-
 /// Generate a preview string from structure rows with optional headers
 /// Skips technical columns based on header names or position
 pub fn generate_structure_preview_from_rows_with_headers(

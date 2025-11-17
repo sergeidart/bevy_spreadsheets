@@ -116,12 +116,13 @@ pub fn create_db_structure_table(
     Ok(())
 }
 
-/// Reloads parent sheet from database and restores structure_schema fields.
-/// These fields are not persisted to DB, so they must be manually restored.
+/// Reloads parent sheet from database after structure table creation.
+/// The structure_schema is now populated automatically by populate_structure_schemas_from_child_tables()
+/// during read_sheet(), so we don't need to manually restore it.
 fn reload_and_restore_parent_sheet(
     conn: &Connection,
     parent_sheet_name: &str,
-    parent_col_def: &ColumnDefinition,
+    _parent_col_def: &ColumnDefinition,
     db_path: &Path,
     daemon_client: &crate::sheets::database::daemon_client::DaemonClient,
     registry: &mut SheetRegistry,
@@ -131,7 +132,7 @@ fn reload_and_restore_parent_sheet(
 ) -> Result<(), String> {
     info!("🔄 Reloading parent sheet '{}' from database after structure table creation", parent_sheet_name);
     
-    let mut reloaded_parent = crate::sheets::database::reader::DbReader::read_sheet(
+    let reloaded_parent = crate::sheets::database::reader::DbReader::read_sheet(
         conn,
         parent_sheet_name,
         daemon_client,
@@ -142,19 +143,13 @@ fn reload_and_restore_parent_sheet(
         format!("Failed to reload parent sheet: {}", e)
     })?;
     
-    // Restore structure_schema fields from parent_col_def
-    if let Some(ref mut meta) = reloaded_parent.metadata {
-        if let Some((col_idx, _)) = meta.columns.iter().enumerate()
-            .find(|(_, col)| col.header == column_header)
-        {
-            info!("🔧 Restoring structure_schema fields for column '{}'", column_header);
-            meta.columns[col_idx].structure_schema = parent_col_def.structure_schema.clone();
-            meta.columns[col_idx].structure_column_order = parent_col_def.structure_column_order.clone();
-            meta.columns[col_idx].structure_key_parent_column_index = parent_col_def.structure_key_parent_column_index;
-            info!("✅ Structure schema fields restored: schema_len={}, order_len={}, key_parent_idx={:?}",
-                parent_col_def.structure_schema.as_ref().map(|s| s.len()).unwrap_or(0),
-                parent_col_def.structure_column_order.as_ref().map(|o| o.len()).unwrap_or(0),
-                parent_col_def.structure_key_parent_column_index
+    // Structure schema is now populated automatically from child tables during read_sheet()
+    if let Some(ref meta) = reloaded_parent.metadata {
+        if let Some(col) = meta.columns.iter().find(|c| c.header == column_header) {
+            info!("✅ Structure schema populated from DB: schema_len={}, order_len={}, key_parent_idx={:?}",
+                col.structure_schema.as_ref().map(|s| s.len()).unwrap_or(0),
+                col.structure_column_order.as_ref().map(|o| o.len()).unwrap_or(0),
+                col.structure_key_parent_column_index
             );
         }
     }

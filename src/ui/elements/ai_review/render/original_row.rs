@@ -143,8 +143,8 @@ fn render_original_data_cell(
     plan: &OriginalDataCellPlan,
     ctx: &mut RowContext<'_>,
 ) {
-    // Check if this is parent_key column (column 1 in structure tables)
-    let is_parent_key = plan.actual_col == 1;
+    // Use the is_parent_key field from the plan
+    let is_parent_key = plan.is_parent_key;
     
     match kind {
         RowKind::Existing => {
@@ -156,6 +156,7 @@ fn render_original_data_cell(
                 render_original_data_cell_contents_existing(
                     ui,
                     plan.position,
+                    plan.actual_col,
                     plan.show_toggle,
                     plan.strike_ai_override,
                     plan.is_key_column,
@@ -176,6 +177,7 @@ fn render_original_data_cell(
                 render_original_data_cell_contents_new_duplicate(
                     ui,
                     plan.position,
+                    plan.actual_col,
                     plan.show_toggle,
                     plan.strike_ai_override,
                     plan.is_key_column,
@@ -208,6 +210,7 @@ fn render_original_data_cell(
 fn render_original_data_cell_contents_existing(
     ui: &mut egui::Ui,
     position: usize,
+    _actual_col: usize,
     show_toggle: bool,
     strike_ai_override: bool,
     is_key_column: bool,
@@ -279,6 +282,7 @@ fn render_original_data_cell_contents_existing(
 fn render_original_data_cell_contents_new_duplicate(
     ui: &mut egui::Ui,
     position: usize,
+    _actual_col: usize,
     show_toggle: bool,
     strike_ai_override: bool,
     is_key_column: bool,

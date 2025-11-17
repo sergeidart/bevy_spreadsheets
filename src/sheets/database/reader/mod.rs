@@ -1,10 +1,13 @@
 // src/sheets/database/reader/mod.rs
 pub mod queries;
 mod column_parser;
+mod column_recovery;
+mod metadata_creation;
+mod structure_population;
 
 use super::error::DbResult;
 use super::schema::{
-    is_technical_column, sql_type_to_column_data_type,
+    is_technical_column,
 };
 use crate::sheets::definitions::{
     ColumnDataType, ColumnDefinition, ColumnValidator, SheetGridData, SheetMetadata,
@@ -26,7 +29,7 @@ impl DbReader {
         );
         
         let freshly_created = if !metadata_table_exists {
-            Self::create_metadata_from_physical_table(conn, table_name, daemon_client, db_name)?;
+            metadata_creation::create_metadata_from_physical_table(conn, table_name, daemon_client, db_name)?;
             true
         } else {
             false
@@ -70,10 +73,16 @@ impl DbReader {
         columns = Self::prepend_technical_columns(columns, is_structure)?;
 
         // Auto-recover orphaned columns
-        columns = Self::recover_orphaned_columns(conn, table_name, &meta_table, columns, daemon_client)?;
+        columns = column_recovery::recover_orphaned_columns(conn, table_name, &meta_table, columns, daemon_client)?;
 
         // Populate structure_schema from child tables for Structure columns
-        columns = Self::populate_structure_schemas_from_child_tables(conn, table_name, columns, daemon_client)?;
+        columns = structure_population::populate_structure_schemas_from_child_tables(
+            conn,
+            table_name,
+            columns,
+            daemon_client,
+            Self::read_metadata,
+        )?;
 
         // Read table-level metadata
         let table_meta = queries::read_table_metadata(conn, table_name)?;
@@ -218,66 +227,6 @@ impl DbReader {
         Ok(())
     }
 
-    fn create_metadata_from_physical_table(
-        conn: &Connection,
-        table_name: &str,
-        daemon_client: &super::daemon_client::DaemonClient,
-        db_name: Option<&str>,
-    ) -> DbResult<()> {
-        use crate::sheets::database::schema::create_metadata_table;
-
-        bevy::log::warn!(
-            "Metadata table for '{}' doesn't exist. Creating from physical schema...",
-            table_name
-        );
-
-        let physical_cols = queries::get_physical_columns(conn, table_name)?;
-        let mut columns = Vec::new();
-
-        for (name, type_str) in physical_cols {
-            let data_type = sql_type_to_column_data_type(&type_str);
-
-            columns.push(ColumnDefinition {
-                header: name,
-                display_header: None,
-                validator: None,
-                data_type,
-                filter: None,
-                ai_context: None,
-                ai_enable_row_generation: None,
-                ai_include_in_send: None,
-                width: None,
-                structure_schema: None,
-                structure_column_order: None,
-                structure_key_parent_column_index: None,
-                structure_ancestor_key_parent_column_indices: None,
-                deleted: false,
-                hidden: false,
-            });
-        }
-
-        let sheet_meta = SheetMetadata {
-            sheet_name: table_name.to_string(),
-            category: None,
-            data_filename: format!("{}.json", table_name),
-            columns,
-            ai_general_rule: None,
-            ai_model_id: crate::sheets::definitions::default_ai_model_id(),
-            ai_temperature: None,
-            requested_grounding_with_google_search:
-                crate::sheets::definitions::default_grounding_with_google_search(),
-            ai_enable_row_generation: false,
-            ai_schema_groups: Vec::new(),
-            ai_active_schema_group: None,
-            random_picker: None,
-            structure_parent: None,
-            hidden: false,
-        };
-
-        create_metadata_table(table_name, &sheet_meta, daemon_client, db_name)?;
-        Ok(())
-    }
-
     fn prepend_technical_columns(
         mut columns: Vec<ColumnDefinition>,
         is_structure: bool,
@@ -335,206 +284,6 @@ impl DbReader {
         col
     }
 
-    fn recover_orphaned_columns(
-        conn: &Connection,
-        table_name: &str,
-        meta_table: &str,
-        mut columns: Vec<ColumnDefinition>,
-        daemon_client: &super::daemon_client::DaemonClient,
-    ) -> DbResult<Vec<ColumnDefinition>> {
-        let physical_columns = queries::get_physical_columns(conn, table_name)?;
-
-        // Find orphaned columns (skip technical/system columns)
-        let orphaned: Vec<(String, String)> = physical_columns
-            .iter()
-            .filter(|(phys_col, _)| {
-                // Skip system columns
-                if is_technical_column(phys_col)
-                    || phys_col == "parent_id"
-                    || phys_col == "temp_new_row_index"
-                    || phys_col == "_obsolete_temp_new_row_index"
-                    || phys_col == "created_at"
-                    || phys_col == "updated_at"
-                    || (phys_col.starts_with("grand_") && phys_col.ends_with("_parent"))
-                {
-                    return false;
-                }
-
-                // Check if exists in metadata
-                !columns
-                    .iter()
-                    .any(|meta_col| meta_col.header.eq_ignore_ascii_case(phys_col))
-            })
-            .cloned()
-            .collect();
-
-        if orphaned.is_empty() {
-            return Ok(columns);
-        }
-
-        bevy::log::warn!(
-            "read_metadata: '{}' has {} orphaned columns: {:?}",
-            table_name,
-            orphaned.len(),
-            orphaned.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>()
-        );
-
-        // Find next available index by querying the max column_index from the database
-        let next_index: i32 = conn
-            .query_row(
-                &format!("SELECT COALESCE(MAX(column_index), -1) + 1 FROM \"{}\"", meta_table),
-                [],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
-
-        bevy::log::debug!(
-            "Orphaned column recovery: next_index={} (from max in DB)",
-            next_index
-        );
-
-        // Recover each orphaned column
-        for (idx, (col_name, sql_type)) in orphaned.iter().enumerate() {
-            let data_type = sql_type_to_column_data_type(sql_type);
-
-            let insert_index = next_index + idx as i32;
-            
-            // Get physical position for diagnostic purposes
-            let physical_position = queries::get_physical_column_names(conn, table_name)
-                .ok()
-                .and_then(|cols| cols.iter().position(|c| c.eq_ignore_ascii_case(col_name)));
-
-            match queries::insert_orphaned_column_metadata(
-                daemon_client,
-                meta_table,
-                insert_index,
-                col_name,
-                &format!("{:?}", data_type),
-            ) {
-                Ok(_) => {
-                    if let Some(phys_idx) = physical_position {
-                        bevy::log::info!(
-                            "  ✓ Recovered '{}' as {:?} at metadata index {} (physical position: {})",
-                            col_name,
-                            data_type,
-                            insert_index,
-                            phys_idx
-                        );
-                    } else {
-                        bevy::log::info!(
-                            "  ✓ Recovered '{}' as {:?} at metadata index {}",
-                            col_name,
-                            data_type,
-                            insert_index
-                        );
-                    }
-
-                    columns.push(ColumnDefinition {
-                        header: col_name.clone(),
-                        display_header: None,
-                        validator: Some(ColumnValidator::Basic(data_type)),
-                        data_type,
-                        filter: None,
-                        ai_context: None,
-                        ai_enable_row_generation: None,
-                        ai_include_in_send: None,
-                        width: None,
-                        structure_schema: None,
-                        structure_column_order: None,
-                        structure_key_parent_column_index: None,
-                        structure_ancestor_key_parent_column_indices: None,
-                        deleted: false,
-                        hidden: false,
-                    });
-                }
-                Err(e) => {
-                    bevy::log::error!("  ✗ Failed to recover '{}': {}", col_name, e);
-                }
-            }
-        }
-
-        Ok(columns)
-    }
-
-    /// Populate structure_schema from child tables for Structure columns
-    /// Structure schemas are not persisted in parent table metadata - they must be loaded from child tables
-    fn populate_structure_schemas_from_child_tables(
-        conn: &Connection,
-        parent_table_name: &str,
-        mut columns: Vec<ColumnDefinition>,
-        daemon_client: &super::daemon_client::DaemonClient,
-    ) -> DbResult<Vec<ColumnDefinition>> {
-        for col in columns.iter_mut() {
-            // Skip non-Structure columns
-            if !matches!(col.validator, Some(ColumnValidator::Structure)) {
-                continue;
-            }
-
-            // Build child table name: ParentTable_ColumnName
-            let child_table_name = format!("{}_{}", parent_table_name, col.header);
-
-            // Check if child table exists
-            if !super::schema::queries::table_exists(conn, &child_table_name)? {
-                bevy::log::warn!(
-                    "Structure column '{}' in '{}' has no child table '{}'  (legacy data not migrated)",
-                    col.header,
-                    parent_table_name,
-                    child_table_name
-                );
-                continue;
-            }
-
-            // Read child table metadata
-            match Self::read_metadata(conn, &child_table_name, daemon_client, None) {
-                Ok(child_metadata) => {
-                    // Convert child columns to structure fields
-                    let structure_fields: Vec<crate::sheets::structure_field::StructureFieldDefinition> = child_metadata
-                        .columns
-                        .iter()
-                        .filter(|c| {
-                            // Skip technical columns
-                            !matches!(c.header.as_str(), "id" | "row_index" | "parent_key")
-                        })
-                        .map(|c| crate::sheets::structure_field::StructureFieldDefinition {
-                            header: c.header.clone(),
-                            data_type: c.data_type,
-                            validator: c.validator.clone(),
-                            filter: c.filter.clone(),
-                            ai_context: c.ai_context.clone(),
-                            ai_include_in_send: c.ai_include_in_send,
-                            ai_enable_row_generation: c.ai_enable_row_generation,
-                            width: c.width,
-                            structure_schema: c.structure_schema.clone(),
-                            structure_column_order: c.structure_column_order.clone(),
-                            structure_key_parent_column_index: c.structure_key_parent_column_index,
-                            structure_ancestor_key_parent_column_indices: c.structure_ancestor_key_parent_column_indices.clone(),
-                        })
-                        .collect();
-
-                    if !structure_fields.is_empty() {
-                        bevy::log::info!(
-                            "Populated structure_schema for column '{}' in '{}' from child table '{}' ({} fields)",
-                            col.header,
-                            parent_table_name,
-                            child_table_name,
-                            structure_fields.len()
-                        );
-                        col.structure_schema = Some(structure_fields);
-                    }
-                }
-                Err(e) => {
-                    bevy::log::warn!(
-                        "Failed to read metadata for child table '{}': {}",
-                        child_table_name,
-                        e
-                    );
-                }
-            }
-        }
-
-        Ok(columns)
-    }
-
     fn build_sheet_metadata(
         table_name: &str,
         columns: Vec<ColumnDefinition>,
@@ -555,7 +304,7 @@ impl DbReader {
                 table_meta.ai_grounding.unwrap_or(0) != 0,
             ),
             ai_enable_row_generation: table_meta.ai_allow_add_rows != 0,
-            ai_schema_groups: Vec::new(), // TODO: Read from groups table
+            ai_schema_groups: Vec::new(), // Schema groups not persisted in database - only in JSON metadata
             ai_active_schema_group: table_meta.ai_active_group,
             random_picker: None,
             structure_parent: None,

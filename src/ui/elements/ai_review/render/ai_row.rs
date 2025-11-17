@@ -12,48 +12,8 @@ use crate::sheets::systems::ai_review::{
     AiSuggestedCellPlan, AiSuggestedPlan, RegularAiCellPlan, RowKind, StructureButtonPlan,
 };
 use crate::sheets::systems::ai_review::review_logic::ColumnEntry;
-use crate::sheets::systems::logic::lineage_helpers::walk_parent_lineage;
 
 const STRUCTURE_BUTTON_CONTEXT_LABEL: &str = "✓ Accept Structure";
-
-/// Helper function to convert parent_key row_index to lineage display text
-fn get_parent_key_display(
-    parent_key_value: &str,
-    ctx: &RowContext<'_>,
-) -> String {
-    // Try to parse as row_index
-    if let Ok(parent_row_idx) = parent_key_value.parse::<usize>() {
-        // Get parent table info from sheet metadata
-        if let Some(meta) = ctx.sheet_metadata {
-            if let Some(parent_link) = &meta.structure_parent {
-                let parent_category = parent_link.parent_category.clone();
-                let parent_sheet = parent_link.parent_sheet.clone();
-                
-                let cache_key = (parent_category.clone(), parent_sheet.clone(), parent_row_idx);
-                let lineage = if let Some(cached) = ctx.state.parent_lineage_cache.get(&cache_key) {
-                    cached.clone()
-                } else {
-                    let lineage = walk_parent_lineage(
-                        ctx.registry,
-                        &parent_category,
-                        &parent_sheet,
-                        parent_row_idx,
-                    );
-                    lineage
-                };
-                
-                if !lineage.is_empty() {
-                    return lineage.iter()
-                        .map(|(_, display_val, _)| display_val.as_str())
-                        .collect::<Vec<_>>()
-                        .join(" › ");
-                }
-            }
-        }
-    }
-    
-    parent_key_value.to_string()
-}
 
 pub fn render_ai_suggested_row(
     row: &mut TableRow,
@@ -262,13 +222,9 @@ fn render_ai_regular_cell(
                             }
                         }
                     } else {
-                        // Show lineage display (green text)
-                        let display = if value.trim().is_empty() { 
-                            "(empty)".to_string() 
-                        } else { 
-                            get_parent_key_display(&value, ctx)
-                        };
-                        ui.label(RichText::new(display).color(PARENT_KEY_COLOR));
+                        // Show parent_key value directly (green text)
+                        // Don't look up in parent table - the value is already the parent identifier
+                        ui.label(RichText::new(&value).color(PARENT_KEY_COLOR));
                     }
                     return;
                 }
@@ -333,13 +289,9 @@ fn render_ai_regular_cell(
                             }
                         }
                     } else {
-                        // Show lineage display (green text)
-                        let display = if value.trim().is_empty() { 
-                            "(empty)".to_string() 
-                        } else { 
-                            get_parent_key_display(&value, ctx)
-                        };
-                        ui.label(RichText::new(display).color(PARENT_KEY_COLOR));
+                        // Show parent_key value directly (green text)
+                        // Don't look up in parent table - the value is already the parent identifier
+                        ui.label(RichText::new(&value).color(PARENT_KEY_COLOR));
                     }
                     return;
                 }
@@ -391,22 +343,16 @@ fn render_ai_regular_cell(
                             }
                         }
                     } else {
-                        // Show lineage display (green text)
-                        let display = if value.trim().is_empty() { 
-                            "(empty)".to_string() 
-                        } else { 
-                            get_parent_key_display(&value, ctx)
-                        };
-                        ui.label(RichText::new(display).color(PARENT_KEY_COLOR));
+                        // Show parent_key value directly (green text)
+                        // Don't look up in parent table - the value is already the parent identifier
+                        ui.label(RichText::new(&value).color(PARENT_KEY_COLOR));
                     }
                     return;
                 }
             }
-            
-            if let Some(nr) = ctx.state.ai_new_row_reviews.get_mut(data_idx) {
-                let (merge_decided, merge_selected) = merge_state.unwrap_or((false, false));
 
-                let original_value = nr
+            if let Some(nr) = ctx.state.ai_new_row_reviews.get_mut(data_idx) {
+                let (merge_decided, merge_selected) = merge_state.unwrap_or((false, false));                let original_value = nr
                     .original_for_merge
                     .as_ref()
                     .and_then(|row| row.get(position))

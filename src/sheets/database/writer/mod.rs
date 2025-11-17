@@ -408,8 +408,8 @@ mod tests {
         assert_eq!(cols, vec!["D", "B", "A", "C"]);
     }
     
-    // TODO: Re-enable after creating mock daemon client infrastructure
     #[test]
+    #[ignore = "Requires daemon client to execute UPDATE statements - use integration tests"]
     fn test_prepend_row_shifts_and_inserts() {
         use super::test_helpers::create_mock_daemon_client;
         

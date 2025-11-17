@@ -160,6 +160,11 @@ impl EditorWindowState {
         } else {
             self.ai_waiting_for_structure_results = false;
             self.ai_batch_review_active = true;
+            // Mark that child tables need to be loaded on next system run
+            self.ai_needs_structure_child_tables_loaded = true;
+            // Initialize navigation context for drill_into_structure support
+            self.ai_current_category = self.ai_last_send_root_category.clone();
+            self.ai_current_sheet = self.ai_last_send_root_sheet.clone().unwrap_or_default();
             if matches!(
                 self.ai_mode,
                 AiModeState::Idle | AiModeState::Preparing | AiModeState::Submitting

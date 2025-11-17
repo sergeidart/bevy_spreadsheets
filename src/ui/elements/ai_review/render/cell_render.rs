@@ -11,11 +11,7 @@ pub fn render_review_original_cell(
     choice_opt: Option<ReviewChoice>,
     force_strikethrough: bool,
 ) {
-    let display = if original_value.trim().is_empty() {
-        "(empty)"
-    } else {
-        original_value
-    };
+    let display = original_value;
     let mut text = RichText::new(display);
     if force_strikethrough {
         text = text.strikethrough();

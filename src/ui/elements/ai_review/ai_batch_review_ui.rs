@@ -58,8 +58,8 @@ pub(crate) fn draw_ai_batch_review_panel(
     // Update review state flags
     update_review_state_flags(state);
 
-    // Draw header actions
-    let actions = draw_header_actions(ui, state, display_ctx.show_pending_structures);
+    // Draw header actions (now includes navigation back button support)
+    let actions = draw_header_actions(ui, state, display_ctx.show_pending_structures, registry);
 
     // Process accept all action
     if actions.accept_all {
@@ -84,7 +84,7 @@ pub(crate) fn draw_ai_batch_review_panel(
 
     // Get the active sheet grid for structure column access
     let active_sheet_grid = registry
-        .get_sheet(selected_category_clone, &display_ctx.active_sheet_name)
+        .get_sheet(&display_ctx.active_category, &display_ctx.active_sheet_name)
         .map(|sheet| &sheet.grid);
 
     // Wrap table in ScrollArea to ensure proper scrolling in all modes
@@ -127,7 +127,6 @@ pub(crate) fn draw_ai_batch_review_panel(
                         &mut header_row,
                         &display_ctx,
                         registry,
-                        selected_category_clone,
                     );
                 })
                 .body(|mut body| {
@@ -151,7 +150,7 @@ pub(crate) fn draw_ai_batch_review_panel(
 
                     // Get sheet metadata for column validators
                     let sheet_metadata = registry
-                        .get_sheet(selected_category_clone, &display_ctx.active_sheet_name)
+                        .get_sheet(&display_ctx.active_category, &display_ctx.active_sheet_name)
                         .and_then(|sheet| sheet.metadata.as_ref());
 
                     // Pre-fetch all linked column options
@@ -417,41 +416,23 @@ pub(crate) fn draw_ai_batch_review_panel(
                         }
                     }
 
-                    // Handle structure navigation click
+                    // Handle structure navigation click - drill into child table using new navigation system
                     if let Some((parent_row_idx, parent_new_row_idx, structure_path)) =
                         structure_nav_clicked
                     {
-                        // Find the structure entry to get root sheet information
-                        let structure_entry = state.ai_structure_reviews.iter().find(|sr| {
-                            match (parent_row_idx, parent_new_row_idx) {
-                                (Some(pr), None) => {
-                                    sr.parent_row_index == pr
-                                        && sr.parent_new_row_index.is_none()
-                                        && sr.structure_path == structure_path
-                                }
-                                (None, Some(pnr)) => {
-                                    sr.parent_new_row_index == Some(pnr)
-                                        && sr.structure_path == structure_path
-                                }
-                                _ => false,
-                            }
-                        });
-
-                        if let Some(entry) = structure_entry {
-                            // Save current top-level reviews before entering structure mode
-                            let saved_row_reviews = state.ai_row_reviews.clone();
-                            let saved_new_row_reviews = state.ai_new_row_reviews.clone();
-                            state.ai_structure_detail_context =
-                                Some(crate::ui::elements::editor::state::StructureDetailContext {
-                                    root_category: entry.root_category.clone(),
-                                    root_sheet: entry.root_sheet.clone(),
-                                    parent_row_index: parent_row_idx,
-                                    parent_new_row_index: parent_new_row_idx,
-                                    structure_path,
-                                    hydrated: false,
-                                    saved_row_reviews,
-                                    saved_new_row_reviews,
-                                });
+                        use crate::ui::elements::ai_review::navigation;
+                        
+                        // Determine the row index to drill from
+                        if let Some(row_idx) = parent_row_idx.or(parent_new_row_idx) {
+                            // Call drill_into_structure to set up navigation and load child reviews
+                            navigation::drill_into_structure(
+                                state,
+                                structure_path[0],  // column_index is first element of path
+                                row_idx,
+                                registry,
+                            );
+                        } else {
+                            warn!("Structure navigation clicked but no parent index available");
                         }
                     }
                 });

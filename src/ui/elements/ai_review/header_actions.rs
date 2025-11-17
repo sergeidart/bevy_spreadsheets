@@ -1,5 +1,6 @@
 // Header actions (Accept All / Decline All) extraction
 use crate::sheets::systems::ai_review::structure_persistence::persist_structure_detail_changes;
+use crate::sheets::resources::SheetRegistry;
 use crate::ui::elements::editor::state::EditorWindowState;
 use bevy_egui::egui::{self, Color32, RichText};
 
@@ -12,11 +13,12 @@ pub fn draw_header_actions(
     ui: &mut egui::Ui,
     state: &mut EditorWindowState,
     pending_structures: bool,
+    registry: &SheetRegistry,
 ) -> HeaderActionResult {
     let mut accept_all_clicked = false;
     let mut decline_all_clicked = false;
 
-    // Check for ESC key to exit structure detail view
+    // Check for ESC key to exit structure detail view OR navigation drill-down
     if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
         if let Some(ref detail_ctx) = state.ai_structure_detail_context.clone() {
             // Persist changes before exiting
@@ -25,12 +27,19 @@ pub fn draw_header_actions(
             state.ai_row_reviews = detail_ctx.saved_row_reviews.clone();
             state.ai_new_row_reviews = detail_ctx.saved_new_row_reviews.clone();
             state.ai_structure_detail_context = None;
+        } else if !state.ai_navigation_stack.is_empty() {
+            // Navigate back from child table drill-down
+            use crate::ui::elements::ai_review::navigation::navigate_back;
+            navigate_back(state, registry);
         }
     }
 
     ui.horizontal(|ui| {
-        // Show back button ONLY if in structure detail mode (drill-down from AI review)
-        if state.ai_structure_detail_context.is_some() {
+        // Show back button if in structure detail mode OR navigation drill-down
+        let in_navigation_drilldown = !state.ai_navigation_stack.is_empty();
+        let in_structure_detail = state.ai_structure_detail_context.is_some();
+        
+        if in_structure_detail || in_navigation_drilldown {
             if ui.button(RichText::new("◀ Back").strong()).clicked() {
                 if let Some(ref detail_ctx) = state.ai_structure_detail_context.clone() {
                     // Persist changes before exiting
@@ -38,11 +47,35 @@ pub fn draw_header_actions(
                     // Restore top-level reviews before exiting
                     state.ai_row_reviews = detail_ctx.saved_row_reviews.clone();
                     state.ai_new_row_reviews = detail_ctx.saved_new_row_reviews.clone();
+                    state.ai_structure_detail_context = None;
+                } else if in_navigation_drilldown {
+                    // Navigate back from child table drill-down
+                    use crate::ui::elements::ai_review::navigation::navigate_back;
+                    navigate_back(state, registry);
                 }
-                state.ai_structure_detail_context = None;
             }
             ui.add_space(8.0);
-            ui.label(RichText::new("AI Review - Structure Detail").heading());
+            
+            // Show appropriate title based on context
+            if in_structure_detail {
+                ui.label(RichText::new("AI Review - Structure Detail").heading());
+            } else if in_navigation_drilldown {
+                // Build breadcrumb trail for child table navigation
+                let mut breadcrumb = String::new();
+                for (idx, nav_ctx) in state.ai_navigation_stack.iter().enumerate() {
+                    if idx > 0 {
+                        breadcrumb.push_str(" › ");
+                    }
+                    breadcrumb.push_str(&nav_ctx.sheet_name);
+                    if let Some(ref display_name) = nav_ctx.parent_display_name {
+                        breadcrumb.push_str(&format!(" ({})", display_name));
+                    }
+                }
+                breadcrumb.push_str(" › ");
+                breadcrumb.push_str(&state.ai_current_sheet);
+                
+                ui.label(RichText::new(format!("AI Review - {}", breadcrumb)).heading());
+            }
         } else {
             // Regular review mode: simple header (virtual structures deprecated)
             ui.label(RichText::new("AI Review").heading());

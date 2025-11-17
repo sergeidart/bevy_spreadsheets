@@ -208,6 +208,7 @@ pub fn handle_structure_batch_result(
                     sheet,
                     state,
                     feedback_writer,
+                    registry,
                 );
             }
 
@@ -237,6 +238,7 @@ pub fn handle_structure_batch_result(
                 schema_len,
                 sheet,
                 state,
+                registry,
             );
 
             if let Some(raw) = &ev.raw_response {

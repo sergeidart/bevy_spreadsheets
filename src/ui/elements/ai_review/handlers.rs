@@ -167,48 +167,40 @@ pub fn process_existing_accept(
 
             // Apply ancestor overrides: virtual structures deprecated; skip this logic
 
-            // Write structure cells
-            // Include all non-rejected structures - use merged_rows if decided, ai_rows otherwise
+            // Write structure cells to CHILD TABLE database (not JSON in parent cell)
             let structure_entries = take_structure_entries_for_existing(state, rr.row_index);
-            info!(
-                "process_existing_accept: row_index={}, found {} structure entries",
-                rr.row_index,
-                structure_entries.len()
-            );
             for entry in structure_entries {
-                info!("Structure entry for row {}: decided={}, rejected={}, accepted={}, merged_rows.len()={}, ai_rows.len()={}", 
-                      rr.row_index, entry.decided, entry.rejected, entry.accepted, entry.merged_rows.len(), entry.ai_rows.len());
-
                 // Skip rejected structures
                 if entry.rejected {
-                    info!("Skipping rejected structure");
                     state.ai_structure_reviews.push(entry);
                     continue;
                 }
 
-                // Get the appropriate rows based on decision status
-                let rows_to_serialize = get_rows_to_serialize(&entry);
-
-                // Serialize rows to JSON using shared helper
-                info!(
-                    "Serializing structure: {} rows, schema_headers={:?}",
-                    rows_to_serialize.len(),
-                    entry.schema_headers
-                );
-                let json_string = serialize_structure_rows_to_json(rows_to_serialize, &entry.schema_headers);
-
-                let col_index = *entry.structure_path.first().unwrap_or(&0);
-                info!(
-                    "Writing structure to cell: row={}, col={}, json={}",
-                    entry.parent_row_index, col_index, json_string
-                );
-                cell_update_writer.write(UpdateCellEvent {
-                    category: selected_category.clone(),
-                    sheet_name: active_sheet_name.to_string(),
-                    row_index: entry.parent_row_index,
-                    col_index,
-                    new_value: json_string,
-                });
+                // For physical child tables: get child table name and write directly
+                if let Some(col_idx) = entry.structure_path.first() {
+                    if let Some(sheet) = _registry.get_sheet(selected_category, active_sheet_name) {
+                        if let Some(metadata) = &sheet.metadata {
+                            if let Some(column_def) = metadata.columns.get(*col_idx) {
+                                let child_table_name = format!("{}_{}", active_sheet_name, column_def.header);
+                                let rows_to_write = get_rows_to_serialize(&entry);
+                                
+                                // Write each row to child table database
+                                for (row_idx, row_data) in rows_to_write.iter().enumerate() {
+                                    // Skip technical columns (row_index=0, parent_key=1) when writing
+                                    for (col_idx, value) in row_data.iter().enumerate().skip(2) {
+                                        cell_update_writer.write(UpdateCellEvent {
+                                            category: selected_category.clone(),
+                                            sheet_name: child_table_name.clone(),
+                                            row_index: row_idx,
+                                            col_index: col_idx,
+                                            new_value: value.clone(),
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             state.ai_selected_rows.remove(&rr.row_index);

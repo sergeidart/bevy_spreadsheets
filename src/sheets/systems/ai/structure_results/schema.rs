@@ -6,47 +6,8 @@ use serde_json::Value as JsonValue;
 
 use crate::sheets::definitions::StructureFieldDefinition;
 
-/// Extract original nested structure rows for a structure path with depth > 1.
-/// Walks the JSON in the parent cell and collects rows from the nested array at the target depth.
-/// Falls back to a single empty row if traversal fails.
-///
-/// NOTE: Current implementation supports exactly one additional nested level (root -> nested field).
-/// Deeper paths will return a single empty row so the UI can still render a consistent preview.
-/// This is sufficient for restoring original previews where previously nested levels showed as (empty).
-pub fn extract_original_nested_structure_rows(
-    cell_value: &str,
-    structure_path: &[usize],
-    sheet: &crate::sheets::definitions::SheetGridData,
-    target_schema_fields: &[StructureFieldDefinition],
-    schema_len: usize,
-) -> Vec<Vec<String>> {
-    // If cell empty, return one blank row
-    let trimmed = cell_value.trim();
-    if trimmed.is_empty() {
-        return vec![vec![String::new(); schema_len]];
-    }
-
-    let Some(meta) = sheet.metadata.as_ref() else {
-        return vec![vec![String::new(); schema_len]];
-    };
-
-    // Parse the root JSON (array of objects expected for structure column)
-    let Ok(root_json) = serde_json::from_str::<JsonValue>(trimmed) else {
-        return vec![vec![String::new(); schema_len]];
-    };
-
-    // Helper to get schema vector for current level (after first column)
-    // We navigate using the indices in structure_path beyond root (which references sheet column itself)
-    let first_col_def = meta.columns.get(structure_path[0]);
-    let mut current_schema_opt = first_col_def.and_then(|c| c.structure_schema.as_ref());
-
-    // Collect arrays representing the current level's rows (start with the root array)
-    let mut current_level_arrays: Vec<&[JsonValue]> = Vec::new();
-    if let JsonValue::Array(arr) = &root_json {
-        current_level_arrays.push(arr.as_slice());
-    } else {
-        return vec![vec![String::new(); schema_len]];
-    }
+/// Parse structure rows from a JSON cell value.
+/// This is used during AI processing and migration, not for in-app usage.
 
     // Traverse each nested index except the final one: we need to arrive at the parent whose field holds the target array
     for (depth, &nested_idx) in structure_path.iter().enumerate().skip(1) {

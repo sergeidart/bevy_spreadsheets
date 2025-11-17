@@ -28,28 +28,36 @@ pub fn persist_structure_detail_changes(
             let mut merged = rr.original.clone();
             let mut diff_flags = vec![false; merged.len()];
             for (pos, &col_idx) in rr.non_structure_columns.iter().enumerate() {
-                    if let Some(choice) = rr.choices.get(pos) {
-                        // Skip parent_key column from being applied/considered as merged value
-                        if col_idx == 1 {
-                            continue;
-                        }
-                        match choice {
-                            ReviewChoice::AI => {
-                                if let (Some(ai_val), Some(slot)) = (rr.ai.get(pos), merged.get_mut(col_idx)) {
-                                    *slot = ai_val.clone();
-                                }
-                                diff_flags[col_idx] = true;
+                if let Some(choice) = rr.choices.get(pos) {
+                    // Skip parent_key column from being applied/considered as merged value
+                    if col_idx == 1 {
+                        continue;
+                    }
+                    // Defensive bounds check: some structure schemas may have fewer columns
+                    if col_idx >= merged.len() || col_idx >= diff_flags.len() {
+                        continue;
+                    }
+                    match choice {
+                        ReviewChoice::AI => {
+                            if let (Some(ai_val), Some(slot)) =
+                                (rr.ai.get(pos), merged.get_mut(col_idx))
+                            {
+                                *slot = ai_val.clone();
                             }
-                            ReviewChoice::Original => {
-                                // keep original; mark diff flag if original != ai for trace
-                                if let (Some(orig_val), Some(ai_val)) = (rr.original.get(pos), rr.ai.get(pos)) {
-                                    if orig_val != ai_val {
-                                        diff_flags[col_idx] = true;
-                                    }
+                            diff_flags[col_idx] = true;
+                        }
+                        ReviewChoice::Original => {
+                            // keep original; mark diff flag if original != ai for trace
+                            if let (Some(orig_val), Some(ai_val)) =
+                                (rr.original.get(pos), rr.ai.get(pos))
+                            {
+                                if orig_val != ai_val {
+                                    diff_flags[col_idx] = true;
                                 }
                             }
                         }
                     }
+                }
             }
             // Collect row-level actions injected via temporary vectors on context (planned extension). For now detect button presses inline.
             // Pseudocode placeholder hooking into existing row render calls if they push events.
@@ -72,6 +80,9 @@ pub fn persist_structure_detail_changes(
             for (pos, &col_idx) in nr.non_structure_columns.iter().enumerate() {
                 if col_idx == 1 {
                     // skip parent_key: keep merged value as-is (should be original or already set)
+                    continue;
+                }
+                if col_idx >= merged.len() || col_idx >= diff_flags.len() {
                     continue;
                 }
                 if let (Some(ai_val), Some(slot)) = (nr.ai.get(pos), merged.get_mut(col_idx)) {
@@ -107,6 +118,9 @@ pub fn structure_row_apply_existing(
             if let Some(choice) = rr.choices.get(pos) {
                 // Skip parent_key (col 1) when applying merges/accepts
                 if col_idx == 1 {
+                    continue;
+                }
+                if col_idx >= entry.merged_rows[row_idx].len() {
                     continue;
                 }
                 if matches!(choice, ReviewChoice::AI) {
@@ -158,6 +172,9 @@ pub fn structure_row_apply_new(
             for (pos, &col_idx) in nr.non_structure_columns.iter().enumerate() {
                 // Skip parent_key column (non-editable)
                 if col_idx == 1 {
+                    continue;
+                }
+                if col_idx >= merged.len() {
                     continue;
                 }
                 if let (Some(ai_val), Some(slot)) = (nr.ai.get(pos), merged.get_mut(col_idx)) {

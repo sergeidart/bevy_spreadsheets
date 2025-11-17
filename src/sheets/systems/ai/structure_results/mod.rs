@@ -1,11 +1,10 @@
 // src/sheets/systems/ai/structure_results/mod.rs
 // Main assembly functions for processing structure batch results
-// Split into submodules: builder, cache, processor, schema
+// Split into submodules: builder, cache, processor
 
 mod builder;
 mod cache;
 mod processor;
-mod schema;
 
 use bevy::prelude::*;
 
@@ -22,7 +21,6 @@ use super::utils::parse_structure_rows_from_cell;
 use builder::build_parent_row;
 use cache::populate_parent_row_cache;
 use processor::process_structure_suggestion_row;
-use schema::extract_original_nested_structure_rows;
 
 /// Process a single parent row's structure partition results
 pub fn process_structure_partition(
@@ -40,6 +38,7 @@ pub fn process_structure_partition(
     sheet: &SheetGridData,
     state: &mut EditorWindowState,
     feedback_writer: &mut EventWriter<SheetOperationFeedback>,
+    registry: &crate::sheets::resources::SheetRegistry,
 ) {
     let new_row_context = state
         .ai_structure_new_row_contexts
@@ -64,9 +63,15 @@ pub fn process_structure_partition(
         schema_fields.len(),
     );
 
+    // Get the ACTUAL database row_index from the parent row (column 0)
+    // This is what's stored in child tables' parent_key column
+    let actual_parent_db_row_index: usize = parent_row.get(0)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+
     // Fix: For merge rows, use the matched existing row's structure data
     // For new rows, use the parent_row which now includes structure data from full_ai_row
-    let cell_value = if let Some(matched_idx) = duplicate_match_row {
+    let _cell_value = if let Some(matched_idx) = duplicate_match_row {
         sheet
             .grid
             .get(matched_idx)
@@ -80,30 +85,60 @@ pub fn process_structure_partition(
     };
 
     // --- Build original rows ---
-    // For top-level structures we can parse the JSON cell directly.
-    // For nested structures (structure_path len > 1) we need to traverse into the nested arrays.
+    // For child structure tables (real tables with parent_key), load actual child rows
     let mut original_rows = if structure_path.len() == 1 {
-        let mut rows = parse_structure_rows_from_cell(&cell_value, schema_fields);
-        if rows.is_empty() {
-            if !cell_value.is_empty() && cell_value != "[]" {
-                warn!(
-                    "Structure parse returned empty rows for non-empty cell (parent_row={}, cell_len={}): {:?}",
-                    parent_row_index,
-                    cell_value.len(),
-                    &cell_value.chars().take(100).collect::<String>()
-                );
+        // Compute child table name
+        let column_header = sheet.metadata.as_ref()
+            .and_then(|m| m.columns.get(column_index))
+            .map(|c| c.header.as_str())
+            .unwrap_or("");
+        let child_table_name = format!("{}_{}", root_sheet, column_header);
+        
+        // Try to get child table from registry
+        if let Some(child_sheet) = registry.get_sheet(root_category, &child_table_name) {
+            // This is a real child table - load actual rows filtered by parent_key
+            info!(
+                "Loading child table rows from {} for actual_parent_db_row_index={} (review_index={}), child_sheet.grid.len()={}, schema_len={}",
+                child_table_name, actual_parent_db_row_index, parent_row_index, child_sheet.grid.len(), schema_len
+            );
+            
+            let mut rows: Vec<Vec<String>> = Vec::new();
+            
+            // Filter child rows by parent_key (column index 1) matching actual database row_index
+            // Skip first 2 technical columns (row_index=0, parent_key=1)
+            // and take only the data columns that match the schema
+            for (_idx, child_row) in child_sheet.grid.iter().enumerate() {
+                if let Some(parent_key_str) = child_row.get(1) {
+                    if let Ok(parent_key_val) = parent_key_str.parse::<usize>() {
+                        if parent_key_val == actual_parent_db_row_index {
+                            // Extract only data columns (skip row_index and parent_key)
+                            let data_columns: Vec<String> = child_row
+                                .iter()
+                                .skip(2)  // Skip row_index and parent_key
+                                .take(schema_len)  // Take only schema-defined columns
+                                .cloned()
+                                .collect();
+                            rows.push(data_columns);
+                        }
+                    }
+                }
             }
-            rows.push(vec![String::new(); schema_len]);
+            
+            info!("  Found {} child rows matching parent_key={}", rows.len(), actual_parent_db_row_index);
+            
+            // Ensure we have at least one row for the structure
+            if rows.is_empty() {
+                rows.push(vec![String::new(); schema_len]);
+            }
+            rows
+        } else {
+            warn!("Child table {} not found in registry (this shouldn't happen for structure columns)", child_table_name);
+            vec![vec![String::new(); schema_len]]
         }
-        rows
     } else {
-        extract_original_nested_structure_rows(
-            &cell_value,
-            structure_path,
-            sheet,
-            schema_fields,
-            schema_len,
-        )
+        // Nested structures not fully supported yet - use empty row
+        warn!("Nested structure path detected (depth={}), not yet fully supported", structure_path.len());
+        vec![vec![String::new(); schema_len]]
     };
 
     // Normalize row lengths
@@ -274,6 +309,7 @@ pub fn handle_structure_error(
     schema_len: usize,
     sheet: &SheetGridData,
     state: &mut EditorWindowState,
+    _registry: &crate::sheets::resources::SheetRegistry,
 ) {
     for parent_row_index in target_rows.iter() {
         let new_row_context = state

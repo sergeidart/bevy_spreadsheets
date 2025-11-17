@@ -154,7 +154,8 @@ pub fn reload_sheet_cache_from_db(
 
 /// Proactively load target sheets for all linked columns in the current sheet
 /// This ensures validation and dropdowns work immediately without requiring navigation
-fn load_linked_target_sheets(
+/// Load linked target sheets and structure child tables
+pub fn load_linked_target_sheets(
     _state: &mut EditorWindowState,
     registry: &mut SheetRegistry,
     daemon_client: &DaemonClient,
@@ -163,19 +164,23 @@ fn load_linked_target_sheets(
 ) {
     use crate::sheets::definitions::ColumnValidator;
     
-    // Get current sheet metadata to find linked columns
-    let linked_targets = if let Some(sheet) = registry.get_sheet(category, current_sheet_name) {
+    // Get current sheet metadata to find linked columns AND structure child tables
+    let target_sheets = if let Some(sheet) = registry.get_sheet(category, current_sheet_name) {
         if let Some(metadata) = &sheet.metadata {
-            // Collect all unique target sheets from linked columns
-            metadata.columns.iter()
-                .filter_map(|col| {
-                    if let Some(ColumnValidator::Linked { target_sheet_name, .. }) = &col.validator {
-                        Some(target_sheet_name.clone())
-                    } else {
-                        None
-                    }
-                })
-                .collect::<std::collections::HashSet<_>>()
+            let mut targets = std::collections::HashSet::new();
+            
+            // Collect linked column target sheets
+            for col in &metadata.columns {
+                if let Some(ColumnValidator::Linked { target_sheet_name, .. }) = &col.validator {
+                    targets.insert(target_sheet_name.clone());
+                }
+                // Collect structure child tables
+                else if matches!(col.validator, Some(ColumnValidator::Structure)) {
+                    let child_table_name = format!("{}_{}", current_sheet_name, col.header);
+                    targets.insert(child_table_name);
+                }
+            }
+            targets
         } else {
             std::collections::HashSet::new()
         }
@@ -183,12 +188,12 @@ fn load_linked_target_sheets(
         std::collections::HashSet::new()
     };
     
-    if linked_targets.is_empty() {
+    if target_sheets.is_empty() {
         return;
     }
     
-    debug!("Sheet '{}' has {} linked target sheet(s) to load: {:?}", 
-           current_sheet_name, linked_targets.len(), linked_targets);
+    debug!("Sheet '{}' has {} linked/structure target sheet(s) to load: {:?}", 
+           current_sheet_name, target_sheets.len(), target_sheets);
     
     // Load each target sheet if not already loaded or is a stub
     let Some(cat_str) = category.as_ref() else { return; };
@@ -200,7 +205,7 @@ fn load_linked_target_sheets(
         return;
     }
     
-    for target_sheet_name in linked_targets {
+    for target_sheet_name in target_sheets {
         // Check if target sheet needs loading (doesn't exist or is a stub)
         let needs_load = registry.get_sheet(category, &target_sheet_name)
             .map(|sheet| sheet.grid.is_empty())

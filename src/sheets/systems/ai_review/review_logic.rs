@@ -7,7 +7,7 @@ use crate::ui::elements::ai_review::handlers::{
     process_existing_accept, process_new_accept,
 };
 use crate::ui::elements::ai_review::structure_review_helpers::{
-    build_structure_ancestor_keys, build_structure_columns, convert_structure_to_reviews,
+    build_structure_columns,
 };
 use crate::ui::elements::editor::state::{EditorWindowState, StructureDetailContext};
 use bevy::prelude::*;
@@ -18,43 +18,11 @@ pub enum ColumnEntry {
     Structure(usize), // Original column index from sheet metadata
 }
 
-/// Hydrates the structure detail context by loading structure-specific reviews
-pub fn hydrate_structure_detail_if_needed(state: &mut EditorWindowState) {
-    if let Some(detail_ctx) = &mut state.ai_structure_detail_context {
-        if !detail_ctx.hydrated {
-            let structure_entry = state
-                .ai_structure_reviews
-                .iter()
-                .find(
-                    |sr| match (sr.parent_new_row_index, detail_ctx.parent_new_row_index) {
-                        (Some(a), Some(b)) if a == b => {
-                            sr.structure_path == detail_ctx.structure_path
-                        }
-                        (None, None) => {
-                            sr.parent_row_index
-                                == detail_ctx.parent_row_index.unwrap_or(usize::MAX)
-                                && sr.structure_path == detail_ctx.structure_path
-                        }
-                        _ => false,
-                    },
-                )
-                .cloned();
-            if let Some(entry) = structure_entry {
-                // Restore the saved top-level reviews first (in case we went back and forth)
-                state.ai_row_reviews = detail_ctx.saved_row_reviews.clone();
-                state.ai_new_row_reviews = detail_ctx.saved_new_row_reviews.clone();
-                // Now replace with structure-specific reviews
-                let (temp_row_reviews, temp_new_row_reviews) =
-                    convert_structure_to_reviews(&entry);
-                state.ai_row_reviews = temp_row_reviews;
-                state.ai_new_row_reviews = temp_new_row_reviews;
-                detail_ctx.hydrated = true;
-            } else {
-                state.ai_structure_detail_context = None; // entry missing
-            }
-        }
-    }
-}
+/// NOTE: Legacy structure detail hydration removed.
+/// The AI review now always renders a unified table and
+/// uses `ai_structure_detail_context` only as a filter
+/// when preparing row plans and display context.
+pub fn hydrate_structure_detail_if_needed(_state: &mut EditorWindowState) {}
 
 /// Checks if the review should auto-exit due to no remaining items
 pub fn should_auto_exit(state: &EditorWindowState, in_structure_mode: bool) -> bool {
@@ -73,17 +41,17 @@ pub fn should_auto_exit(state: &EditorWindowState, in_structure_mode: bool) -> b
 pub fn resolve_active_sheet_name(
     state: &mut EditorWindowState,
     selected_sheet_name_clone: &Option<String>,
-    in_structure_mode: bool,
+    _in_structure_mode: bool,
 ) -> Option<String> {
+    // If we're in navigation drill-down mode (child table view), use ai_current_sheet
+    if !state.ai_navigation_stack.is_empty() {
+        return Some(state.ai_current_sheet.clone());
+    }
+    
+    // Otherwise use the selected sheet
     if let Some(s) = selected_sheet_name_clone {
         Some(s.clone())
     } else {
-        if in_structure_mode {
-            if let Some(ref detail_ctx) = state.ai_structure_detail_context {
-                state.ai_row_reviews = detail_ctx.saved_row_reviews.clone();
-                state.ai_new_row_reviews = detail_ctx.saved_new_row_reviews.clone();
-            }
-        }
         None
     }
 }
@@ -117,10 +85,50 @@ pub fn build_merged_columns(
     registry: &SheetRegistry,
 ) -> (Vec<ColumnEntry>, Vec<crate::sheets::definitions::StructureFieldDefinition>) {
     if in_structure_mode {
-        // In structure detail mode: build columns from structure schema
+        // In structure detail mode OR navigation drill-down: build columns from child schema
+        let detail_context = if let Some(ctx) = &state.ai_structure_detail_context {
+            // Use existing structure detail context
+            Some(ctx.clone())
+        } else if !state.ai_navigation_stack.is_empty() {
+            // We're in navigation drill-down - build virtual context from navigation stack
+            let parent_ctx = state.ai_navigation_stack.last().unwrap();
+            
+            // Extract column_idx from child sheet name (format: "ParentSheet_ColumnName")
+            // Parse the current sheet name to determine which structure column we drilled into
+            let column_idx = if let Some(parent_sheet) = registry.get_sheet(&parent_ctx.category, &parent_ctx.sheet_name) {
+                parent_sheet.metadata.as_ref().and_then(|meta| {
+                    // Find column by reconstructing child table name pattern
+                    meta.columns.iter().enumerate().find(|(_, col_def)| {
+                        let expected_child_name = format!("{}_{}", parent_ctx.sheet_name, col_def.header);
+                        expected_child_name == active_sheet_name
+                    }).map(|(idx, _)| idx)
+                })
+            } else {
+                None
+            };
+            
+            if let Some(col_idx) = column_idx {
+                Some(StructureDetailContext {
+                    root_category: parent_ctx.category.clone(),
+                    root_sheet: parent_ctx.sheet_name.clone(),
+                    parent_row_index: parent_ctx.parent_row_index,
+                    parent_new_row_index: None,
+                    structure_path: vec![col_idx],
+                    hydrated: true,
+                    saved_row_reviews: Vec::new(),
+                    saved_new_row_reviews: Vec::new(),
+                })
+            } else {
+                warn!("Could not determine column index for navigation drill-down into '{}'", active_sheet_name);
+                None
+            }
+        } else {
+            None
+        };
+        
         build_structure_columns(
             union_cols,
-            &state.ai_structure_detail_context,
+            &detail_context,
             false,
             "",
             selected_category_clone,
@@ -185,36 +193,50 @@ pub fn build_merged_columns(
 }
 
 /// Gathers ancestor key columns for display
+/// For navigation drill-down mode, builds from navigation stack
+/// For legacy structure detail mode, returns empty (deprecated)
 pub fn gather_ancestor_key_columns(
     state: &EditorWindowState,
     in_structure_mode: bool,
-    _active_sheet_name: &str,
+    active_sheet_name: &str,
     selected_category_clone: &Option<String>,
     registry: &SheetRegistry,
 ) -> Vec<(String, String)> {
-    let mut ancestor_key_columns: Vec<(String, String)> = Vec::new();
-
     if in_structure_mode {
-        if let Some(ref detail_ctx) = state.ai_structure_detail_context {
-            ancestor_key_columns = build_structure_ancestor_keys(
-                detail_ctx,
-                state,
-                selected_category_clone,
-                registry,
-                &detail_ctx.saved_row_reviews,
-                &detail_ctx.saved_new_row_reviews,
-            );
+        // Navigation drill-down mode: build ancestor keys from navigation stack
+        if !state.ai_navigation_stack.is_empty() {
+            // We're in a child table - show parent_key column as ancestor
+            let parent_ctx = state.ai_navigation_stack.last().unwrap();
+            
+            // Get parent_key display value from cached parent display name
+            let parent_key_value = parent_ctx.parent_display_name.clone()
+                .unwrap_or_else(|| "?".to_string());
+            
+            // Get child sheet metadata to get parent_key column header
+            if let Some(child_sheet) = registry.get_sheet(selected_category_clone, active_sheet_name) {
+                if let Some(metadata) = &child_sheet.metadata {
+                    // parent_key is always at column index 1 in structure tables
+                    if let Some(col_def) = metadata.columns.get(1) {
+                        return vec![(col_def.header.clone(), parent_key_value)];
+                    }
+                }
+            }
+            
+            // Fallback
+            return vec![("parent_key".to_string(), parent_key_value)];
         }
+        
+        // Old structure detail mode - deprecated, returns empty
+        Vec::new()
     } else {
         // Fallback: if we have stored context prefixes for the current reviews, use them
         if let Some(rr) = state.ai_row_reviews.first() {
             if let Some(pairs) = state.ai_context_prefix_by_row.get(&rr.row_index) {
-                ancestor_key_columns = pairs.clone();
+                return pairs.clone();
             }
         }
+        Vec::new()
     }
-
-    ancestor_key_columns
 }
 
 /// Updates pending merge and structure state flags
@@ -234,12 +256,15 @@ pub fn has_undecided_structures(state: &EditorWindowState) -> bool {
 }
 
 /// Processes accept all action in structure mode
+/// Marks the entry as accepted - actual database writes handled by base-level accept logic
 pub fn process_accept_all_structure_mode(
     state: &mut EditorWindowState,
     detail_ctx: &StructureDetailContext,
 ) {
     // Persist respects user's cell-by-cell choices (Original vs AI)
     persist_structure_detail_changes(state, detail_ctx);
+
+    // Mark the entry as accepted
     if let Some(entry) = state.ai_structure_reviews.iter_mut().find(|sr| {
         match (sr.parent_new_row_index, detail_ctx.parent_new_row_index) {
             (Some(a), Some(b)) if a == b => {
@@ -252,15 +277,13 @@ pub fn process_accept_all_structure_mode(
             _ => false,
         }
     }) {
-        // Mark as accepted and decided, but don't override has_changes - it was calculated by persist_structure_detail_changes
         entry.accepted = true;
         entry.rejected = false;
         entry.decided = true;
     }
-    // Restore top-level reviews
-    state.ai_row_reviews = detail_ctx.saved_row_reviews.clone();
-    state.ai_new_row_reviews = detail_ctx.saved_new_row_reviews.clone();
-    state.ai_structure_detail_context = None; // back out
+    
+    // Clear detail context; unified table remains in place
+    state.ai_structure_detail_context = None;
 }
 
 /// Processes accept all action in normal mode
@@ -319,9 +342,6 @@ pub fn process_decline_all_structure_mode(state: &mut EditorWindowState) {
             entry.rejected = true;
             entry.decided = true;
         }
-        // Restore top-level reviews
-        state.ai_row_reviews = detail_ctx.saved_row_reviews.clone();
-        state.ai_new_row_reviews = detail_ctx.saved_new_row_reviews.clone();
     }
     state.ai_structure_detail_context = None;
 }

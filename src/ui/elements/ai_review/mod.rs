@@ -5,6 +5,7 @@ pub mod ai_context_utils;
 pub mod ai_control_left_panel; // new split left section
 pub mod ai_group_panel; // new group schema management UI
 pub mod ai_panel; // new orchestrator replacing old ai_control_panel
+pub mod navigation; // Navigation logic for drilling into child tables
 pub mod structure_review_helpers; // Helper functions for structure review conversion
                                   // New modularized components
 pub mod render {

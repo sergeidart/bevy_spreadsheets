@@ -7,6 +7,7 @@ use crate::ui::elements::editor::state::EditorWindowState;
 pub struct ReviewDisplayContext {
     pub in_structure_mode: bool,
     pub active_sheet_name: String,
+    pub active_category: Option<String>,
     pub merged_columns: Vec<ColumnEntry>,
     pub structure_schema: Vec<StructureFieldDefinition>,
     pub ancestor_key_columns: Vec<(String, String)>,
@@ -27,14 +28,22 @@ pub fn prepare_display_context(
 
     // Detect which of the three AI review modes we're in
     let in_structure_detail_mode = state.ai_structure_detail_context.is_some();
+    let in_navigation_drilldown = !state.ai_navigation_stack.is_empty();
     let in_virtual_structure_review = false; // Virtual structure system deprecated
-    let in_structure_mode = in_structure_detail_mode;
+    let in_structure_mode = in_structure_detail_mode || in_navigation_drilldown;
 
-    // Resolve active sheet name
+    // Resolve active sheet name (considers navigation drill-down)
     let Some(active_sheet_name) =
         resolve_active_sheet_name(state, selected_sheet_name_clone, in_structure_mode)
     else {
         return None;
+    };
+
+    // Resolve active category (use ai_current_category when in navigation drill-down)
+    let active_category = if !state.ai_navigation_stack.is_empty() {
+        &state.ai_current_category
+    } else {
+        selected_category_clone
     };
 
     // Build column lists
@@ -45,7 +54,7 @@ pub fn prepare_display_context(
         in_structure_mode,
         in_virtual_structure_review,
         &active_sheet_name,
-        selected_category_clone,
+        active_category,
         registry,
     );
 
@@ -54,7 +63,7 @@ pub fn prepare_display_context(
         state,
         in_structure_mode,
         &active_sheet_name,
-        selected_category_clone,
+        active_category,
         registry,
     );
 
@@ -65,6 +74,7 @@ pub fn prepare_display_context(
     Some(ReviewDisplayContext {
         in_structure_mode,
         active_sheet_name,
+        active_category: active_category.clone(),
         merged_columns,
         structure_schema,
         ancestor_key_columns,

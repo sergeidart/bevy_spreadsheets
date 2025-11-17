@@ -1,6 +1,6 @@
 use bevy_egui::egui::Color32;
 
-use crate::sheets::systems::logic::{generate_structure_preview, generate_structure_preview_from_rows};
+use crate::sheets::systems::logic::{generate_structure_preview, generate_structure_preview_from_rows_with_headers};
 use crate::sheets::systems::ai_review::review_logic::ColumnEntry;
 use crate::ui::elements::editor::state::{
     EditorWindowState, ReviewChoice, StructureDetailContext, StructureReviewEntry,
@@ -15,7 +15,6 @@ use super::context::{
 #[derive(Debug, Clone)]
 pub struct StructurePreviewResult {
     pub preview: String,
-    pub parse_failed: bool,
     pub is_ai_added: bool,
 }
 
@@ -53,38 +52,41 @@ fn get_original_structure_preview_from_cache(
                 });
 
                 if let Some(sr) = sr_opt {
-                    let preview = generate_structure_preview_from_rows(&sr.original_rows);
+                    // Use schema_headers to properly skip technical columns
+                    // StructureReviewEntry rows don't include technical columns, so headers won't start with row_index/parent_key
+                    let preview = generate_structure_preview_from_rows_with_headers(
+                        &sr.original_rows,
+                        Some(&sr.schema_headers),
+                    );
+                    
                     if preview.is_empty() {
                         if let Some(new_idx) = parent_new_row_index {
                             if let Some(nr) = state.ai_new_row_reviews.get(new_idx) {
                                 if nr.duplicate_match_row.is_none() {
                                     return StructurePreviewResult {
                                         preview: String::new(),
-                                        parse_failed: false,
                                         is_ai_added: true,
                                     };
                                 }
                             }
                         }
+                        // Return empty string instead of "(empty)" for truly empty content
                         return StructurePreviewResult {
-                            preview: "(empty)".to_string(),
-                            parse_failed: false,
+                            preview: String::new(),
                             is_ai_added: false,
                         };
                     }
 
                     return StructurePreviewResult {
                         preview,
-                        parse_failed: false,
                         is_ai_added: false,
                     };
                 }
             }
 
-            let (preview, parse_failed) = generate_structure_preview(cell);
+            let (preview, _parse_failed) = generate_structure_preview(cell);
             return StructurePreviewResult {
                 preview,
-                parse_failed,
                 is_ai_added: false,
             };
         }
@@ -95,7 +97,6 @@ fn get_original_structure_preview_from_cache(
             if nr.duplicate_match_row.is_none() {
                 return StructurePreviewResult {
                     preview: "(AI added)".to_string(),
-                    parse_failed: false,
                     is_ai_added: true,
                 };
             }
@@ -104,7 +105,6 @@ fn get_original_structure_preview_from_cache(
 
     StructurePreviewResult {
         preview: "(no cache)".to_string(),
-        parse_failed: false,
         is_ai_added: false,
     }
 }
@@ -122,6 +122,7 @@ pub struct OriginalDataCellPlan {
     pub show_toggle: bool,
     pub strike_ai_override: bool,
     pub is_key_column: bool,
+    pub is_parent_key: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -155,18 +156,12 @@ fn map_structure_preview_to_cell(result: StructurePreviewResult) -> StructurePre
             text: "(AI added)".to_string(),
             color: Some(Color32::LIGHT_BLUE),
         }
-    } else if result.parse_failed {
-        StructurePreviewCell {
-            text: "(parse err)".to_string(),
-            color: Some(Color32::from_rgb(220, 120, 120)),
-        }
     } else {
-        let text = if result.preview.is_empty() {
-            "(empty)".to_string()
-        } else {
-            result.preview
-        };
-        StructurePreviewCell { text, color: None }
+        // Show empty string instead of "(empty)" for truly empty original content
+        StructurePreviewCell { 
+            text: result.preview,
+            color: None 
+        }
     }
 }
 
@@ -187,6 +182,15 @@ pub fn prepare_original_preview_plan(
                 Some(rr.row_index),
                 None,
             );
+
+            // Calculate offset: In navigation drill-down (detail_ctx.is_some()), arrays have row_index and parent_key prepended
+            // So array structure is: [row_index, parent_key, data...]
+            // non_structure_columns refers to metadata columns (e.g., [1, 2] for parent_key and Tags)
+            // But array indices are [0, 1, 2] with row_index at index 0
+            // When we find a column's position in non_structure_columns, we need to add 1 to account for row_index
+            // At parent level (detail_ctx.is_none()), arrays have NO prepending, so no offset needed
+            let in_navigation_drilldown = detail_ctx.is_some();
+            let needs_row_index_offset = in_navigation_drilldown;
 
             let mut columns = Vec::with_capacity(merged_columns.len());
             for entry in merged_columns {
@@ -215,14 +219,23 @@ pub fn prepare_original_preview_plan(
                         {
                             // Check if this is a key column (first column in the row)
                             let is_key = *actual_col == 0;
+                            // Check if this is a parent_key column (column 1 in structure tables)
+                            let is_parent_key = detail_ctx.is_some() && *actual_col == 1;
+                            // If in navigation drill-down, arrays have row_index at [0], so add 1 to position
+                            let adjusted_pos = if needs_row_index_offset {
+                                pos + 1
+                            } else {
+                                pos
+                            };
                             columns.push((
                                 *entry,
                                 OriginalPreviewCellPlan::Data(OriginalDataCellPlan {
                                     actual_col: *actual_col,
-                                    position: pos,
+                                    position: adjusted_pos,
                                     show_toggle: true,
                                     strike_ai_override: false,
                                     is_key_column: is_key,
+                                    is_parent_key,
                                 }),
                             ));
                         } else {
@@ -246,6 +259,10 @@ pub fn prepare_original_preview_plan(
                 Some(idx),
             );
 
+            // Check if in navigation drill-down (detail_ctx.is_some() means we're viewing child table)
+            let in_navigation_drilldown = detail_ctx.is_some();
+            let needs_row_index_offset = in_navigation_drilldown;
+
             let mut columns = Vec::with_capacity(merged_columns.len());
             let mut label_drawn = false;
             for entry in merged_columns {
@@ -260,19 +277,26 @@ pub fn prepare_original_preview_plan(
                         ));
                     }
                     ColumnEntry::Regular(actual_col) => {
-                        let is_parent_key = is_parent_key_column(*actual_col);
+                        let is_parent_key = is_parent_key_column(*actual_col, detail_ctx);
                         
                         if is_parent_key {
                             // For parent_key column, create a Data plan so checkbox can render
                             if let Some(pos) = nr.non_structure_columns.iter().position(|c| c == actual_col) {
+                                // If in navigation drill-down, arrays have row_index at [0], so add 1 to position
+                                let adjusted_pos = if needs_row_index_offset {
+                                    pos + 1
+                                } else {
+                                    pos
+                                };
                                 columns.push((
                                     *entry,
                                     OriginalPreviewCellPlan::Data(OriginalDataCellPlan {
                                         actual_col: *actual_col,
-                                        position: pos,
+                                        position: adjusted_pos,
                                         show_toggle: false,
                                         strike_ai_override: false,
                                         is_key_column: false,
+                                        is_parent_key: true,
                                     }),
                                 ));
                             } else {
@@ -316,6 +340,10 @@ pub fn prepare_original_preview_plan(
                 )
             });
 
+            // Check if in navigation drill-down (detail_ctx.is_some() means we're viewing child table)
+            let in_navigation_drilldown = detail_ctx.is_some();
+            let needs_row_index_offset = in_navigation_drilldown;
+
             let treat_as_regular = !nr.merge_decided || nr.merge_selected;
             let mut columns = Vec::with_capacity(merged_columns.len());
             for entry in merged_columns {
@@ -343,7 +371,7 @@ pub fn prepare_original_preview_plan(
                                 .iter()
                                 .position(|c| c == actual_col)
                             {
-                                let is_parent_key = is_parent_key_column(*actual_col);
+                                let is_parent_key = is_parent_key_column(*actual_col, detail_ctx);
                                 if is_parent_key {
                                     // Don't show parent_key for original column preview during merge
                                     // (it will be shown inside AI row only)
@@ -360,14 +388,21 @@ pub fn prepare_original_preview_plan(
                                         );
                                     // Check if this is a key column (first column in the row)
                                     let is_key = *actual_col == 0;
+                                    // If in navigation drill-down, arrays have row_index at [0], so add 1 to position
+                                    let adjusted_pos = if needs_row_index_offset {
+                                        pos + 1
+                                    } else {
+                                        pos
+                                    };
                                     columns.push((
                                         *entry,
                                         OriginalPreviewCellPlan::Data(OriginalDataCellPlan {
                                             actual_col: *actual_col,
-                                            position: pos,
+                                            position: adjusted_pos,
                                             show_toggle: nr.merge_decided && nr.merge_selected,
                                             strike_ai_override: strike,
                                             is_key_column: is_key,
+                                            is_parent_key: false,
                                         }),
                                     ));
                                 }

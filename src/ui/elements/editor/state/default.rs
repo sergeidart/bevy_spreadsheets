@@ -57,6 +57,13 @@ impl Default for EditorWindowState {
             ai_general_rule_input: String::new(),
             ai_structure_detail_context: None,
 
+            // NEW: Navigation-based AI review
+            ai_navigation_stack: Vec::new(),
+            ai_current_sheet: String::new(),
+            ai_current_category: None,
+            ai_parent_filter: None,
+            ai_pending_structure_drilldowns: HashMap::new(),
+
             ai_call_log: Vec::new(),
             ai_raw_output_display: String::new(),
             ai_output_panel_visible: false,
@@ -82,6 +89,7 @@ impl Default for EditorWindowState {
             ai_waiting_for_structure_results: false,
             ai_structure_generation_counter: 0,
             ai_structure_active_generation: 0,
+            ai_needs_structure_child_tables_loaded: false,
             ai_total_tasks: 0,
             ai_completed_tasks: 0,
             show_settings_popup: false,

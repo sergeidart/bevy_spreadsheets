@@ -9,7 +9,6 @@ pub(crate) fn render_table_headers(
     header_row: &mut egui_extras::TableRow,
     display_ctx: &ReviewDisplayContext,
     registry: &SheetRegistry,
-    selected_category_clone: &Option<String>,
 ) {
     // First column: Action/Status header
     header_row.col(|ui| {
@@ -35,7 +34,7 @@ pub(crate) fn render_table_headers(
 
     // Regular and structure columns
     let sheet_metadata = registry
-        .get_sheet(selected_category_clone, &display_ctx.active_sheet_name)
+        .get_sheet(&display_ctx.active_category, &display_ctx.active_sheet_name)
         .and_then(|sheet| sheet.metadata.as_ref());
 
     for col_entry in &display_ctx.merged_columns {
@@ -71,9 +70,12 @@ fn get_header_text<'a>(
         ColumnEntry::Regular(col_idx) => {
             if display_ctx.in_structure_mode {
                 // In structure mode, use structure schema
+                // col_idx is full grid index (0, 1, 2, 3...)
+                // structure_schema skips row_index(0) and parent_key(1), so subtract 2
+                let schema_idx = col_idx.saturating_sub(2);
                 display_ctx
                     .structure_schema
-                    .get(*col_idx)
+                    .get(schema_idx)
                     .map(|field| field.header.as_str())
                     .unwrap_or("?")
             } else {
@@ -87,9 +89,12 @@ fn get_header_text<'a>(
         ColumnEntry::Structure(col_idx) => {
             if display_ctx.in_structure_mode {
                 // In structure mode, use structure schema
+                // col_idx is full grid index (0, 1, 2, 3...)
+                // structure_schema skips row_index(0) and parent_key(1), so subtract 2
+                let schema_idx = col_idx.saturating_sub(2);
                 display_ctx
                     .structure_schema
-                    .get(*col_idx)
+                    .get(schema_idx)
                     .map(|field| field.header.as_str())
                     .unwrap_or("Structure")
             } else {

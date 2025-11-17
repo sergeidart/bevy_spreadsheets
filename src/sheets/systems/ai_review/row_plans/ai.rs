@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use bevy_egui::egui::Color32;
 
-use crate::sheets::systems::logic::generate_structure_preview_from_rows;
+use crate::sheets::systems::logic::structure_preview_logic::generate_structure_preview_from_rows_with_headers;
 use crate::sheets::systems::ai_review::review_logic::ColumnEntry;
 use crate::ui::elements::editor::state::{
     EditorWindowState, StructureDetailContext, StructureReviewEntry,
@@ -82,13 +82,14 @@ fn build_structure_button_plan(
     parent_row_index: Option<usize>,
     parent_new_row_index: Option<usize>,
 ) -> StructureButtonPlan {
-    let preview = get_structure_preview_rows(sr);
-    let preview = generate_structure_preview_from_rows(preview);
-    let mut text = if preview.is_empty() {
-        "(empty)".to_string()
-    } else {
-        preview
-    };
+    let preview_rows = get_structure_preview_rows(sr);
+    // Use schema_headers to properly skip technical columns
+    // StructureReviewEntry rows don't include technical columns, so headers won't start with row_index/parent_key
+    let preview = generate_structure_preview_from_rows_with_headers(
+        preview_rows,
+        Some(&sr.schema_headers),
+    );
+    let mut text = preview;
     let mut text_color = None;
     let mut fill_color = None;
 
@@ -144,6 +145,15 @@ pub fn prepare_ai_suggested_plan(
                 None,
             );
 
+            // Calculate offset: In navigation drill-down (detail_ctx.is_some()), arrays have row_index and parent_key prepended
+            // So array structure is: [row_index, parent_key, data...]
+            // non_structure_columns refers to metadata columns (e.g., [1, 2] for parent_key and Tags)
+            // But array indices are [0, 1, 2] with row_index at index 0
+            // When we find a column's position in non_structure_columns, we need to add 1 to account for row_index
+            // At parent level (detail_ctx.is_none()), arrays have NO prepending, so no offset needed
+            let in_navigation_drilldown = detail_ctx.is_some();
+            let needs_row_index_offset = in_navigation_drilldown;
+
             let mut columns = Vec::with_capacity(merged_columns.len());
             for entry in merged_columns {
                 match entry {
@@ -169,11 +179,14 @@ pub fn prepare_ai_suggested_plan(
                         columns.push((*entry, AiSuggestedCellPlan::Structure(plan)));
                     }
                     ColumnEntry::Regular(actual_col) => {
-                        let position = rr
-                            .non_structure_columns
-                            .iter()
-                            .position(|c| c == actual_col);
-                        let is_parent_key = is_parent_key_column(*actual_col);
+                        let raw_pos = rr.non_structure_columns.iter().position(|c| c == actual_col);
+                        // If in navigation drill-down, arrays have row_index at [0], so add 1 to position
+                        let position = if needs_row_index_offset {
+                            raw_pos.map(|pos| pos + 1)
+                        } else {
+                            raw_pos
+                        };
+                        let is_parent_key = is_parent_key_column(*actual_col, detail_ctx);
                         let has_linked = linked_column_options.contains_key(actual_col);
                         columns.push((
                             *entry,
@@ -195,6 +208,11 @@ pub fn prepare_ai_suggested_plan(
         }
         RowKind::NewPlain => {
             let nr = state.ai_new_row_reviews.get(idx)?;
+            
+            // Check if in navigation drill-down (detail_ctx.is_some() means we're viewing child table)
+            let in_navigation_drilldown = detail_ctx.is_some();
+            let needs_row_index_offset = in_navigation_drilldown;
+            
             let mut columns = Vec::with_capacity(merged_columns.len());
             for entry in merged_columns {
                 match entry {
@@ -210,11 +228,17 @@ pub fn prepare_ai_suggested_plan(
                         columns.push((*entry, AiSuggestedCellPlan::Structure(plan)));
                     }
                     ColumnEntry::Regular(actual_col) => {
-                        let position = nr
+                        let raw_pos = nr
                             .non_structure_columns
                             .iter()
                             .position(|c| c == actual_col);
-                        let is_parent_key = is_parent_key_column(*actual_col);
+                        // If in navigation drill-down, arrays have row_index at [0], so add 1 to position
+                        let position = if needs_row_index_offset {
+                            raw_pos.map(|pos| pos + 1)
+                        } else {
+                            raw_pos
+                        };
+                        let is_parent_key = is_parent_key_column(*actual_col, detail_ctx);
                         let has_linked = linked_column_options.contains_key(actual_col);
                         columns.push((
                             *entry,
@@ -247,6 +271,10 @@ pub fn prepare_ai_suggested_plan(
                 )
             });
 
+            // Check if in navigation drill-down (detail_ctx.is_some() means we're viewing child table)
+            let in_navigation_drilldown = detail_ctx.is_some();
+            let needs_row_index_offset = in_navigation_drilldown;
+
             let mut columns = Vec::with_capacity(merged_columns.len());
             for entry in merged_columns {
                 match entry {
@@ -262,11 +290,17 @@ pub fn prepare_ai_suggested_plan(
                         columns.push((*entry, AiSuggestedCellPlan::Structure(plan)));
                     }
                     ColumnEntry::Regular(actual_col) => {
-                        let position = nr
+                        let raw_pos = nr
                             .non_structure_columns
                             .iter()
                             .position(|c| c == actual_col);
-                        let is_parent_key = is_parent_key_column(*actual_col);
+                        // If in navigation drill-down, arrays have row_index at [0], so add 1 to position
+                        let position = if needs_row_index_offset {
+                            raw_pos.map(|pos| pos + 1)
+                        } else {
+                            raw_pos
+                        };
+                        let is_parent_key = is_parent_key_column(*actual_col, detail_ctx);
                         let has_linked = linked_column_options.contains_key(actual_col);
                         columns.push((
                             *entry,
