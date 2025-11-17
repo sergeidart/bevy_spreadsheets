@@ -379,6 +379,7 @@ fn build_payload(
     
     // Build rows_data by prepending parent key to each child row
     // Format: [parent_key, child_col1, child_col2, ...]
+    // This matches the regular AI call format - parent key is just another visible column
     let mut rows_data = Vec::new();
     for group in &parent_groups {
         let parent_key_value = &group.parent_key.key;
@@ -402,7 +403,7 @@ fn build_payload(
         structure_label
     );
 
-    // Use rows_data format (like regular AI calls) with key_prefix to mark parent column
+    // Use exact same format as regular AI calls - no special metadata
     BatchPayload {
         ai_model_id: if root_meta.ai_model_id.is_empty() {
             default_ai_model_id()
@@ -416,9 +417,9 @@ fn build_payload(
             .requested_grounding_with_google_search
             .unwrap_or(false),
         allow_row_additions,
-        key_prefix_count: Some(1), // First column is parent key
-        key_prefix_headers: Some(vec!["Parent".to_string()]),
-        parent_groups: None, // Don't use parent_groups structure
+        key_prefix_count: None,
+        key_prefix_headers: None,
+        parent_groups: None,
         user_prompt,
     }
 }

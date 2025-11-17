@@ -109,7 +109,6 @@ pub fn handle_structure_batch_result(
 
     let schema_len = schema_fields.len();
     let included = ev.included_non_structure_columns.clone();
-    let key_prefix_count = ev.key_prefix_count;
 
     // Normalize partitions
     if row_partitions.len() != target_rows.len() {
@@ -119,18 +118,18 @@ pub fn handle_structure_batch_result(
     match &ev.result {
         Ok(rows) => {
             info!(
-                "Structure batch result: rows.len()={}, target_rows.len()={}, key_prefix_count={}",
+                "Structure batch result: rows.len()={}, target_rows.len()={}",
                 rows.len(),
-                target_rows.len(),
-                key_prefix_count
+                target_rows.len()
             );
             
-            // Strip key prefix columns (parent identifier) from AI response
+            // Strip first column (parent key) from AI response
+            // Structure calls send parent key as first visible column, just like regular AI calls
             let stripped_rows: Vec<Vec<String>> = rows
                 .iter()
                 .map(|row| {
-                    if row.len() > key_prefix_count {
-                        row[key_prefix_count..].to_vec()
+                    if row.len() > 1 {
+                        row[1..].to_vec()  // Skip first column (parent key)
                     } else {
                         vec![String::new(); schema_len]
                     }
