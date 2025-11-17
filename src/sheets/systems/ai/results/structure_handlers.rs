@@ -109,6 +109,7 @@ pub fn handle_structure_batch_result(
 
     let schema_len = schema_fields.len();
     let included = ev.included_non_structure_columns.clone();
+    let key_prefix_count = ev.key_prefix_count;
 
     // Normalize partitions
     if row_partitions.len() != target_rows.len() {
@@ -118,16 +119,29 @@ pub fn handle_structure_batch_result(
     match &ev.result {
         Ok(rows) => {
             info!(
-                "Structure batch result: rows.len()={}, target_rows.len()={}",
+                "Structure batch result: rows.len()={}, target_rows.len()={}, key_prefix_count={}",
                 rows.len(),
-                target_rows.len()
+                target_rows.len(),
+                key_prefix_count
             );
+            
+            // Strip key prefix columns (parent identifier) from AI response
+            let stripped_rows: Vec<Vec<String>> = rows
+                .iter()
+                .map(|row| {
+                    if row.len() > key_prefix_count {
+                        row[key_prefix_count..].to_vec()
+                    } else {
+                        vec![String::new(); schema_len]
+                    }
+                })
+                .collect();
 
             let originals = ev.original_row_indices.len();
-            if originals > 0 && rows.len() < originals {
+            if originals > 0 && stripped_rows.len() < originals {
                 let msg = format!(
                     "Structure batch result malformed: returned {} rows but expected at least {}",
-                    rows.len(),
+                    stripped_rows.len(),
                     originals
                 );
                 error!("{}", msg);
@@ -152,9 +166,9 @@ pub fn handle_structure_batch_result(
                 if partition_len == 0 {
                     partition_len = original_counts.get(idx).copied().unwrap_or(0);
                 }
-                let start = cursor.min(rows.len());
-                let end = (cursor + partition_len).min(rows.len());
-                let partition_rows = &rows[start..end];
+                let start = cursor.min(stripped_rows.len());
+                let end = (cursor + partition_len).min(stripped_rows.len());
+                let partition_rows = &stripped_rows[start..end];
                 cursor = end;
 
                 let mut original_count = original_counts.get(idx).copied().unwrap_or(0);

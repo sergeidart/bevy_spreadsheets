@@ -121,6 +121,6 @@ pub fn get_table_type(conn: &Connection, table_name: &str) -> DbResult<Option<St
 // - create_structure_data_table → writer::create_structure_data_table
 // - drop_table → writer::drop_table
 // - register_structure_table → writer::register_structure_table
-// - upsert_table_metadata → writer::upsert_table_metadata
+// - upsert_table_metadata_with_db → writer::upsert_table_metadata_with_db
 // - update_table_metadata_hidden → writer::update_table_metadata_hidden
 // ============================================================================

@@ -30,10 +30,26 @@ pub fn show_column_options_popup(
         initialize_popup_state(state, registry);
         state.column_options_popup_needs_init = false;
     }
+    
+    // Track the previously selected target sheet before rendering UI
+    let prev_target_sheet = state.options_link_target_sheet.clone();
+    
     let ui_result = {
         let registry_immut = &*registry;
         show_column_options_window_ui(ctx, state, registry_immut)
     };
+    
+    // Check if the target sheet selection changed during UI rendering
+    if state.options_link_target_sheet != prev_target_sheet {
+        if let Some(target_sheet_name) = &state.options_link_target_sheet {
+            load_target_sheet_if_needed(
+                registry,
+                daemon_client,
+                target_sheet_name,
+                &state.options_column_target_category,
+            );
+        }
+    }
     let mut needs_manual_save = false;
     let mut actions_ok = true;
     let mut non_event_change_occurred = false;
@@ -495,5 +511,72 @@ fn initialize_popup_state(state: &mut EditorWindowState, registry: &SheetRegistr
         state.options_link_target_column_index = None;
         state.options_existing_structure_key_parent_column = None;
         state.options_structure_key_parent_column_temp = None;
+    }
+}
+
+/// Loads a target sheet from the database if it's not already loaded in the registry.
+/// This ensures that when a user selects a target sheet for a linked column, 
+/// the sheet's structure and metadata are immediately available for selecting target columns.
+fn load_target_sheet_if_needed(
+    registry: &mut SheetRegistry,
+    daemon_client: &DaemonClient,
+    target_sheet_name: &str,
+    category: &Option<String>,
+) {
+    // Check if target sheet needs loading (doesn't exist or is a stub/empty)
+    let needs_load = registry.get_sheet(category, target_sheet_name)
+        .map(|sheet| sheet.grid.is_empty() || sheet.metadata.is_none())
+        .unwrap_or(true);
+    
+    if !needs_load {
+        debug!("Target sheet '{}' already loaded with data", target_sheet_name);
+        return;
+    }
+    
+    // Get the database path for the current category
+    let Some(cat_str) = category.as_ref() else {
+        warn!("Cannot load target sheet '{}': no category selected", target_sheet_name);
+        return;
+    };
+    
+    let base_path = crate::sheets::systems::io::get_default_data_base_path();
+    let db_path = base_path.join(format!("{}.db", cat_str));
+    
+    if !db_path.exists() {
+        warn!("Database file not found for loading target sheet '{}': {:?}", target_sheet_name, db_path);
+        return;
+    }
+    
+    // Load the target sheet from the database
+    info!("Loading target sheet '{}' for linked column selection", target_sheet_name);
+    match rusqlite::Connection::open(&db_path) {
+        Ok(conn) => {
+            match crate::sheets::database::reader::DbReader::read_sheet(
+                &conn, 
+                target_sheet_name, 
+                daemon_client, 
+                Some(cat_str)
+            ) {
+                Ok(sheet_data) => {
+                    info!(
+                        "Loaded {} rows for target sheet '{}' with {} columns", 
+                        sheet_data.grid.len(),
+                        target_sheet_name,
+                        sheet_data.metadata.as_ref().map(|m| m.columns.len()).unwrap_or(0)
+                    );
+                    registry.add_or_replace_sheet(
+                        category.clone(),
+                        target_sheet_name.to_string(),
+                        sheet_data,
+                    );
+                }
+                Err(e) => {
+                    error!("Failed to load target sheet '{}': {}", target_sheet_name, e);
+                }
+            }
+        }
+        Err(e) => {
+            error!("Failed to open database for loading target sheet '{}': {}", target_sheet_name, e);
+        }
     }
 }

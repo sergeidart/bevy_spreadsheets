@@ -9,6 +9,7 @@ use bevy::prelude::*;
 /// Extract structure rows from an existing grid row
 ///
 /// Returns (parent_key, group_rows, partition_size)
+#[allow(dead_code)] // Now reads from DB directly in task_executor, keeping for reference
 pub fn extract_from_existing_row(
     target_row: usize,
     root_sheet: &SheetGridData,

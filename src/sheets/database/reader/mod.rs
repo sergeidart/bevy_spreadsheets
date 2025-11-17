@@ -72,6 +72,9 @@ impl DbReader {
         // Auto-recover orphaned columns
         columns = Self::recover_orphaned_columns(conn, table_name, &meta_table, columns, daemon_client)?;
 
+        // Populate structure_schema from child tables for Structure columns
+        columns = Self::populate_structure_schemas_from_child_tables(conn, table_name, columns, daemon_client)?;
+
         // Read table-level metadata
         let table_meta = queries::read_table_metadata(conn, table_name)?;
 
@@ -452,6 +455,86 @@ impl DbReader {
 
         Ok(columns)
     }
+
+    /// Populate structure_schema from child tables for Structure columns
+    /// Structure schemas are not persisted in parent table metadata - they must be loaded from child tables
+    fn populate_structure_schemas_from_child_tables(
+        conn: &Connection,
+        parent_table_name: &str,
+        mut columns: Vec<ColumnDefinition>,
+        daemon_client: &super::daemon_client::DaemonClient,
+    ) -> DbResult<Vec<ColumnDefinition>> {
+        for col in columns.iter_mut() {
+            // Skip non-Structure columns
+            if !matches!(col.validator, Some(ColumnValidator::Structure)) {
+                continue;
+            }
+
+            // Build child table name: ParentTable_ColumnName
+            let child_table_name = format!("{}_{}", parent_table_name, col.header);
+
+            // Check if child table exists
+            if !super::schema::queries::table_exists(conn, &child_table_name)? {
+                bevy::log::warn!(
+                    "Structure column '{}' in '{}' has no child table '{}'  (legacy data not migrated)",
+                    col.header,
+                    parent_table_name,
+                    child_table_name
+                );
+                continue;
+            }
+
+            // Read child table metadata
+            match Self::read_metadata(conn, &child_table_name, daemon_client, None) {
+                Ok(child_metadata) => {
+                    // Convert child columns to structure fields
+                    let structure_fields: Vec<crate::sheets::structure_field::StructureFieldDefinition> = child_metadata
+                        .columns
+                        .iter()
+                        .filter(|c| {
+                            // Skip technical columns
+                            !matches!(c.header.as_str(), "id" | "row_index" | "parent_key")
+                        })
+                        .map(|c| crate::sheets::structure_field::StructureFieldDefinition {
+                            header: c.header.clone(),
+                            data_type: c.data_type,
+                            validator: c.validator.clone(),
+                            filter: c.filter.clone(),
+                            ai_context: c.ai_context.clone(),
+                            ai_include_in_send: c.ai_include_in_send,
+                            ai_enable_row_generation: c.ai_enable_row_generation,
+                            width: c.width,
+                            structure_schema: c.structure_schema.clone(),
+                            structure_column_order: c.structure_column_order.clone(),
+                            structure_key_parent_column_index: c.structure_key_parent_column_index,
+                            structure_ancestor_key_parent_column_indices: c.structure_ancestor_key_parent_column_indices.clone(),
+                        })
+                        .collect();
+
+                    if !structure_fields.is_empty() {
+                        bevy::log::info!(
+                            "Populated structure_schema for column '{}' in '{}' from child table '{}' ({} fields)",
+                            col.header,
+                            parent_table_name,
+                            child_table_name,
+                            structure_fields.len()
+                        );
+                        col.structure_schema = Some(structure_fields);
+                    }
+                }
+                Err(e) => {
+                    bevy::log::warn!(
+                        "Failed to read metadata for child table '{}': {}",
+                        child_table_name,
+                        e
+                    );
+                }
+            }
+        }
+
+        Ok(columns)
+    }
+
     fn build_sheet_metadata(
         table_name: &str,
         columns: Vec<ColumnDefinition>,

@@ -1,7 +1,7 @@
 // src/sheets/systems/ai/structure_processor/task_executor.rs
 //! Main orchestration logic for structure AI processing tasks
 
-use super::{existing_row_extractor, new_row_extractor, python_executor};
+use super::{new_row_extractor, python_executor};
 use crate::sheets::definitions::default_ai_model_id;
 use crate::sheets::events::{AiBatchResultKind, AiBatchTaskResult, StructureProcessingContext};
 use crate::sheets::resources::SheetRegistry;
@@ -14,7 +14,6 @@ use crate::SessionApiKey;
 use bevy::prelude::*;
 use bevy_tokio_tasks::TokioTasksRuntime;
 
-/// System that processes queued structure jobs and spawns AI tasks
 pub fn process_structure_ai_jobs(
     mut state: ResMut<EditorWindowState>,
     registry: Res<SheetRegistry>,
@@ -22,7 +21,6 @@ pub fn process_structure_ai_jobs(
     commands: Commands,
     session_api_key: Res<SessionApiKey>,
 ) {
-    // Pop job from queue
     let Some(job) = state.ai_pending_structure_jobs.pop_front() else {
         return;
     };
@@ -32,7 +30,6 @@ pub fn process_structure_ai_jobs(
         job.root_category, job.root_sheet, job.structure_path, job.target_rows.len(), job.target_rows
     );
 
-    // Get the root sheet and metadata
     let Some(root_sheet) = registry.get_sheet(&job.root_category, &job.root_sheet) else {
         error!("Structure AI job failed: root sheet {:?}/{} not found", job.root_category, job.root_sheet);
         state.mark_structure_result_received();
@@ -45,7 +42,6 @@ pub fn process_structure_ai_jobs(
         return;
     };
 
-    // Get structure schema fields for the path
     let Some(structure_fields) = root_meta.structure_fields_for_path(&job.structure_path) else {
         error!(
             "Structure AI job failed: no schema fields for path {:?} in {:?}/{}",
@@ -55,7 +51,6 @@ pub fn process_structure_ai_jobs(
         return;
     };
 
-    // Build headers and navigation paths
     let all_structure_headers: Vec<String> =
         structure_fields.iter().map(|f| f.header.clone()).collect();
 
@@ -66,8 +61,20 @@ pub fn process_structure_ai_jobs(
         .and_then(|idx| root_meta.columns.get(idx))
         .map(|col| col.header.clone());
 
-    // Build column contexts and included indices
     let (included_indices, column_contexts) = build_column_contexts(&structure_fields);
+
+    // Get the structure column name for database queries
+    let structure_col_name = if let Some(&first_col_idx) = job.structure_path.first() {
+        root_meta
+            .columns
+            .get(first_col_idx)
+            .map(|col| col.header.clone())
+            .unwrap_or_else(|| format!("Column_{}", first_col_idx))
+    } else {
+        error!("Structure path is empty!");
+        state.mark_structure_result_received();
+        return;
+    };
 
     // Build parent groups from target rows
     let (parent_groups, row_partitions) = build_parent_groups(
@@ -82,6 +89,9 @@ pub fn process_structure_ai_jobs(
         key_col_index,
         &key_header,
         root_meta,
+        &job.root_category,
+        &job.root_sheet,
+        &structure_col_name,
     );
 
     if parent_groups.is_empty() {
@@ -161,6 +171,98 @@ fn build_column_contexts(
     (included_indices, column_contexts)
 }
 
+/// Read structure child rows from database for existing grid rows
+fn read_structure_data_from_db(
+    category: &Option<String>,
+    parent_table_name: &str,
+    structure_col_name: &str,
+    target_row: usize,
+    root_sheet: &crate::sheets::definitions::SheetGridData,
+    all_structure_headers: &[String],
+) -> Vec<Vec<String>> {
+    // Get database path
+    let Some(cat) = category.as_ref() else {
+        error!("No category for structure data extraction");
+        return vec![vec![String::new(); all_structure_headers.len()]];
+    };
+    
+    let base = crate::sheets::systems::io::get_default_data_base_path();
+    let db_path = base.join(format!("{}.db", cat));
+    
+    if !db_path.exists() {
+        warn!("Database {:?} does not exist for structure data extraction", db_path);
+        return vec![vec![String::new(); all_structure_headers.len()]];
+    }
+    
+    // Open database connection
+    let conn = match crate::sheets::database::connection::DbConnection::open_existing(&db_path) {
+        Ok(c) => c,
+        Err(e) => {
+            error!("Failed to open database {:?}: {}", db_path, e);
+            return vec![vec![String::new(); all_structure_headers.len()]];
+        }
+    };
+    
+    // Get parent row's row_index value from grid
+    let parent_row = match root_sheet.grid.get(target_row) {
+        Some(r) => r,
+        None => {
+            error!("Target row {} not found in grid", target_row);
+            return vec![vec![String::new(); all_structure_headers.len()]];
+        }
+    };
+    
+    // row_index is always at index 0
+    let parent_row_index: i64 = match parent_row.get(0).and_then(|s| s.parse().ok()) {
+        Some(idx) => idx,
+        None => {
+            error!("Failed to parse row_index from target row {}", target_row);
+            return vec![vec![String::new(); all_structure_headers.len()]];
+        }
+    };
+    
+    info!(
+        "Reading structure data: table={}, parent_row_index={}, headers={}",
+        format!("{}_{}", parent_table_name, structure_col_name),
+        parent_row_index,
+        all_structure_headers.len()
+    );
+    
+    // Read structure child rows using parent_row_index (structure tables use parent_key = row_index)
+    match crate::sheets::database::reader::queries::read_structure_child_rows(
+        &conn,
+        parent_table_name,
+        structure_col_name,
+        parent_row_index,
+        all_structure_headers,
+    ) {
+        Ok(rows) => {
+            if rows.is_empty() {
+                info!(
+                    "No structure child rows found for parent_row_index={} in {}",
+                    parent_row_index,
+                    format!("{}_{}", parent_table_name, structure_col_name)
+                );
+                vec![vec![String::new(); all_structure_headers.len()]]
+            } else {
+                info!(
+                    "Loaded {} structure child rows from database for parent_row_index={}",
+                    rows.len(),
+                    parent_row_index
+                );
+                rows
+            }
+        }
+        Err(e) => {
+            error!(
+                "Failed to read structure child rows for parent_row_index={}: {}",
+                parent_row_index, e
+            );
+            vec![vec![String::new(); all_structure_headers.len()]]
+        }
+    }
+}
+
 /// Build parent groups from target rows
 #[allow(clippy::too_many_arguments)]
 fn build_parent_groups(
@@ -175,42 +277,12 @@ fn build_parent_groups(
     key_col_index: Option<usize>,
     key_header: &Option<String>,
     root_meta: &crate::sheets::sheet_metadata::SheetMetadata,
+    category: &Option<String>,
+    parent_table_name: &str,
+    structure_col_name: &str,
 ) -> (Vec<ParentGroup>, Vec<usize>) {
     let mut parent_groups = Vec::new();
     let mut row_partitions = Vec::new();
-
-    // Helper closure for parsing structure cells
-    let parse_structure_cell_to_rows = |cell_str: &str, headers: &[String]| -> Vec<Vec<String>> {
-        let trimmed = cell_str.trim();
-        if trimmed.is_empty() {
-            return vec![vec![String::new(); headers.len()]];
-        }
-
-        let temp_schema: Vec<crate::sheets::definitions::StructureFieldDefinition> = headers
-            .iter()
-            .map(|h| crate::sheets::definitions::StructureFieldDefinition {
-                header: h.clone(),
-                data_type: crate::sheets::definitions::ColumnDataType::String,
-                validator: None,
-                filter: None,
-                ai_context: None,
-                ai_include_in_send: None,
-                ai_enable_row_generation: None,
-                width: None,
-                structure_schema: None,
-                structure_column_order: None,
-                structure_key_parent_column_index: None,
-                structure_ancestor_key_parent_column_indices: None,
-            })
-            .collect();
-
-        let rows = crate::sheets::systems::ai::utils::parse_structure_rows_from_cell(cell_str, &temp_schema);
-        if rows.is_empty() {
-            vec![vec![String::new(); headers.len()]]
-        } else {
-            rows
-        }
-    };
 
     for &target_row in target_rows {
         // Check if this is a new row context or existing row
@@ -231,22 +303,64 @@ fn build_parent_groups(
 
             row_partitions.push(partition_size);
             parent_groups.push(ParentGroup { parent_key, rows: group_rows });
-        } else if let Some((parent_key, group_rows, partition_size)) =
-            existing_row_extractor::extract_from_existing_row(
+        } else {
+            // Existing row - read from database directly
+            let root_row = match root_sheet.grid.get(target_row) {
+                Some(r) => r,
+                None => {
+                    error!("Target row {} not found in grid", target_row);
+                    continue;
+                }
+            };
+            
+            // Get the key column value for this row - use first data column (typically Name at index 1)
+            let key_value = root_row.get(1).cloned().unwrap_or_default();
+            
+            info!(
+                "Existing row {}: extracted parent key_value='{}' from column 1 (Name)",
+                target_row, key_value
+            );
+            
+            // Build parent key info
+            let parent_key = crate::sheets::systems::ai::control_handler::ParentKeyInfo {
+                context: if key_header.is_some() && key_col_index.is_some() {
+                    root_meta
+                        .columns
+                        .get(key_col_index.unwrap())
+                        .and_then(|col| col.ai_context.clone())
+                } else {
+                    None
+                },
+                key: key_value.clone(),
+            };
+            
+            // Read structure data from database (not from grid count strings!)
+            let all_rows = read_structure_data_from_db(
+                category,
+                parent_table_name,
+                structure_col_name,
                 target_row,
                 root_sheet,
                 all_structure_headers,
-                included_indices,
-                nested_field_path,
-                job_structure_path,
-                key_col_index,
-                key_header,
-                root_meta,
-                &parse_structure_cell_to_rows,
-            )
-        {
+            );
+            
+            // Filter rows to only include columns that match included_indices
+            let filtered_rows: Vec<Vec<String>> = all_rows
+                .into_iter()
+                .map(|row| {
+                    included_indices
+                        .iter()
+                        .map(|&idx| row.get(idx).cloned().unwrap_or_default())
+                        .collect()
+                })
+                .collect();
+            
+            let partition_size = filtered_rows.len();
             row_partitions.push(partition_size);
-            parent_groups.push(ParentGroup { parent_key, rows: group_rows });
+            parent_groups.push(ParentGroup {
+                parent_key,
+                rows: filtered_rows,
+            });
         }
     }
 
@@ -262,25 +376,49 @@ fn build_payload(
     allow_row_additions: bool,
 ) -> BatchPayload {
     let structure_label = job.label.as_deref().unwrap_or("structure");
+    
+    // Build rows_data by prepending parent key to each child row
+    // Format: [parent_key, child_col1, child_col2, ...]
+    let mut rows_data = Vec::new();
+    for group in &parent_groups {
+        let parent_key_value = &group.parent_key.key;
+        for child_row in &group.rows {
+            let mut full_row = vec![parent_key_value.clone()];
+            full_row.extend(child_row.iter().cloned());
+            rows_data.push(full_row);
+        }
+    }
+    
+    // Add parent key column context as first element
+    let parent_key_context = parent_groups
+        .first()
+        .and_then(|g| g.parent_key.context.clone());
+    
+    let mut full_column_contexts = vec![parent_key_context];
+    full_column_contexts.extend(column_contexts);
+    
     let user_prompt = format!(
-        "Fill in or correct the '{}' rows. Return a JSON array of row arrays matching column contexts.",
+        "Fill in or correct the '{}' rows. The first column is the parent identifier - do not modify it. Fill in the remaining columns for each row.",
         structure_label
     );
 
-    let rows_data: Vec<Vec<String>> = parent_groups.iter().flat_map(|g| g.rows.clone()).collect();
-
+    // Use rows_data format (like regular AI calls) with key_prefix to mark parent column
     BatchPayload {
-        ai_model_id: default_ai_model_id(),
+        ai_model_id: if root_meta.ai_model_id.is_empty() {
+            default_ai_model_id()
+        } else {
+            root_meta.ai_model_id.clone()
+        },
         general_sheet_rule: root_meta.ai_general_rule.clone(),
-        column_contexts,
+        column_contexts: full_column_contexts,
         rows_data,
         requested_grounding_with_google_search: root_meta
             .requested_grounding_with_google_search
             .unwrap_or(false),
         allow_row_additions,
-        key_prefix_count: None,
-        key_prefix_headers: None,
-        parent_groups: None,
+        key_prefix_count: Some(1), // First column is parent key
+        key_prefix_headers: Some(vec!["Parent".to_string()]),
+        parent_groups: None, // Don't use parent_groups structure
         user_prompt,
     }
 }

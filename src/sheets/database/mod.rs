@@ -136,35 +136,34 @@ pub fn persist_column_validator_by_name(
                 .map_err(|e| e.to_string())?;
 
             if let Some(persisted_ci) = persisted_idx {
-                // Convert persisted index to runtime index
-                // Determine if this is a structure table
-                let table_type: Option<String> = conn
-                    .query_row(
-                        "SELECT table_type FROM _Metadata WHERE table_name = ?",
-                        [table_name],
-                        |row| row.get(0),
-                    )
-                    .optional()
+                // Read metadata to determine table type and calculate runtime index
+                let metadata = crate::sheets::database::reader::DbReader::read_metadata(&conn, table_name, daemon_client, None)
                     .map_err(|e| e.to_string())?;
                 
-                let is_structure = matches!(table_type.as_deref(), Some("structure"));
+                // Find the column with this persisted index in the metadata
+                // The metadata.columns includes technical columns, so we need to find the column by name
+                let meta_table = format!("{}_Metadata", table_name);
+                let column_name: String = conn
+                    .query_row(
+                        &format!("SELECT column_name FROM \"{}\" WHERE column_index = ?", meta_table),
+                        [persisted_ci],
+                        |row| row.get(0),
+                    )
+                    .map_err(|e| format!("Failed to lookup column name: {}", e))?;
                 
-                // Calculate runtime index by adding back the technical columns
-                let runtime_idx = if is_structure {
-                    // Structure tables have 2 technical columns (row_index, parent_key) before persisted columns
-                    persisted_ci as usize + 2
-                } else {
-                    // Regular tables have 1 technical column (row_index) before persisted columns
-                    persisted_ci as usize + 1
-                };
+                // Find the runtime index of this column in the metadata (which includes technical columns)
+                let runtime_idx = metadata.columns
+                    .iter()
+                    .position(|c| c.header == column_name)
+                    .ok_or_else(|| format!("Column '{}' not found in runtime metadata", column_name))?;
                 
                 // Get the database filename for daemon operations
-                // conn.path() returns the full path, we need just the filename
                 let db_filename = conn.path()
                     .and_then(|p| std::path::Path::new(p).file_name())
                     .and_then(|n| n.to_str());
                 
-                bevy::log::info!("🔧 persist_column_validator_by_name: db_filename={:?}", db_filename);
+                bevy::log::info!("🔧 persist_column_validator_by_name: column='{}', persisted_idx={}, runtime_idx={}, db_filename={:?}", 
+                    column_name, persisted_ci, runtime_idx, db_filename);
                 
                 crate::sheets::database::writer::DbWriter::update_column_validator(
                     &conn,

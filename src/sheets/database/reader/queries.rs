@@ -228,6 +228,59 @@ pub fn read_grid_with_structure_counts(
     Ok(rows)
 }
 
+/// Read structure child rows for a given parent row from structure table
+/// Returns rows as Vec<Vec<String>> where each inner vector is a child row
+pub fn read_structure_child_rows(
+    conn: &Connection,
+    parent_table_name: &str,
+    structure_col_name: &str,
+    parent_row_index: i64,
+    column_headers: &[String],
+) -> DbResult<Vec<Vec<String>>> {
+    let structure_table = format!("{}_{}", parent_table_name, structure_col_name);
+    
+    // Build SELECT clause with all requested columns (excluding technical columns)
+    let column_list = column_headers
+        .iter()
+        .map(|h| format!("CAST(\"{}\" AS TEXT)", h))
+        .collect::<Vec<_>>()
+        .join(", ");
+    
+    // Structure tables use parent_key (text) which contains the parent's row_index value
+    let query = format!(
+        "SELECT {} FROM \"{}\" WHERE parent_key = ? ORDER BY CAST(row_index AS INTEGER)",
+        column_list,
+        structure_table
+    );
+    
+    bevy::log::info!(
+        "read_structure_child_rows: table={}, parent_row_index={}, columns={}",
+        structure_table,
+        parent_row_index,
+        column_headers.len()
+    );
+    
+    let mut stmt = conn.prepare(&query)?;
+    let rows = stmt
+        .query_map([parent_row_index.to_string()], |row| {
+            let mut values = Vec::new();
+            for i in 0..column_headers.len() {
+                let value: Option<String> = row.get(i).unwrap_or(None);
+                values.push(value.unwrap_or_default());
+            }
+            Ok(values)
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    
+    bevy::log::info!(
+        "read_structure_child_rows: loaded {} child rows from {}",
+        rows.len(),
+        structure_table
+    );
+    
+    Ok(rows)
+}
+
 /// List all main and structure tables
 pub fn list_all_tables(conn: &Connection) -> DbResult<Vec<String>> {
     // First, log what's actually in _Metadata for diagnostics

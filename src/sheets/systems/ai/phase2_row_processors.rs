@@ -89,7 +89,6 @@ pub fn process_duplicate_rows_from_phase2(
     let cat_ctx = &phase1.category;
     let sheet_ctx = &phase1.sheet_name;
 
-    // Build duplicate detection map to find matched rows using helper
     // Choose a key column that isn't the technical parent_key (1)
     let key_actual_col_opt = included
         .iter()
@@ -97,17 +96,6 @@ pub fn process_duplicate_rows_from_phase2(
         .find(|&c| c != 1)
         .or_else(|| included.first().copied());
     let sheet_ctx_opt = Some(sheet_ctx.clone());
-
-    // Use helper to build duplicate map (empty parent prefix for base table duplicate detection)
-    let first_col_value_to_row = build_duplicate_map_for_parents(
-        &Vec::new(), // Empty parent prefix for base table
-        key_actual_col_opt,
-        cat_ctx,
-        &sheet_ctx_opt,
-        registry,
-        state,
-        included,
-    );
 
     for suggestion_full in dup_slice.iter() {
         let dynamic_prefix = calculate_dynamic_prefix(suggestion_full.len(), included.len());
@@ -117,6 +105,19 @@ pub fn process_duplicate_rows_from_phase2(
             .cloned()
             .collect();
         let suggestion = skip_key_prefix(suggestion_full, dynamic_prefix);
+
+        // Build duplicate map per row with proper parent context
+        // Base level: empty parent_prefix_values -> checks only first data column
+        // Child level: non-empty parent_prefix_values -> checks first data column AND parent_key
+        let first_col_value_to_row = build_duplicate_map_for_parents(
+            &parent_prefix_values,
+            key_actual_col_opt,
+            cat_ctx,
+            &sheet_ctx_opt,
+            registry,
+            state,
+            included,
+        );
 
         if suggestion.len() < included.len() {
             continue;

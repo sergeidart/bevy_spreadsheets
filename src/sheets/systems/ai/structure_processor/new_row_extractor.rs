@@ -24,35 +24,16 @@ pub fn extract_from_new_row_context(
     root_meta: &crate::sheets::sheet_metadata::SheetMetadata,
 ) -> (ParentKeyInfo, Vec<Vec<String>>, usize) {
     // Extract key column value from the new row's data
-    let key_value = if key_col_index.is_some() {
-        // Find the new row review for this context
-        if let Some(new_row_review) = state.ai_new_row_reviews.get(context.new_row_index) {
-            // The key should be in the first element of the non_structure_columns
-            if let Some(&first_col_idx) = new_row_review.non_structure_columns.first() {
-                if first_col_idx == key_col_index.unwrap() {
-                    // First non-structure column is the key column
-                    new_row_review.ai.first().cloned().unwrap_or_default()
-                } else {
-                    // Find the key column in the non_structure_columns
-                    new_row_review
-                        .non_structure_columns
-                        .iter()
-                        .position(|&col| col == key_col_index.unwrap())
-                        .and_then(|pos| new_row_review.ai.get(pos).cloned())
-                        .unwrap_or_default()
-                }
-            } else {
-                String::new()
-            }
-        } else {
-            String::new()
-        }
+    // For new rows, we want the first non-structure data column (typically "Name")
+    let key_value = if let Some(new_row_review) = state.ai_new_row_reviews.get(context.new_row_index) {
+        // Use the first AI value as the parent key (first data column = Name)
+        new_row_review.ai.first().cloned().unwrap_or_default()
     } else {
         String::new()
     };
 
     info!(
-        "New row context {}: extracted key_value='{}'",
+        "New row context {}: extracted parent key_value='{}' from first data column",
         target_row, key_value
     );
 
@@ -217,7 +198,21 @@ fn extract_from_full_ai_row(
 ) -> (Vec<Vec<String>>, usize) {
     let structure_col_idx = job_structure_path[0];
 
+    info!(
+        "New row context {}: extract_from_full_ai_row - full_row.len()={}, structure_col_idx={}, nested_field_path={:?}",
+        target_row,
+        full_row.len(),
+        structure_col_idx,
+        nested_field_path
+    );
+
     if let Some(structure_cell_json) = full_row.get(structure_col_idx) {
+        info!(
+            "New row context {}: structure cell content (first 200 chars): {:?}",
+            target_row,
+            structure_cell_json.chars().take(200).collect::<String>()
+        );
+
         // Extract nested structure if needed (for nested paths)
         let target_json = if job_structure_path.len() > 1 {
             extract_nested_structure_json(structure_cell_json, nested_field_path)
@@ -229,6 +224,12 @@ fn extract_from_full_ai_row(
             // Parse JSON to extract rows
             match serde_json::from_str::<serde_json::Value>(&json_str) {
                 Ok(serde_json::Value::Array(arr)) => {
+                    info!(
+                        "New row context {}: parsed structure JSON array with {} elements",
+                        target_row,
+                        arr.len()
+                    );
+
                     let parsed_rows: Vec<Vec<String>> = arr
                         .iter()
                         .filter_map(|item| {
@@ -243,7 +244,14 @@ fn extract_from_full_ai_row(
                                         _ => serde_json::to_string(val).unwrap_or_default(),
                                     })
                                     .collect();
-                                Some(row)
+                                
+                                // Filter by included_indices
+                                let filtered_row: Vec<String> = included_indices
+                                    .iter()
+                                    .map(|&idx| row.get(idx).cloned().unwrap_or_default())
+                                    .collect();
+                                
+                                Some(filtered_row)
                             } else {
                                 None
                             }
@@ -258,17 +266,45 @@ fn extract_from_full_ai_row(
                         );
                         let size = parsed_rows.len();
                         return (parsed_rows, size);
+                    } else {
+                        warn!(
+                            "New row context {}: parsed JSON array but got 0 valid rows",
+                            target_row
+                        );
                     }
                 }
-                _ => {}
+                Ok(other) => {
+                    warn!(
+                        "New row context {}: structure cell JSON is not an array: {:?}",
+                        target_row,
+                        other
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        "New row context {}: failed to parse structure cell JSON: {}",
+                        target_row, e
+                    );
+                }
             }
+        } else {
+            warn!(
+                "New row context {}: could not extract target_json from structure cell",
+                target_row
+            );
         }
+    } else {
+        warn!(
+            "New row context {}: structure column {} not found in full_row (len={})",
+            target_row, structure_col_idx, full_row.len()
+        );
     }
 
     // Fallback: empty row
     info!(
-        "New row context {}: could not extract structure data, using empty row",
-        target_row
+        "New row context {}: could not extract structure data, using empty row with {} columns",
+        target_row,
+        included_indices.len()
     );
     let row = vec![String::new(); included_indices.len()];
     (vec![row], 1)

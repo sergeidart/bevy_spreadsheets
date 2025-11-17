@@ -11,6 +11,24 @@ use crate::sheets::systems::ai::phase2_helpers;
 
 /// Handle root batch results - Phase 1: Initial discovery call
 /// Detects duplicates and triggers Phase 2 deep review automatically
+///
+/// # Phase Logic based on Layers
+///
+/// The two-phase logic applies differently depending on how many layers are being sent:
+///
+/// ## One Layer (current level only - no child structures):
+/// - Send Phase 1, receive results
+/// - **Skip Phase 2** - use Phase 1 results directly for review
+/// - This applies at ANY level (parent, child, grandchild, etc.)
+/// - When a level has no children to process, it becomes "one layer"
+///
+/// ## Multi-Layer (current level + child structures):
+/// - **Current Level**: Send Phase 1, receive, send Phase 2, receive updated → use Phase 2 for review and child calls
+/// - **Child Level**: Send Phase 1 with latest parent data, receive, send Phase 2, receive updated → use Phase 2 for review and grandchild calls
+/// - **Deepest Level** (no more children below): Send Phase 1, receive → use directly (becomes "one layer")
+///
+/// Key insight: At each level, if there are child structures below (`ai_planned_structure_paths` not empty),
+/// do two phases. If no children below (empty paths), skip Phase 2 and use Phase 1 directly.
 pub fn handle_root_batch_result_phase1(
     ev: &AiBatchTaskResult,
     state: &mut EditorWindowState,
@@ -88,29 +106,18 @@ pub fn handle_root_batch_result_phase1(
                     original_row_indices: ev.original_row_indices.clone(),
                 });
 
-            // OPTIMIZATION 1: Skip Phase 2 if only one column is being processed
-            // With single column, there's no merge complexity, so use Phase 1 results directly
-            let skip_phase2_single_column = ev.included_non_structure_columns.len() <= 1;
+            // OPTIMIZATION: Skip Phase 2 if only one layer is being sent
+            // One layer = no child structures to process (ai_planned_structure_paths is empty)
+            // In this case, we use Phase 1 results directly without a second call
+            // This applies to any level (parent, child, or grandchild):
+            // - If sending only this layer (no children below), skip Phase 2
+            // - If sending this layer + children, do Phase 2 for both layers
+            let skip_phase2_one_layer = state.ai_planned_structure_paths.is_empty();
 
-            // OPTIMIZATION 2: Skip Phase 2 if in structure sheet and no planned structure paths
-            // When working within a real structure sheet directly, we don't need deep review
-            // since there are no parent structures to include in the context
-            let in_structure_sheet = !state.structure_navigation_stack.is_empty();
-            let skip_phase2_structure_context =
-                in_structure_sheet && state.ai_planned_structure_paths.is_empty();
-
-            if skip_phase2_single_column || skip_phase2_structure_context {
-                if skip_phase2_single_column {
-                    info!(
-                        "SINGLE-COLUMN OPTIMIZATION: Skipping Phase 2 (only {} column(s)), using Phase 1 results directly",
-                        ev.included_non_structure_columns.len()
-                    );
-                }
-                if skip_phase2_structure_context {
-                    info!(
-                        "STRUCTURE-CONTEXT OPTIMIZATION: Skipping Phase 2 (in structure view with no parent structures), using Phase 1 results directly"
-                    );
-                }
+            if skip_phase2_one_layer {
+                info!(
+                    "ONE-LAYER OPTIMIZATION: Skipping Phase 2 (no child structures to process), using Phase 1 results directly"
+                );
 
                 // Phase 1 complete (and skipping Phase 2)
                 state.ai_completed_tasks += 1;

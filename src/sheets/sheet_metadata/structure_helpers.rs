@@ -10,16 +10,16 @@ use crate::sheets::structure_field::StructureFieldDefinition;
 pub fn collect_included_structure_paths(columns: &[ColumnDefinition]) -> Vec<Vec<usize>> {
     let mut paths: Vec<Vec<usize>> = Vec::new();
     for (column_index, column) in columns.iter().enumerate() {
+        // Only process columns that are actually Structure validators
         if matches!(column.validator, Some(ColumnValidator::Structure)) {
+            // Skip if no schema (not migrated from old JSON or child table doesn't exist)
+            let Some(schema) = column.structure_schema.as_ref() else {
+                continue;
+            };
             let mut path = vec![column_index];
             if matches!(column.ai_include_in_send, Some(true)) {
                 paths.push(path.clone());
             }
-            if let Some(schema) = column.structure_schema.as_ref() {
-                collect_included_structure_paths_from_fields(schema, &mut path, &mut paths);
-            }
-        } else if let Some(schema) = column.structure_schema.as_ref() {
-            let mut path = vec![column_index];
             collect_included_structure_paths_from_fields(schema, &mut path, &mut paths);
         }
     }
@@ -35,6 +35,8 @@ fn collect_included_structure_paths_from_fields(
 ) {
     for (index, field) in fields.iter().enumerate() {
         path.push(index);
+        // Only process Structure validators with schemas
+        // Skip non-Structure fields even if they have leftover structure_schema data (legacy JSON)
         if matches!(field.validator, Some(ColumnValidator::Structure)) {
             if matches!(field.ai_include_in_send, Some(true)) {
                 output.push(path.clone());
@@ -42,8 +44,6 @@ fn collect_included_structure_paths_from_fields(
             if let Some(schema) = field.structure_schema.as_ref() {
                 collect_included_structure_paths_from_fields(schema, path, output);
             }
-        } else if let Some(schema) = field.structure_schema.as_ref() {
-            collect_included_structure_paths_from_fields(schema, path, output);
         }
         path.pop();
     }
@@ -52,16 +52,17 @@ fn collect_included_structure_paths_from_fields(
 pub fn collect_all_structure_paths(columns: &[ColumnDefinition]) -> HashSet<Vec<usize>> {
     let mut paths: HashSet<Vec<usize>> = HashSet::new();
     for (column_index, column) in columns.iter().enumerate() {
-        if !matches!(column.validator, Some(ColumnValidator::Structure))
-            && column.structure_schema.is_none()
-        {
+        // Only process columns that are actually Structure validators WITH schemas
+        // Skip legacy Structure columns without schemas (not properly migrated from old JSON)
+        if !matches!(column.validator, Some(ColumnValidator::Structure)) {
             continue;
         }
+        let Some(schema) = column.structure_schema.as_ref() else {
+            continue;  // Skip Structure columns without schemas
+        };
         let mut path = vec![column_index];
         paths.insert(path.clone());
-        if let Some(schema) = column.structure_schema.as_ref() {
-            collect_structure_paths_from_fields(schema, &mut path, &mut paths);
-        }
+        collect_structure_paths_from_fields(schema, &mut path, &mut paths);
     }
     paths
 }

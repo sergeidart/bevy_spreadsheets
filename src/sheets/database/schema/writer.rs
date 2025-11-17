@@ -337,30 +337,6 @@ pub fn register_structure_table(
 }
 
 /// Insert or replace table-level metadata in global _Metadata
-/// ARCHITECTURE: Uses daemon for write operation
-pub fn upsert_table_metadata(
-    table_name: &str,
-    ai_allow_add_rows: i32,
-    ai_table_context: Option<&str>,
-    ai_active_group: Option<&str>,
-    category: Option<&str>,
-    display_order: Option<i32>,
-    hidden: i32,
-    daemon_client: &DaemonClient,
-) -> DbResult<()> {
-    upsert_table_metadata_with_db(
-        table_name,
-        ai_allow_add_rows,
-        ai_table_context,
-        ai_active_group,
-        category,
-        display_order,
-        hidden,
-        daemon_client,
-        None,
-    )
-}
-
 /// ARCHITECTURE: Uses daemon for write operation with explicit database name
 pub fn upsert_table_metadata_with_db(
     table_name: &str,

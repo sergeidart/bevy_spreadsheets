@@ -154,22 +154,18 @@ pub fn trigger_phase2_deep_review(
         }
     }
 
-    // 3. Add new AI-added rows with only first column
+    // 3. Add new AI-added rows with full Phase 1 data
     for (new_idx, new_row) in extra_slice.iter().enumerate() {
         if !duplicate_indices.contains(&new_idx) {
-            // Only include first column value
-            let mut minimal_row = vec![String::new(); new_row.len()];
-            if !new_row.is_empty() {
-                minimal_row[0] = new_row[0].clone();
-            }
-            phase2_rows.push(minimal_row);
+            // Include full Phase 1 response data for new rows
+            phase2_rows.push(new_row.clone());
         }
     }
 
     let established_row_count = original_count + duplicate_indices.len();
 
     info!(
-        "PHASE 2 TRIGGER: Sending BASE LEVEL request with {} rows ({} originals + {} duplicates + {} new-minimal), allow_row_additions=false",
+        "PHASE 2 TRIGGER: Sending BASE LEVEL request with {} rows ({} originals + {} duplicates + {} new with full data), allow_row_additions=false",
         phase2_rows.len(),
         original_count,
         duplicate_indices.len(),
