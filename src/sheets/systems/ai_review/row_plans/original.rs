@@ -187,10 +187,9 @@ pub fn prepare_original_preview_plan(
             // So array structure is: [row_index, parent_key, data...]
             // non_structure_columns refers to metadata columns (e.g., [1, 2] for parent_key and Tags)
             // But array indices are [0, 1, 2] with row_index at index 0
-            // When we find a column's position in non_structure_columns, we need to add 1 to account for row_index
             // At parent level (detail_ctx.is_none()), arrays have NO prepending, so no offset needed
+            // In navigation drill-down: arrays have [row_idx, parent_key, data...]
             let in_navigation_drilldown = detail_ctx.is_some();
-            let needs_row_index_offset = in_navigation_drilldown;
 
             let mut columns = Vec::with_capacity(merged_columns.len());
             for entry in merged_columns {
@@ -221,8 +220,8 @@ pub fn prepare_original_preview_plan(
                             let is_key = *actual_col == 0;
                             // Check if this is a parent_key column (column 1 in structure tables)
                             let is_parent_key = detail_ctx.is_some() && *actual_col == 1;
-                            // If in navigation drill-down, arrays have row_index at [0], so add 1 to position
-                            let adjusted_pos = if needs_row_index_offset {
+                            // In navigation drill-down, skip only row_idx (add 1)
+                            let adjusted_pos = if in_navigation_drilldown {
                                 pos + 1
                             } else {
                                 pos
@@ -261,7 +260,6 @@ pub fn prepare_original_preview_plan(
 
             // Check if in navigation drill-down (detail_ctx.is_some() means we're viewing child table)
             let in_navigation_drilldown = detail_ctx.is_some();
-            let needs_row_index_offset = in_navigation_drilldown;
 
             let mut columns = Vec::with_capacity(merged_columns.len());
             let mut label_drawn = false;
@@ -282,8 +280,8 @@ pub fn prepare_original_preview_plan(
                         if is_parent_key {
                             // For parent_key column, create a Data plan so checkbox can render
                             if let Some(pos) = nr.non_structure_columns.iter().position(|c| c == actual_col) {
-                                // If in navigation drill-down, arrays have row_index at [0], so add 1 to position
-                                let adjusted_pos = if needs_row_index_offset {
+                                // In navigation drill-down, skip only row_idx (add 1)
+                                let adjusted_pos = if in_navigation_drilldown {
                                     pos + 1
                                 } else {
                                     pos
@@ -342,7 +340,6 @@ pub fn prepare_original_preview_plan(
 
             // Check if in navigation drill-down (detail_ctx.is_some() means we're viewing child table)
             let in_navigation_drilldown = detail_ctx.is_some();
-            let needs_row_index_offset = in_navigation_drilldown;
 
             let treat_as_regular = !nr.merge_decided || nr.merge_selected;
             let mut columns = Vec::with_capacity(merged_columns.len());
@@ -388,8 +385,8 @@ pub fn prepare_original_preview_plan(
                                         );
                                     // Check if this is a key column (first column in the row)
                                     let is_key = *actual_col == 0;
-                                    // If in navigation drill-down, arrays have row_index at [0], so add 1 to position
-                                    let adjusted_pos = if needs_row_index_offset {
+                                    // In navigation drill-down, skip only row_idx (add 1)
+                                    let adjusted_pos = if in_navigation_drilldown {
                                         pos + 1
                                     } else {
                                         pos

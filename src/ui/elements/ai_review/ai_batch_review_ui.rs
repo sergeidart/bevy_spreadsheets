@@ -1,4 +1,3 @@
-use crate::sheets::definitions::ColumnValidator;
 use crate::sheets::events::{AddSheetRowRequest, UpdateCellEvent};
 use crate::sheets::resources::SheetRegistry;
 use crate::sheets::systems::ai_review::cache_handlers::cancel_batch;
@@ -6,10 +5,7 @@ use crate::sheets::systems::ai_review::display_context::prepare_display_context;
 use crate::sheets::systems::ai_review::review_logic::{
     hydrate_structure_detail_if_needed, process_accept_all_normal_mode,
     process_accept_all_structure_mode, process_decline_all_structure_mode, should_auto_exit,
-    update_review_state_flags, ColumnEntry,
-};
-use crate::sheets::systems::ai_review::structure_persistence::{
-    structure_row_apply_existing, structure_row_apply_new,
+    update_review_state_flags,
 };
 use crate::ui::elements::ai_review::handlers::{
     finalize_if_empty, process_existing_accept, process_existing_decline, process_new_accept,
@@ -17,6 +13,9 @@ use crate::ui::elements::ai_review::handlers::{
 };
 use crate::ui::elements::ai_review::header_actions::draw_header_actions;
 use crate::ui::elements::ai_review::render::row_render::{build_blocks, render_rows, RowContext};
+use crate::ui::elements::ai_review::review_processing::{
+    populate_linked_column_options, precompute_plans, process_structure_review_changes,
+};
 use crate::ui::elements::ai_review::table_headers::render_table_headers;
 use crate::ui::elements::editor::state::EditorWindowState;
 use bevy::prelude::*;
@@ -66,6 +65,12 @@ pub(crate) fn draw_ai_batch_review_panel(
         if display_ctx.in_structure_mode {
             if let Some(ref detail_ctx) = state.ai_structure_detail_context.clone() {
                 process_accept_all_structure_mode(state, detail_ctx);
+            } else if !state.ai_navigation_stack.is_empty() {
+                // Navigation drilldown mode - accept all temp rows in current view
+                info!("Accept All in navigation drilldown: accepting {} existing + {} new rows", 
+                    state.ai_row_reviews.len(), state.ai_new_row_reviews.len());
+                // This will be handled by the normal processing logic below
+                // Just fall through without early return
             }
         } else {
             process_accept_all_normal_mode(
@@ -146,7 +151,7 @@ pub(crate) fn draw_ai_batch_review_panel(
                     )> = Vec::new();
 
                     // Clone structure reviews for reading (they're only needed for display, not mutation)
-                    let ai_structure_reviews = state.ai_structure_reviews.clone();
+                    let _ai_structure_reviews = state.ai_structure_reviews.clone();
 
                     // Get sheet metadata for column validators
                     let sheet_metadata = registry
@@ -154,59 +159,21 @@ pub(crate) fn draw_ai_batch_review_panel(
                         .and_then(|sheet| sheet.metadata.as_ref());
 
                     // Pre-fetch all linked column options
-                    use crate::ui::widgets::linked_column_cache::{self, CacheResult};
-                    let mut linked_column_options = std::collections::HashMap::new();
+                    let linked_column_options = populate_linked_column_options(
+                        state,
+                        registry,
+                        &display_ctx,
+                        sheet_metadata,
+                    );
 
-                    // For nested structures, use structure_schema; otherwise use sheet metadata columns
-                    if display_ctx.in_structure_mode && !display_ctx.structure_schema.is_empty() {
-                        // In structure detail mode: get validators from structure schema
-                        for col_entry in &display_ctx.merged_columns {
-                            if let ColumnEntry::Regular(actual_col) = col_entry {
-                                if let Some(field_def) = display_ctx.structure_schema.get(*actual_col) {
-                                    if let Some(ColumnValidator::Linked {
-                                        target_sheet_name,
-                                        target_column_index,
-                                    }) = &field_def.validator
-                                    {
-                                        if let CacheResult::Success { raw, .. } =
-                                            linked_column_cache::get_or_populate_linked_options(
-                                                target_sheet_name,
-                                                *target_column_index,
-                                                registry,
-                                                state,
-                                            )
-                                        {
-                                            linked_column_options.insert(*actual_col, raw);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    } else if let Some(meta) = sheet_metadata {
-                        // Normal mode or virtual structure review: get validators from sheet metadata
-                        for col_entry in &display_ctx.merged_columns {
-                            if let ColumnEntry::Regular(actual_col) = col_entry {
-                                if let Some(col_def) = meta.columns.get(*actual_col) {
-                                    if let Some(ColumnValidator::Linked {
-                                        target_sheet_name,
-                                        target_column_index,
-                                    }) = &col_def.validator
-                                    {
-                                        if let CacheResult::Success { raw, .. } =
-                                            linked_column_cache::get_or_populate_linked_options(
-                                                target_sheet_name,
-                                                *target_column_index,
-                                                registry,
-                                                state,
-                                            )
-                                        {
-                                            linked_column_options.insert(*actual_col, raw);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    // Pre-compute all plans (cache them for this frame)
+                    let (ai_plans_cache, original_plans_cache) = precompute_plans(
+                        state,
+                        &_ai_structure_reviews,
+                        &display_ctx,
+                        &blocks,
+                        &linked_column_options,
+                    );
 
                     render_rows(
                         &mut body,
@@ -221,14 +188,30 @@ pub(crate) fn draw_ai_batch_review_panel(
                             new_accept: &mut new_accept,
                             new_cancel: &mut new_cancel,
                             active_sheet_grid,
-                            ai_structure_reviews: &ai_structure_reviews,
                             sheet_metadata,
                             registry,
                             linked_column_options: &linked_column_options,
                             structure_nav_clicked: &mut structure_nav_clicked,
                             structure_quick_accept: &mut structure_quick_accept,
+                            ai_plans_cache: &ai_plans_cache,
+                            original_plans_cache: &original_plans_cache,
                         },
                     );
+                    
+                    if !new_accept.is_empty() || !new_cancel.is_empty() || !existing_accept.is_empty() || !existing_cancel.is_empty() {
+                        info!("AFTER render_rows: new_accept={}, new_cancel={}, existing_accept={}, existing_cancel={}", 
+                            new_accept.len(), new_cancel.len(), existing_accept.len(), existing_cancel.len());
+                    }
+
+                    if actions.accept_all {
+                        if display_ctx.in_structure_mode && !state.ai_navigation_stack.is_empty() {
+                            // Navigation drilldown mode - accept all temp rows
+                            existing_accept.extend(0..state.ai_row_reviews.len());
+                            new_accept.extend(0..state.ai_new_row_reviews.len());
+                            info!("Accept All triggered: accepting {} existing + {} new rows", 
+                                state.ai_row_reviews.len(), state.ai_new_row_reviews.len());
+                        }
+                    }
 
                     if actions.decline_all {
                         if display_ctx.in_structure_mode {
@@ -269,120 +252,20 @@ pub(crate) fn draw_ai_batch_review_panel(
                     new_cancel.dedup();
                     new_cancel.retain(|i| !new_accept.contains(i));
 
-                    if display_ctx.in_structure_mode {
-                        if let Some(ref detail_ctx) = state.ai_structure_detail_context.clone() {
-                            if let Some(entry_index) =
-                                state.ai_structure_reviews.iter().position(|sr| {
-                                    match (sr.parent_new_row_index, detail_ctx.parent_new_row_index)
-                                    {
-                                        (Some(a), Some(b)) if a == b => {
-                                            sr.structure_path == detail_ctx.structure_path
-                                        }
-                                        (None, None) => {
-                                            sr.parent_row_index
-                                                == detail_ctx.parent_row_index.unwrap_or(usize::MAX)
-                                                && sr.structure_path == detail_ctx.structure_path
-                                        }
-                                        _ => false,
-                                    }
-                                })
-                            {
-                                let entry_ptr: *mut _ =
-                                    &mut state.ai_structure_reviews[entry_index];
-                                // Safe because we don't move state.ai_structure_reviews while using entry_ptr
-                                unsafe {
-                                    let entry = &mut *entry_ptr;
-                                    // Existing accepts
-                                    for &idx in &existing_accept {
-                                        if let Some(rr) = state.ai_row_reviews.get(idx) {
-                                            structure_row_apply_existing(entry, rr, true);
-                                        }
-                                    }
-                                    for &idx in &existing_cancel {
-                                        if let Some(rr) = state.ai_row_reviews.get(idx) {
-                                            structure_row_apply_existing(entry, rr, false);
-                                        }
-                                    }
-                                    // Remove existing rows from temp view (reverse order to keep indices valid)
-                                    if !existing_accept.is_empty() || !existing_cancel.is_empty() {
-                                        let mut to_remove: Vec<usize> = Vec::new();
-                                        to_remove.extend(existing_accept.iter().cloned());
-                                        to_remove.extend(existing_cancel.iter().cloned());
-                                        to_remove.sort_unstable();
-                                        to_remove.dedup();
-                                        for idx in to_remove.into_iter().rev() {
-                                            if idx < state.ai_row_reviews.len() {
-                                                state.ai_row_reviews.remove(idx);
-                                            }
-                                        }
-                                        // CRITICAL: Update row_index in remaining RowReview entries after removal
-                                        // Row indices must match their position in the arrays (original_rows, merged_rows, etc.)
-                                        for (new_idx, rr) in
-                                            state.ai_row_reviews.iter_mut().enumerate()
-                                        {
-                                            rr.row_index = new_idx;
-                                        }
-                                    }
-                                    // New rows
-                                    for &idx in &new_accept {
-                                        structure_row_apply_new(
-                                            entry,
-                                            idx,
-                                            &state.ai_new_row_reviews,
-                                            true,
-                                        );
-                                    }
-                                    for &idx in &new_cancel {
-                                        structure_row_apply_new(
-                                            entry,
-                                            idx,
-                                            &state.ai_new_row_reviews,
-                                            false,
-                                        );
-                                    }
-                                    // Remove accepted/declined new rows from temp view to mimic top-level behavior
-                                    if !new_accept.is_empty() || !new_cancel.is_empty() {
-                                        let mut to_remove: Vec<usize> = Vec::new();
-                                        to_remove.extend(new_accept.iter().cloned());
-                                        to_remove.extend(new_cancel.iter().cloned());
-                                        to_remove.sort_unstable();
-                                        to_remove.dedup();
-                                        for idx in to_remove.into_iter().rev() {
-                                            if idx < state.ai_new_row_reviews.len() {
-                                                state.ai_new_row_reviews.remove(idx);
-                                            }
-                                        }
-                                    }
-                                    // Mark entry has changes
-                                    entry.has_changes = true;
-                                    // Auto-mark decided and accepted if no remaining temp rows left
-                                    let no_temp_rows = state.ai_row_reviews.is_empty()
-                                        && state.ai_new_row_reviews.is_empty();
-                                    if no_temp_rows {
-                                        entry.decided = true;
-                                        if entry
-                                            .differences
-                                            .iter()
-                                            .all(|row| row.iter().all(|f| !*f))
-                                        {
-                                            entry.accepted = true;
-                                            entry.rejected = false;
-                                        }
+                    if !new_accept.is_empty() || !new_cancel.is_empty() || !existing_accept.is_empty() || !existing_cancel.is_empty() {
+                        info!("Processing actions: existing_accept={}, existing_cancel={}, new_accept={}, new_cancel={}, in_structure_mode={}", 
+                            existing_accept.len(), existing_cancel.len(), new_accept.len(), new_cancel.len(), display_ctx.in_structure_mode);
+                    }
 
-                                        // Exit structure detail mode and restore parent level
-                                        if let Some(ref detail_ctx) =
-                                            state.ai_structure_detail_context.clone()
-                                        {
-                                            state.ai_row_reviews =
-                                                detail_ctx.saved_row_reviews.clone();
-                                            state.ai_new_row_reviews =
-                                                detail_ctx.saved_new_row_reviews.clone();
-                                            state.ai_structure_detail_context = None;
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                    if display_ctx.in_structure_mode {
+                        process_structure_review_changes(
+                            state,
+                            registry,
+                            &existing_accept,
+                            &existing_cancel,
+                            &new_accept,
+                            &new_cancel,
+                        );
                     } else {
                         if !existing_accept.is_empty() {
                             process_existing_accept(

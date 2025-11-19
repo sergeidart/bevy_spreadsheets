@@ -34,6 +34,9 @@ pub struct NavigationContext {
     /// Parent row index (for display in breadcrumb)
     #[allow(dead_code)]
     pub parent_row_index: Option<usize>,
+    /// Parent review index (position in ai_row_reviews or ai_new_row_reviews)
+    /// This is what StructureReviewEntry uses for parent_row_index matching
+    pub parent_review_index: Option<usize>,
     /// Parent row display name (cached for breadcrumb)
     pub parent_display_name: Option<String>,
     /// Cached review state at this level (to restore when navigating back)

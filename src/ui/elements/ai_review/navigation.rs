@@ -3,7 +3,7 @@
 
 use crate::sheets::resources::SheetRegistry;
 use crate::ui::elements::editor::state::{
-    EditorWindowState, NavigationContext, ParentFilter, RowReview, ReviewChoice,
+    EditorWindowState, NavigationContext, NewRowReview, ParentFilter, RowReview, ReviewChoice,
 };
 use bevy::prelude::*;
 
@@ -117,6 +117,7 @@ pub fn drill_into_structure(
         sheet_name: state.ai_current_sheet.clone(),
         category: state.ai_current_category.clone(),
         parent_row_index: Some(actual_parent_db_row_index),
+        parent_review_index: Some(row_idx),  // Store the review index for structure entry matching
         parent_display_name: parent_display_name.clone(),
         cached_row_reviews: state.ai_row_reviews.clone(),
         cached_new_row_reviews: state.ai_new_row_reviews.clone(),
@@ -132,6 +133,10 @@ pub fn drill_into_structure(
     state.ai_parent_filter = Some(ParentFilter {
         parent_row_index: actual_parent_db_row_index,
     });
+    
+    // Note: We don't set ai_structure_detail_context here because navigation drill-down
+    // uses the navigation_stack to track state, not the old structure detail system.
+    // The plan generation code will check ai_navigation_stack to determine drill-down mode.
     
     // Load child rows into ai_row_reviews (filtered by parent_key or from StructureReviewEntry)
     if has_structure_review {
@@ -153,20 +158,33 @@ pub fn drill_into_structure(
 
 /// Navigate back to parent level
 /// Pops navigation stack and restores parent sheet context
+/// IMPORTANT: Does NOT persist changes - that happens when parent row is accepted
 pub fn navigate_back(state: &mut EditorWindowState, registry: &SheetRegistry) {
-    let Some(parent_ctx) = state.ai_navigation_stack.pop() else {
+    // Clone data we need before mutable borrows
+    let parent_ctx_data = state.ai_navigation_stack.last().map(|ctx| {
+        (ctx.sheet_name.clone(), ctx.category.clone(), ctx.parent_review_index)
+    });
+    
+    let Some((parent_sheet_name, parent_category, _parent_review_idx_opt)) = parent_ctx_data else {
         warn!("Cannot navigate back: navigation stack is empty");
         return;
     };
     
+    // DO NOT persist here - structure changes are saved when parent row is accepted
+    // The structure entry remains in ai_structure_reviews with has_changes=true
+    // and will be processed by process_existing_accept when parent is accepted
+    
+    // Now pop the stack and get the full context
+    let parent_ctx = state.ai_navigation_stack.pop().unwrap();
+    
     info!(
         "Navigating back from {} to {}",
-        state.ai_current_sheet, parent_ctx.sheet_name
+        state.ai_current_sheet, parent_sheet_name
     );
     
     // Restore parent sheet context
-    state.ai_current_sheet = parent_ctx.sheet_name.clone();
-    state.ai_current_category = parent_ctx.category.clone();
+    state.ai_current_sheet = parent_sheet_name;
+    state.ai_current_category = parent_category;
     state.ai_parent_filter = None;
     
     // Reload parent reviews
@@ -293,59 +311,115 @@ fn load_child_reviews_from_structure_entry(
         non_structure_columns
     );
     
-    // Convert each row pair to RowReview
-    let parent_key_value = parent_display_name.as_ref().map(|s| s.as_str()).unwrap_or("");
-    for (row_idx, (original, ai_row)) in entry.original_rows.iter().zip(entry.ai_rows.iter()).enumerate() {
+    // CRITICAL: Use actual_parent_db_row_index (numeric) for parent_key, NOT display name
+    let parent_key_value = actual_parent_db_row_index.to_string();
+    let max_rows = std::cmp::max(entry.original_rows.len(), entry.ai_rows.len());
+    
+    // Process all rows - some may have original, some may have AI, some may have both
+    for row_idx in 0..max_rows {
+        let original_opt = entry.original_rows.get(row_idx);
+        let ai_opt = entry.ai_rows.get(row_idx);
         
-        // Prepend technical columns (row_index, parent_key) to match full grid format
-        // parent_key should be the parent's display name (e.g., "The Mighty Nein"), not the database row index
-        let mut full_original = vec![row_idx.to_string(), parent_key_value.to_string()];
-        full_original.extend_from_slice(original);
-        
-        let mut full_ai = vec![row_idx.to_string(), parent_key_value.to_string()];
-        full_ai.extend_from_slice(ai_row);
-        
-        // Build choices from differences
-        // entry.original_rows, entry.ai_rows, and entry.differences don't include technical columns (row_index, parent_key)
-        // They only contain data columns (col 2+), so differences[i] corresponds to non_structure_columns that are >= 2
-        let choices: Vec<ReviewChoice> = entry.differences.get(row_idx)
-            .map(|diff_row| {
-                non_structure_columns.iter().enumerate().map(|(pos, &col_idx)| {
-                    // If this is parent_key (col 1), it's not in diff_row, default to Original
-                    // Otherwise, col_idx 2+ maps to diff_row starting from index 0
-                    if col_idx == 1 {
-                        ReviewChoice::Original  // parent_key not in AI differences
-                    } else if col_idx >= 2 {
-                        let diff_idx = pos.saturating_sub(if non_structure_columns.contains(&1) { 1 } else { 0 });
-                        if diff_row.get(diff_idx).copied().unwrap_or(false) {
-                            ReviewChoice::AI
-                        } else {
-                            ReviewChoice::Original
-                        }
-                    } else {
-                        ReviewChoice::Original
-                    }
-                }).collect()
-            })
-            .unwrap_or_else(|| vec![ReviewChoice::Original; non_structure_columns.len()]);
-        
-        let review = RowReview {
-            row_index: row_idx,
-            original: full_original,
-            ai: full_ai,
-            choices,
-            non_structure_columns: non_structure_columns.clone(),
-            key_overrides: std::collections::HashMap::new(),
-            ancestor_key_values: Vec::new(),
-            ancestor_dropdown_cache: std::collections::HashMap::new(),
-        };
-        
-        state.ai_row_reviews.push(review);
+        match (original_opt, ai_opt) {
+            // Case 1: Both original and AI rows exist - create RowReview
+            (Some(original), Some(ai_row)) => {
+                // Prepend technical columns (row_index, parent_key) to match full grid format
+                let mut full_original = vec![row_idx.to_string(), parent_key_value.to_string()];
+                full_original.extend_from_slice(original);
+                
+                let mut full_ai = vec![row_idx.to_string(), parent_key_value.to_string()];
+                full_ai.extend_from_slice(ai_row);
+                
+                // Build choices from differences
+                let choices: Vec<ReviewChoice> = entry.differences.get(row_idx)
+                    .map(|diff_row| {
+                        non_structure_columns.iter().enumerate().map(|(pos, &col_idx)| {
+                            if col_idx == 1 {
+                                ReviewChoice::Original  // parent_key not in AI differences
+                            } else if col_idx >= 2 {
+                                let diff_idx = pos.saturating_sub(if non_structure_columns.contains(&1) { 1 } else { 0 });
+                                if diff_row.get(diff_idx).copied().unwrap_or(false) {
+                                    ReviewChoice::AI
+                                } else {
+                                    ReviewChoice::Original
+                                }
+                            } else {
+                                ReviewChoice::Original
+                            }
+                        }).collect()
+                    })
+                    .unwrap_or_else(|| vec![ReviewChoice::Original; non_structure_columns.len()]);
+                
+                let review = RowReview {
+                    row_index: row_idx,
+                    original: full_original,
+                    ai: full_ai,
+                    choices,
+                    non_structure_columns: non_structure_columns.clone(),
+                    key_overrides: std::collections::HashMap::new(),
+                    ancestor_key_values: Vec::new(),
+                    ancestor_dropdown_cache: std::collections::HashMap::new(),
+                };
+                
+                state.ai_row_reviews.push(review);
+            }
+            
+            // Case 2: Only AI row exists (new row added by AI) - create NewRowReview
+            (None, Some(ai_row)) => {
+                let mut full_ai = vec![row_idx.to_string(), parent_key_value.to_string()];
+                full_ai.extend_from_slice(ai_row);
+                
+                info!(
+                    "Creating NewRowReview for AI-only row {}: parent_key='{}', ai_row={:?}, full_ai={:?}",
+                    row_idx, parent_key_value, ai_row, full_ai
+                );
+                
+                let new_review = NewRowReview {
+                    ai: full_ai,
+                    non_structure_columns: non_structure_columns.clone(),
+                    duplicate_match_row: None,
+                    choices: None,
+                    merge_selected: false,
+                    merge_decided: false,
+                    original_for_merge: None,
+                    key_overrides: std::collections::HashMap::new(),
+                    ancestor_key_values: Vec::new(),
+                    ancestor_dropdown_cache: std::collections::HashMap::new(),
+                };
+                
+                state.ai_new_row_reviews.push(new_review);
+            }
+            
+            // Case 3: Only original row exists (no AI changes) - create RowReview with same data
+            (Some(original), None) => {
+                let mut full_original = vec![row_idx.to_string(), parent_key_value.to_string()];
+                full_original.extend_from_slice(original);
+                
+                let review = RowReview {
+                    row_index: row_idx,
+                    original: full_original.clone(),
+                    ai: full_original, // AI same as original
+                    choices: vec![ReviewChoice::Original; non_structure_columns.len()],
+                    non_structure_columns: non_structure_columns.clone(),
+                    key_overrides: std::collections::HashMap::new(),
+                    ancestor_key_values: Vec::new(),
+                    ancestor_dropdown_cache: std::collections::HashMap::new(),
+                };
+                
+                state.ai_row_reviews.push(review);
+            }
+            
+            // Case 4: Neither exists (shouldn't happen) - skip
+            (None, None) => {
+                warn!("Unexpected: neither original nor AI row at index {}", row_idx);
+            }
+        }
     }
     
     info!(
-        "Loaded {} child RowReviews from StructureReviewEntry (parent_review_idx={}, actual_db_row_index={}, parent_key={})",
+        "Loaded {} existing + {} new child rows from StructureReviewEntry (parent_review_idx={}, actual_db_row_index={}, parent_key={})",
         state.ai_row_reviews.len(),
+        state.ai_new_row_reviews.len(),
         parent_review_idx,
         actual_parent_db_row_index,
         parent_display_name.as_ref().map(|s| s.as_str()).unwrap_or("")

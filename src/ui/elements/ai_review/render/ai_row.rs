@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use bevy::prelude::info;
 
 use bevy_egui::egui::{self, Id, RichText};
 use egui_extras::TableRow;
@@ -37,6 +38,7 @@ pub fn render_ai_suggested_row(
                             .on_disabled_hover_text("Review structure decisions first");
                     }
                     if decline_btn.clicked() {
+                        info!("Child table: Decline clicked for existing row {}", data_idx);
                         ctx.existing_cancel.push(data_idx);
                     }
                 });
@@ -48,6 +50,7 @@ pub fn render_ai_suggested_row(
             row.col(|ui| {
                 ui.vertical(|ui| {
                     if ui.button("Decline").clicked() {
+                        info!("Child table: Decline clicked for new row {}", data_idx);
                         ctx.new_cancel.push(data_idx);
                     }
                 });

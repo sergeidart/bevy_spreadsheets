@@ -150,6 +150,9 @@ pub fn structure_row_apply_existing(
 }
 
 /// Apply accept/decline for a single new structure row (AI added) inside detail mode.
+/// NOTE: When declining, this function does NOT remove rows from entry arrays to avoid
+/// breaking indexing when processing multiple rows in batch. The caller should clean up
+/// after all rows are processed.
 pub fn structure_row_apply_new(
     entry: &mut StructureReviewEntry,
     new_row_local_idx: usize, // index within temp ai_new_row_reviews list
@@ -182,18 +185,63 @@ pub fn structure_row_apply_new(
                 }
             }
             entry.merged_rows[target_idx] = merged;
+            // Clear differences for this row (resolved)
+            if target_idx < entry.differences.len() {
+                for flag in &mut entry.differences[target_idx] {
+                    *flag = false;
+                }
+            }
         }
     } else {
-        // Decline new row: remove it entirely from structure suggestion arrays
-        entry.ai_rows.remove(target_idx);
-        entry.merged_rows.remove(target_idx);
-        entry.differences.remove(target_idx);
-        // Also need to adjust any placeholders: original_rows has no entry for new rows so nothing to remove there.
-        return; // early return so we don't try to clear diff flags (already removed)
-    }
-    if target_idx < entry.differences.len() {
-        for flag in &mut entry.differences[target_idx] {
-            *flag = false;
+        // Decline new row: Mark it as declined by clearing the row data but DON'T remove yet
+        // (removal happens after all rows are processed to avoid index shifting issues)
+        // Clear the row to empty strings to indicate it's declined
+        if target_idx < entry.merged_rows.len() {
+            for cell in &mut entry.merged_rows[target_idx] {
+                cell.clear();
+            }
+        }
+        if target_idx < entry.ai_rows.len() {
+            for cell in &mut entry.ai_rows[target_idx] {
+                cell.clear();
+            }
+        }
+        if target_idx < entry.differences.len() {
+            for flag in &mut entry.differences[target_idx] {
+                *flag = false;
+            }
         }
     }
 }
+
+/// Clean up declined new rows from entry arrays after batch processing.
+/// This should be called after all accept/decline operations are complete.
+/// Removes rows where all cells are empty (marked as declined).
+pub fn cleanup_declined_new_rows(entry: &mut StructureReviewEntry) {
+    let base = entry.original_rows.len();
+    let mut indices_to_remove = Vec::new();
+    
+    // Find all declined rows (those with all empty cells in merged_rows)
+    for i in base..entry.merged_rows.len() {
+        if entry.merged_rows.get(i)
+            .map(|row| row.iter().all(|cell| cell.is_empty()))
+            .unwrap_or(false)
+        {
+            indices_to_remove.push(i);
+        }
+    }
+    
+    // Remove in reverse order to maintain indices
+    for &idx in indices_to_remove.iter().rev() {
+        if idx < entry.merged_rows.len() {
+            entry.merged_rows.remove(idx);
+        }
+        if idx < entry.ai_rows.len() {
+            entry.ai_rows.remove(idx);
+        }
+        if idx < entry.differences.len() {
+            entry.differences.remove(idx);
+        }
+    }
+}
+

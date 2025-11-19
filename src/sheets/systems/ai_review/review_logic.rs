@@ -31,9 +31,13 @@ pub fn should_auto_exit(state: &EditorWindowState, in_structure_mode: bool) -> b
         .iter()
         .any(|entry| entry.is_undecided());
     
+    // Don't auto-exit if in navigation drilldown mode (child table view)
+    let in_navigation_drilldown = !state.ai_navigation_stack.is_empty();
+    
     state.ai_row_reviews.is_empty()
         && state.ai_new_row_reviews.is_empty()
         && !in_structure_mode
+        && !in_navigation_drilldown
         && !has_undecided_structures
 }
 

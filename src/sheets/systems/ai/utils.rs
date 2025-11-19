@@ -229,25 +229,56 @@ pub fn build_nested_field_path(
 pub fn extract_structure_settings(
     structure_path: &[usize],
     root_meta: &crate::sheets::sheet_metadata::SheetMetadata,
+    registry: Option<&crate::sheets::resources::SheetRegistry>,
+    category: &Option<String>,
 ) -> (Option<usize>, bool) {
-    let sheet_allow_add_rows = root_meta.ai_enable_row_generation;
+    // Default fallback: use parent sheet's setting
+    let mut sheet_allow_add_rows = root_meta.ai_enable_row_generation;
 
     if let Some(&first_path_idx) = structure_path.first() {
         if let Some(first_col) = root_meta.columns.get(first_path_idx) {
+            // Get child table's sheet-level setting (this is the authoritative source for structure calls)
+            if let Some(reg) = registry {
+                // Build child table name: ParentTable_ColumnName
+                let parent_table_name = &root_meta.sheet_name;
+                let child_table_name = format!("{}_{}", parent_table_name, first_col.header);
+                
+                if let Some(child_sheet) = reg.get_sheet(category, &child_table_name) {
+                    if let Some(child_meta) = &child_sheet.metadata {
+                        sheet_allow_add_rows = child_meta.ai_enable_row_generation;
+                        bevy::log::info!(
+                            "Using child table '{}' sheet-level ai_enable_row_generation={} for structure calls",
+                            child_table_name, sheet_allow_add_rows
+                        );
+                    }
+                }
+            }
+            
             if structure_path.len() == 1 {
                 let key_idx = first_col.structure_key_parent_column_index;
-                let allow_add = first_col.ai_enable_row_generation.unwrap_or(sheet_allow_add_rows);
+                // Use child table's setting directly (already set in sheet_allow_add_rows above)
+                let allow_add = sheet_allow_add_rows;
+                
+                bevy::log::info!(
+                    "extract_structure_settings for column {}: using allow_row_additions={}",
+                    first_col.header, allow_add
+                );
+                
                 return (key_idx, allow_add);
             } else {
+                // Nested structures: start with child table's setting
                 let mut current_schema = first_col.structure_schema.as_ref();
                 let mut key_idx = first_col.structure_key_parent_column_index;
-                let mut allow_add = first_col.ai_enable_row_generation.unwrap_or(sheet_allow_add_rows);
+                let mut allow_add = sheet_allow_add_rows; // Start with child table's setting
 
                 for &nested_idx in structure_path.iter().skip(1) {
                     if let Some(schema) = current_schema {
                         if let Some(field) = schema.get(nested_idx) {
                             key_idx = field.structure_key_parent_column_index;
-                            allow_add = field.ai_enable_row_generation.unwrap_or(allow_add);
+                            // For nested structures, use field's setting if explicitly set
+                            if let Some(explicit_setting) = field.ai_enable_row_generation {
+                                allow_add = explicit_setting;
+                            }
                             current_schema = field.structure_schema.as_ref();
                         }
                     }

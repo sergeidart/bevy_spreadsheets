@@ -112,13 +112,17 @@ pub fn queue_new_row_add(
 
 pub fn finalize_if_empty(state: &mut EditorWindowState) {
     // Only exit if there are no row reviews AND no undecided structures
+    // BUT don't exit if in navigation drilldown mode (child table view)
     let has_undecided_structures = state
         .ai_structure_reviews
         .iter()
         .any(|entry| entry.is_undecided());
+    let in_navigation_drilldown = !state.ai_navigation_stack.is_empty();
+    
     if state.ai_row_reviews.is_empty()
         && state.ai_new_row_reviews.is_empty()
         && !has_undecided_structures
+        && !in_navigation_drilldown
     {
         state.ai_batch_review_active = false;
     }
@@ -167,7 +171,7 @@ pub fn process_existing_accept(
 
             // Apply ancestor overrides: virtual structures deprecated; skip this logic
 
-            // Write structure cells to CHILD TABLE database (not JSON in parent cell)
+            // Write structure cells to parent cell as JSON for database persistence
             let structure_entries = take_structure_entries_for_existing(state, rr.row_index);
             for entry in structure_entries {
                 // Skip rejected structures
@@ -176,30 +180,20 @@ pub fn process_existing_accept(
                     continue;
                 }
 
-                // For physical child tables: get child table name and write directly
+                // Serialize structure rows to JSON and write to parent cell
                 if let Some(col_idx) = entry.structure_path.first() {
-                    if let Some(sheet) = _registry.get_sheet(selected_category, active_sheet_name) {
-                        if let Some(metadata) = &sheet.metadata {
-                            if let Some(column_def) = metadata.columns.get(*col_idx) {
-                                let child_table_name = format!("{}_{}", active_sheet_name, column_def.header);
-                                let rows_to_write = get_rows_to_serialize(&entry);
-                                
-                                // Write each row to child table database
-                                for (row_idx, row_data) in rows_to_write.iter().enumerate() {
-                                    // Skip technical columns (row_index=0, parent_key=1) when writing
-                                    for (col_idx, value) in row_data.iter().enumerate().skip(2) {
-                                        cell_update_writer.write(UpdateCellEvent {
-                                            category: selected_category.clone(),
-                                            sheet_name: child_table_name.clone(),
-                                            row_index: row_idx,
-                                            col_index: col_idx,
-                                            new_value: value.clone(),
-                                        });
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    let rows_to_write = get_rows_to_serialize(&entry);
+                    let json_string = serialize_structure_rows_to_json(rows_to_write, &entry.schema_headers);
+                    
+                    // Write JSON to parent row's structure column
+                    // This will trigger database persistence in update_cell system
+                    cell_update_writer.write(UpdateCellEvent {
+                        category: selected_category.clone(),
+                        sheet_name: active_sheet_name.to_string(),
+                        row_index: rr.row_index,
+                        col_index: *col_idx,
+                        new_value: json_string,
+                    });
                 }
             }
 

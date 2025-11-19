@@ -5,5 +5,6 @@ mod existing_row_extractor;
 mod new_row_extractor;
 mod python_executor;
 mod task_executor;
+mod data_preparation;
 
 pub use task_executor::process_structure_ai_jobs;

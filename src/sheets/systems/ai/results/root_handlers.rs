@@ -106,18 +106,22 @@ pub fn handle_root_batch_result_phase1(
                     original_row_indices: ev.original_row_indices.clone(),
                 });
 
-            // OPTIMIZATION: Skip Phase 2 if only one layer is being sent
-            // One layer = no child structures to process (ai_planned_structure_paths is empty)
-            // In this case, we use Phase 1 results directly without a second call
-            // This applies to any level (parent, child, or grandchild):
-            // - If sending only this layer (no children below), skip Phase 2
-            // - If sending this layer + children, do Phase 2 for both layers
+            // OPTIMIZATION: Skip Phase 2 in two cases:
+            // 1. No child structures to process (ai_planned_structure_paths is empty)
+            // 2. AI returned no NEW rows (only originals) - nothing new to review at parent level
             let skip_phase2_one_layer = state.ai_planned_structure_paths.is_empty();
+            let skip_phase2_no_new_rows = extra_slice.is_empty();
 
-            if skip_phase2_one_layer {
-                info!(
-                    "ONE-LAYER OPTIMIZATION: Skipping Phase 2 (no child structures to process), using Phase 1 results directly"
-                );
+            if skip_phase2_one_layer || skip_phase2_no_new_rows {
+                if skip_phase2_one_layer {
+                    info!(
+                        "ONE-LAYER OPTIMIZATION: Skipping Phase 2 (no child structures to process), using Phase 1 results directly"
+                    );
+                } else {
+                    info!(
+                        "NO-NEW-ROWS OPTIMIZATION: Skipping Phase 2 (AI returned no new rows), using Phase 1 data for structures"
+                    );
+                }
 
                 // Phase 1 complete (and skipping Phase 2)
                 state.ai_completed_tasks += 1;

@@ -228,7 +228,8 @@ pub fn process_structure_partition(
         ai_rows.push(ai_row.clone());
         merged_rows.push(merged_row);
         differences.push(diff_row);
-        original_rows_aligned.push(vec![String::new(); schema_len]);
+        // Don't add fake empty rows to original_rows_aligned for AI-added rows
+        // original_rows_aligned should only contain actual original rows from database
 
         info!(
             "Successfully added AI-generated row {}: ai_row={:?}",
@@ -237,8 +238,10 @@ pub fn process_structure_partition(
         );
     }
 
-    if original_rows_aligned.len() > merged_rows.len() {
-        original_rows_aligned.truncate(merged_rows.len());
+    // original_rows_aligned contains only actual database rows (original_count)
+    // Don't truncate it based on merged_rows which includes AI-added rows
+    if original_rows_aligned.len() > original_count {
+        original_rows_aligned.truncate(original_count);
     }
 
     // Remove old entries for this parent

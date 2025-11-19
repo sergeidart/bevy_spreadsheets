@@ -192,8 +192,6 @@ pub struct StructureProcessingContext {
     pub target_rows: Vec<usize>,
     /// Original structure row counts per parent (before AI adds rows)
     pub original_row_partitions: Vec<usize>,
-    /// Updated structure row counts per parent (includes AI-added rows)
-    pub row_partitions: Vec<usize>,
     pub generation_id: u64,
 }
 

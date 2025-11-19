@@ -145,15 +145,11 @@ pub fn prepare_ai_suggested_plan(
                 None,
             );
 
-            // Calculate offset: In navigation drill-down (detail_ctx.is_some()), arrays have row_index and parent_key prepended
-            // So array structure is: [row_index, parent_key, data...]
-            // non_structure_columns refers to metadata columns (e.g., [1, 2] for parent_key and Tags)
-            // But array indices are [0, 1, 2] with row_index at index 0
-            // When we find a column's position in non_structure_columns, we need to add 1 to account for row_index
-            // At parent level (detail_ctx.is_none()), arrays have NO prepending, so no offset needed
+            // In navigation drill-down: arrays have [row_idx, parent_key, data...]
+            // non_structure_columns = [1, 2, ...] where 1=parent_key
+            // Position in non_structure_columns includes parent_key, so just add 1 for row_idx
             let in_navigation_drilldown = detail_ctx.is_some();
-            let needs_row_index_offset = in_navigation_drilldown;
-
+            
             let mut columns = Vec::with_capacity(merged_columns.len());
             for entry in merged_columns {
                 match entry {
@@ -179,9 +175,14 @@ pub fn prepare_ai_suggested_plan(
                         columns.push((*entry, AiSuggestedCellPlan::Structure(plan)));
                     }
                     ColumnEntry::Regular(actual_col) => {
+                        // Find position in non_structure_columns
                         let raw_pos = rr.non_structure_columns.iter().position(|c| c == actual_col);
-                        // If in navigation drill-down, arrays have row_index at [0], so add 1 to position
-                        let position = if needs_row_index_offset {
+                        
+                        // In navigation drill-down: rr.ai = [row_idx, parent_key, data...]
+                        // non_structure_columns = [1, 2, ...] where 1=parent_key
+                        // Position in non_structure_columns includes parent_key
+                        // Just add 1 to skip row_idx
+                        let position = if in_navigation_drilldown {
                             raw_pos.map(|pos| pos + 1)
                         } else {
                             raw_pos
@@ -211,7 +212,6 @@ pub fn prepare_ai_suggested_plan(
             
             // Check if in navigation drill-down (detail_ctx.is_some() means we're viewing child table)
             let in_navigation_drilldown = detail_ctx.is_some();
-            let needs_row_index_offset = in_navigation_drilldown;
             
             let mut columns = Vec::with_capacity(merged_columns.len());
             for entry in merged_columns {
@@ -232,12 +232,16 @@ pub fn prepare_ai_suggested_plan(
                             .non_structure_columns
                             .iter()
                             .position(|c| c == actual_col);
-                        // If in navigation drill-down, arrays have row_index at [0], so add 1 to position
-                        let position = if needs_row_index_offset {
+                        // In navigation drill-down: nr.ai = [row_idx, parent_key, data...]
+                        // non_structure_columns = [1, 2, ...] where 1=parent_key
+                        // Position in non_structure_columns includes parent_key
+                        // Position in nr.ai needs to skip only row_idx (parent_key stays in array)
+                        let position = if in_navigation_drilldown {
                             raw_pos.map(|pos| pos + 1)
                         } else {
                             raw_pos
                         };
+                        
                         let is_parent_key = is_parent_key_column(*actual_col, detail_ctx);
                         let has_linked = linked_column_options.contains_key(actual_col);
                         columns.push((
@@ -273,7 +277,6 @@ pub fn prepare_ai_suggested_plan(
 
             // Check if in navigation drill-down (detail_ctx.is_some() means we're viewing child table)
             let in_navigation_drilldown = detail_ctx.is_some();
-            let needs_row_index_offset = in_navigation_drilldown;
 
             let mut columns = Vec::with_capacity(merged_columns.len());
             for entry in merged_columns {
@@ -294,8 +297,11 @@ pub fn prepare_ai_suggested_plan(
                             .non_structure_columns
                             .iter()
                             .position(|c| c == actual_col);
-                        // If in navigation drill-down, arrays have row_index at [0], so add 1 to position
-                        let position = if needs_row_index_offset {
+                        // In navigation drill-down: nr.ai = [row_idx, parent_key, data...]
+                        // non_structure_columns = [1, 2, ...] where 1=parent_key
+                        // Position in non_structure_columns includes parent_key
+                        // Position in nr.ai needs to skip only row_idx
+                        let position = if in_navigation_drilldown {
                             raw_pos.map(|pos| pos + 1)
                         } else {
                             raw_pos

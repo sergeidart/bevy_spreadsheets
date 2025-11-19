@@ -12,13 +12,13 @@ use crate::sheets::definitions::SheetMetadata;
 use crate::sheets::resources::SheetRegistry;
 pub use crate::sheets::systems::ai_review::build_blocks;
 use crate::sheets::systems::ai_review::{
-    prepare_ai_suggested_plan, prepare_original_preview_plan, RowBlock, RowKind,
+    RowBlock, RowKind, AiSuggestedPlan, OriginalPreviewPlan,
 };
 use crate::sheets::systems::ai_review::review_logic::ColumnEntry;
 use crate::sheets::systems::logic::lineage_helpers::{
     get_parent_sheet_options, get_parent_sheet_options_filtered, display_value_to_row_index,
 };
-use crate::ui::elements::editor::state::{EditorWindowState, StructureReviewEntry};
+use crate::ui::elements::editor::state::EditorWindowState;
 
 const ROW_HEIGHT: f32 = 26.0;
 pub(super) const PARENT_KEY_COLOR: Color32 = Color32::from_rgb(0, 150, 0);
@@ -79,12 +79,13 @@ pub struct RowContext<'a> {
     pub new_accept: &'a mut Vec<usize>,
     pub new_cancel: &'a mut Vec<usize>,
     pub active_sheet_grid: Option<&'a Vec<Vec<String>>>,
-    pub ai_structure_reviews: &'a [StructureReviewEntry],
     pub sheet_metadata: Option<&'a SheetMetadata>,
     pub registry: &'a SheetRegistry,
     pub linked_column_options: &'a HashMap<usize, Arc<HashSet<String>>>,
     pub structure_nav_clicked: &'a mut Option<(Option<usize>, Option<usize>, Vec<usize>)>,
     pub structure_quick_accept: &'a mut Vec<(Option<usize>, Option<usize>, Vec<usize>)>,
+    pub ai_plans_cache: &'a HashMap<(usize, RowKind), AiSuggestedPlan>,
+    pub original_plans_cache: &'a HashMap<(usize, RowKind), OriginalPreviewPlan>,
 }
 
 impl<'a> RowContext<'a> {
@@ -362,20 +363,11 @@ pub fn render_rows(body: &mut TableBody<'_>, mut ctx: RowContext<'_>) {
         let _is_group_start = ctx.group_start_indices.contains(&block_index);
         body.row(ROW_HEIGHT, |mut row| match block {
             RowBlock::OriginalPreview(data_idx, kind) => {
-                let plan = {
-                    let detail_ctx = ctx.state.ai_structure_detail_context.as_ref();
-                    prepare_original_preview_plan(
-                        &*ctx.state,
-                        ctx.ai_structure_reviews,
-                        detail_ctx,
-                        ctx.merged_columns,
-                        kind,
-                        data_idx,
-                    )
-                };
+                // Use cached plan instead of computing per-frame
+                let plan = ctx.original_plans_cache.get(&(data_idx, kind));
 
                 if let Some(plan) = plan {
-                    render_original_preview_row(&mut row, data_idx, kind, &plan, &mut ctx);
+                    render_original_preview_row(&mut row, data_idx, kind, plan, &mut ctx);
                 } else {
                     render_empty_row(
                         &mut row,
@@ -385,21 +377,11 @@ pub fn render_rows(body: &mut TableBody<'_>, mut ctx: RowContext<'_>) {
                 }
             }
             RowBlock::AiSuggested(data_idx, kind) => {
-                let plan = {
-                    let detail_ctx = ctx.state.ai_structure_detail_context.as_ref();
-                    prepare_ai_suggested_plan(
-                        &*ctx.state,
-                        ctx.ai_structure_reviews,
-                        detail_ctx,
-                        ctx.merged_columns,
-                        ctx.linked_column_options,
-                        kind,
-                        data_idx,
-                    )
-                };
+                // Use cached plan instead of computing per-frame
+                let plan = ctx.ai_plans_cache.get(&(data_idx, kind));
 
                 if let Some(plan) = plan {
-                    render_ai_suggested_row(&mut row, data_idx, kind, &plan, &mut ctx);
+                    render_ai_suggested_row(&mut row, data_idx, kind, plan, &mut ctx);
                 } else {
                     render_empty_row(
                         &mut row,

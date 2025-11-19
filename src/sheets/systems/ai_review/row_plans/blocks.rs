@@ -9,7 +9,7 @@ pub enum RowBlock {
     Separator,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RowKind {
     Existing,
     NewPlain,

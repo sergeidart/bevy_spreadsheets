@@ -194,35 +194,13 @@ fn parse_structure_json_to_rows(
     rows_to_insert
 }
 
-/// Gets parent_key from a row based on column definition
-fn get_parent_key_from_row(
-    row: &[String],
-    col_def: &crate::sheets::definitions::ColumnDefinition,
-    metadata: &SheetMetadata,
-) -> String {
-    if let Some(kidx) = col_def.structure_key_parent_column_index {
-        row.get(kidx).cloned().unwrap_or_default()
-    } else {
-        // Fallback: try Key, Name, ID
-        let candidates = ["Key", "Name", "ID"];
-        for candidate in &candidates {
-            if let Some((idx, _)) = metadata.columns.iter().enumerate()
-                .find(|(_, c)| c.header.eq_ignore_ascii_case(candidate)) {
-                if let Some(val) = row.get(idx) {
-                    return val.clone();
-                }
-            }
-        }
-        String::new()
-    }
-}
-
 /// Persists a structure column JSON update to the structure table
 pub fn persist_structure_json_update(
     conn: &Connection,
     sheet_name: &str,
     col_header: &str,
-    row: &[String],
+    _row: &[String],
+    row_idx: usize,
     metadata: &SheetMetadata,
     col_def: &crate::sheets::definitions::ColumnDefinition,
     updated_json: &str,
@@ -258,7 +236,43 @@ pub fn persist_structure_json_update(
         }
     }
     
-    let parent_key = get_parent_key_from_row(row, col_def, metadata);
+    // 1. Find parent row details from the parent table (sheet_name)
+    // We need id, row_index, and potentially a custom key column.
+    let custom_key_col_idx = col_def.structure_key_parent_column_index;
+    let custom_key_col_name = if let Some(idx) = custom_key_col_idx {
+        metadata.columns.get(idx).map(|c| c.header.clone())
+    } else {
+        None
+    };
+
+    let mut query_cols = vec!["id".to_string(), "row_index".to_string()];
+    if let Some(ref name) = custom_key_col_name {
+        query_cols.push(format!("\"{}\"", name));
+    }
+    
+    let query_sql = format!(
+        "SELECT {} FROM \"{}\" ORDER BY row_index DESC LIMIT 1 OFFSET {}",
+        query_cols.join(", "),
+        sheet_name,
+        row_idx
+    );
+
+    let (parent_id, parent_row_index, custom_key_val): (i64, i64, Option<String>) = conn.query_row(
+        &query_sql,
+        [],
+        |row| {
+            let id: i64 = row.get(0)?;
+            let ridx: i64 = row.get(1)?;
+            let val = if custom_key_col_name.is_some() {
+                Some(row.get::<_, String>(2)?)
+            } else {
+                None
+            };
+            Ok((id, ridx, val))
+        }
+    ).map_err(|e| format!("Failed to find parent row in '{}' at visual index {}: {}", sheet_name, row_idx, e))?;
+
+    let parent_key = custom_key_val.unwrap_or_else(|| parent_row_index.to_string());
     
     // Parse JSON
     let json_value: serde_json::Value = serde_json::from_str(updated_json)
@@ -290,17 +304,34 @@ pub fn persist_structure_json_update(
             rows_to_insert.len(), parent_key, structure_table, start_index, max_row_index
         );
         
+        // Check if table has parent_id column (backward compatibility for older DBs)
+        let has_parent_id: bool = conn
+            .query_row(
+                &format!("SELECT COUNT(*) FROM pragma_table_info(\"{}\") WHERE name = 'parent_id'", structure_table),
+                [],
+                |row| row.get::<_, i32>(0).map(|c| c > 0),
+            )
+            .unwrap_or(false);
+        
         let field_cols = schema.iter()
             .map(|f| format!("\"{}\"", f.header))
             .collect::<Vec<_>>()
             .join(", ");
+        
+        // Build column list and placeholders based on whether parent_id exists
+        let (column_list, placeholder_count) = if has_parent_id {
+            (format!("parent_id, row_index, parent_key, {}", field_cols), 3 + schema.len())
+        } else {
+            (format!("row_index, parent_key, {}", field_cols), 2 + schema.len())
+        };
+        
         let placeholders = std::iter::repeat("?")
-            .take(2 + schema.len())
+            .take(placeholder_count)
             .collect::<Vec<_>>()
             .join(", ");
         let insert_sql = format!(
-            "INSERT INTO \"{}\" (row_index, parent_key, {}) VALUES ({})",
-            structure_table, field_cols, placeholders
+            "INSERT INTO \"{}\" ({}) VALUES ({})",
+            structure_table, column_list, placeholders
         );
         
         // Build INSERT statements for daemon
@@ -310,7 +341,13 @@ pub fn persist_structure_json_update(
                 padded.resize(schema.len(), String::new());
             }
             
-            let mut params: Vec<serde_json::Value> = Vec::with_capacity(2 + schema.len());
+            let mut params: Vec<serde_json::Value> = Vec::with_capacity(placeholder_count);
+            
+            // Add parent_id first if it exists
+            if has_parent_id {
+                params.push(serde_json::Value::Number(parent_id.into()));
+            }
+            
             params.push(serde_json::Value::Number((start_index + (sidx as i64)).into()));
             params.push(serde_json::Value::String(parent_key.clone()));
             for v in padded {
@@ -381,6 +418,7 @@ pub fn persist_cell_to_database(
                     sheet_name,
                     col_header,
                     row,
+                    row_idx,
                     metadata,
                     col_def,
                     updated_value,

@@ -23,17 +23,28 @@ pub fn extract_from_new_row_context(
     key_header: &Option<String>,
     root_meta: &crate::sheets::sheet_metadata::SheetMetadata,
 ) -> (ParentKeyInfo, Vec<Vec<String>>, usize) {
-    // Extract key column value from the new row's data
-    // For new rows, we want the first non-structure data column (typically "Name")
-    let key_value = if let Some(new_row_review) = state.ai_new_row_reviews.get(context.new_row_index) {
-        // Use the first AI value as the parent key (first data column = Name)
+    // Extract key column value from Phase 1 data (full_ai_row)
+    // This allows us to use Phase 1 parent data for structure calls without needing Phase 2
+    let key_value = if let Some(full_row) = &context.full_ai_row {
+        // Calculate dynamic prefix to skip parent keys from ancestor levels
+        let dynamic_prefix = if let Some(new_row_review) = state.ai_new_row_reviews.get(context.new_row_index) {
+            full_row.len().saturating_sub(new_row_review.ai.len())
+        } else {
+            // If review not available yet, assume root level (no prefix)
+            0
+        };
+        
+        // Extract first data column value (after any parent prefixes) as parent key
+        full_row.get(dynamic_prefix).cloned().unwrap_or_default()
+    } else if let Some(new_row_review) = state.ai_new_row_reviews.get(context.new_row_index) {
+        // Fallback: Use Phase 2 data if Phase 1 data not available
         new_row_review.ai.first().cloned().unwrap_or_default()
     } else {
         String::new()
     };
 
     info!(
-        "New row context {}: extracted parent key_value='{}' from first data column",
+        "New row context {}: extracted parent key_value='{}' from Phase 1 data (full_ai_row)",
         target_row, key_value
     );
 

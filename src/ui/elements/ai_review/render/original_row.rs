@@ -1,5 +1,6 @@
 use bevy_egui::egui::{self, Layout, RichText};
 use egui_extras::TableRow;
+use bevy::prelude::info;
 
 use super::cell_render::{render_original_choice_toggle, render_review_original_cell};
 use super::row_render::RowContext;
@@ -30,6 +31,7 @@ pub fn render_original_preview_row(
                             .on_disabled_hover_text("Review structure decisions first");
                     }
                     if accept_response.clicked() {
+                        info!("Child table: Accept clicked for existing row {}", data_idx);
                         ctx.existing_accept.push(data_idx);
                     }
                 });
@@ -49,6 +51,7 @@ pub fn render_original_preview_row(
                         add_response = add_response.on_disabled_hover_text("Review structure decisions first");
                     }
                     if add_response.clicked() {
+                        info!("Child table: Accept clicked for new row {}", data_idx);
                         ctx.new_accept.push(data_idx);
                     }
                 });
