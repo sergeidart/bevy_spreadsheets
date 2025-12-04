@@ -13,15 +13,47 @@ use crate::ui::elements::editor::state::EditorWindowState;
 
 /// Normalizes a string for linked-column comparisons:
 /// - removes carriage returns and newlines
+/// - normalizes all apostrophe/quote variants to ASCII apostrophe (')
 /// - removes diacritics (é→e, ö→o, ï→i, etc.) using Unicode NFD decomposition
 /// - lowercases
 /// Note: intentionally does not trim spaces to preserve intentional spacing differences.
 pub(crate) fn normalize_for_link_cmp(s: &str) -> String {
     s.replace(['\r', '\n'], "")
+        .chars()
+        .map(normalize_apostrophe)
+        .collect::<String>()
         .nfd() // Decompose characters (é → e + combining acute accent)
         .filter(|c| !unicode_normalization::char::is_combining_mark(*c)) // Remove combining marks
         .collect::<String>()
         .to_lowercase()
+}
+
+/// Normalizes various apostrophe and quote characters to a standard ASCII apostrophe.
+/// This handles the difference between UK/US typography (curly quotes) and standard ASCII.
+#[inline]
+fn normalize_apostrophe(c: char) -> char {
+    match c {
+        // Right single quotation mark (most common "smart" apostrophe)
+        '\u{2019}' => '\'',
+        // Left single quotation mark
+        '\u{2018}' => '\'',
+        // Modifier letter apostrophe
+        '\u{02BC}' => '\'',
+        // Prime (often used as apostrophe)
+        '\u{2032}' => '\'',
+        // Reversed prime
+        '\u{2035}' => '\'',
+        // Acute accent (sometimes used as apostrophe)
+        '\u{00B4}' => '\'',
+        // Grave accent (backtick, sometimes used as quote)
+        '\u{0060}' => '\'',
+        // Heavy single turned comma quotation mark ornament
+        '\u{275B}' => '\'',
+        // Heavy single comma quotation mark ornament
+        '\u{275C}' => '\'',
+        // All other characters pass through unchanged
+        _ => c,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
