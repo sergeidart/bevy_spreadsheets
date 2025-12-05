@@ -385,11 +385,13 @@ pub(super) fn update_column_ai_include_db(
 
     let _ = crate::sheets::database::schema::ensure_global_metadata_table(&conn, daemon_client);
     
+    let db_filename = db_path.file_name().and_then(|n| n.to_str());
     crate::sheets::database::writer::DbWriter::update_column_ai_include(
         &conn,
         sheet_name,
         column_index,
         include_flag,
+        db_filename,
         daemon_client,
     )
     .map_err(|e| format!("Failed to update column AI include: {:?}", e))?;

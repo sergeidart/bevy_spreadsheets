@@ -97,7 +97,7 @@ pub fn rename_data_column(
         );
         
         // Handle conflicts
-        handle_column_conflict(conn, &meta_table, table_name, new_name, source_idx, daemon_client)?;
+        handle_column_conflict(conn, &meta_table, table_name, new_name, source_idx, db_filename, daemon_client)?;
         
         // Update metadata - use column_index to be precise
         bevy::log::debug!(
@@ -136,7 +136,7 @@ pub fn rename_data_column(
     );
     
     // Handle conflicts
-    handle_column_conflict(conn, &meta_table, table_name, new_name, source_idx, daemon_client)?;
+    handle_column_conflict(conn, &meta_table, table_name, new_name, source_idx, db_filename, daemon_client)?;
     
     // Now safe to rename the physical column
     bevy::log::debug!(
@@ -208,7 +208,7 @@ pub fn update_metadata_column_name(
     );
     
     // Handle conflicts
-    handle_column_conflict(conn, &meta_table, table_name, new_name, persisted_index as i32, daemon_client)?;
+    handle_column_conflict(conn, &meta_table, table_name, new_name, persisted_index as i32, db_filename, daemon_client)?;
     
     // Now safe to update the column name
     bevy::log::debug!(
@@ -362,7 +362,7 @@ pub fn update_metadata_column_name_by_name(
     };
 
     // Handle conflicts
-    handle_column_conflict(conn, &meta_table, table_name, new_name, source_idx, daemon_client)?;
+    handle_column_conflict(conn, &meta_table, table_name, new_name, source_idx, db_filename, daemon_client)?;
 
     // Update the row's name
     let updated = update_metadata_column_name_by_index(conn, &meta_table, source_idx, new_name, db_filename, daemon_client)?;

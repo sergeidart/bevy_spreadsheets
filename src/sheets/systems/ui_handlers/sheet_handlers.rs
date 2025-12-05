@@ -92,13 +92,15 @@ pub fn reload_sheet_cache_from_db(
         return;
     }
 
+    let db_filename = db_path.file_name().and_then(|n| n.to_str());
+
     if is_stub {
         info!("Loading full data for table stub '{}'", sheet_name);
         // Load full table data from database - we can't easily create an EventWriter here,
         // so we'll reload the data directly without the convenience function
         match rusqlite::Connection::open(&db_path) {
             Ok(conn) => {
-                match crate::sheets::database::reader::DbReader::read_sheet(&conn, sheet_name, daemon_client, Some(cat_str)) {
+                match crate::sheets::database::reader::DbReader::read_sheet(&conn, sheet_name, daemon_client, db_filename) {
                     Ok(sheet_data) => {
                         info!("Successfully loaded full table data: {} rows from DB for sheet '{}'", sheet_data.grid.len(), sheet_name);
                         registry.add_or_replace_sheet(
@@ -126,7 +128,7 @@ pub fn reload_sheet_cache_from_db(
         // Just reload the data (already has metadata)
         match rusqlite::Connection::open(&db_path) {
             Ok(conn) => {
-                match crate::sheets::database::reader::DbReader::read_sheet(&conn, sheet_name, daemon_client, Some(cat_str)) {
+                match crate::sheets::database::reader::DbReader::read_sheet(&conn, sheet_name, daemon_client, db_filename) {
                     Ok(sheet_data) => {
                         info!("Successfully reloaded {} rows from DB for sheet '{}'", sheet_data.grid.len(), sheet_name);
                         registry.add_or_replace_sheet(

@@ -82,23 +82,23 @@ pub fn check_column_name_conflict(conn: &Connection, meta_table: &str, column_na
 }
 
 /// Delete a conflicting deleted column from metadata table.
-pub fn delete_conflicting_deleted_column(_conn: &Connection, meta_table: &str, column_name: &str, daemon_client: &super::super::daemon_client::DaemonClient) -> DbResult<()> {
+pub fn delete_conflicting_deleted_column(_conn: &Connection, meta_table: &str, column_name: &str, db_filename: Option<&str>, daemon_client: &super::super::daemon_client::DaemonClient) -> DbResult<()> {
     use crate::sheets::database::daemon_client::Statement;
     let stmt = Statement {
         sql: format!("DELETE FROM \"{}\" WHERE column_name = ? AND deleted = 1", meta_table),
         params: vec![serde_json::Value::String(column_name.to_string())],
     };
-    daemon_client.exec_batch(vec![stmt], None).map_err(daemon_error_to_rusqlite)?;
+    daemon_client.exec_batch(vec![stmt], db_filename).map_err(daemon_error_to_rusqlite)?;
     Ok(())
 }
 
 /// Handle column name conflict by checking if new_name exists at a different index.
-pub fn handle_column_conflict(conn: &Connection, meta_table: &str, table_name: &str, new_name: &str, source_idx: i32, daemon_client: &super::super::daemon_client::DaemonClient) -> DbResult<()> {
+pub fn handle_column_conflict(conn: &Connection, meta_table: &str, table_name: &str, new_name: &str, source_idx: i32, db_filename: Option<&str>, daemon_client: &super::super::daemon_client::DaemonClient) -> DbResult<()> {
     if let Some((existing_idx, is_deleted)) = check_column_name_conflict(conn, meta_table, new_name)? {
         if existing_idx != source_idx {
             if is_deleted == 1 {
                 bevy::log::warn!("Found deleted column '{}' at index {} in '{}' - deleting its metadata row (source index={})", new_name, existing_idx, meta_table, source_idx);
-                delete_conflicting_deleted_column(conn, meta_table, new_name, daemon_client)?;
+                delete_conflicting_deleted_column(conn, meta_table, new_name, db_filename, daemon_client)?;
             } else {
                 return Err(super::super::error::DbError::Other(format!("Column '{}' already exists at index {} in table '{}' (not deleted)", new_name, existing_idx, table_name)));
             }

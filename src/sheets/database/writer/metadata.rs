@@ -50,8 +50,9 @@ fn get_persisted_index_or_skip(
     table_name: &str,
     runtime_idx: usize,
     daemon_client: &DaemonClient,
+    db_filename: Option<&str>,
 ) -> DbResult<Option<i32>> {
-    match runtime_to_persisted_column_index(conn, table_name, runtime_idx, daemon_client)? {
+    match runtime_to_persisted_column_index(conn, table_name, runtime_idx, daemon_client, db_filename)? {
         Some(idx) => Ok(Some(idx)),
         None => {
             bevy::log::debug!("Skipping technical column {} in '{}'", runtime_idx, table_name);
@@ -193,7 +194,7 @@ pub fn update_column_metadata(
     db_filename: Option<&str>,
     daemon_client: &DaemonClient,
 ) -> DbResult<()> {
-    let persisted_index = match get_persisted_index_or_skip(conn, table_name, column_index, daemon_client)? {
+    let persisted_index = match get_persisted_index_or_skip(conn, table_name, column_index, daemon_client, db_filename)? {
         Some(idx) => idx,
         None => return Ok(()),
     };
@@ -246,9 +247,10 @@ pub fn update_column_ai_include(
     table_name: &str,
     column_index: usize,
     include: bool,
+    db_filename: Option<&str>,
     daemon_client: &DaemonClient,
 ) -> DbResult<()> {
-    let persisted_index = match get_persisted_index_or_skip(conn, table_name, column_index, daemon_client)? {
+    let persisted_index = match get_persisted_index_or_skip(conn, table_name, column_index, daemon_client, db_filename)? {
         Some(idx) => idx,
         None => return Ok(()),
     };
@@ -259,7 +261,7 @@ pub fn update_column_ai_include(
     let sql = format!("UPDATE \"{}\" SET ai_include_in_send = ? WHERE column_index = ?", meta_table);
     let params = vec![bool_to_json(include), serde_json::Value::Number(persisted_index.into())];
     
-    exec_daemon_stmt(sql, params, None, daemon_client)
+    exec_daemon_stmt(sql, params, db_filename, daemon_client)
 }
 
 /// Update a column's validator (data_type, validator_type, validator_config) and optional AI flags in metadata
@@ -275,14 +277,14 @@ pub fn update_column_validator(
     db_filename: Option<&str>,
     daemon_client: &DaemonClient,
 ) -> DbResult<()> {
-    let persisted_index = match get_persisted_index_or_skip(conn, table_name, column_index, daemon_client)? {
+    let persisted_index = match get_persisted_index_or_skip(conn, table_name, column_index, daemon_client, db_filename)? {
         Some(idx) => idx,
         None => return Ok(()),
     };
     
     // Defensive: ensure metadata tables exist
     let _ = crate::sheets::database::schema::ensure_global_metadata_table(conn, daemon_client);
-    let inferred_meta = match crate::sheets::database::reader::DbReader::read_metadata(conn, table_name, daemon_client, None) {
+    let inferred_meta = match crate::sheets::database::reader::DbReader::read_metadata(conn, table_name, daemon_client, db_filename) {
         Ok(m) => m,
         Err(_) => crate::sheets::definitions::SheetMetadata::create_generic(
             table_name.to_string(),
@@ -291,7 +293,7 @@ pub fn update_column_validator(
             None,
         ),
     };
-    let _ = crate::sheets::database::schema::ensure_table_metadata_schema(conn, table_name, &inferred_meta, daemon_client, None);
+    let _ = crate::sheets::database::schema::ensure_table_metadata_schema(conn, table_name, &inferred_meta, daemon_client, db_filename);
     
     let meta_table = metadata_table_name(table_name);
     
@@ -378,7 +380,7 @@ pub fn update_column_display_name(
     db_filename: Option<&str>,
     daemon_client: &DaemonClient,
 ) -> DbResult<()> {
-    let persisted_index = match get_persisted_index_or_skip(conn, table_name, column_index, daemon_client)? {
+    let persisted_index = match get_persisted_index_or_skip(conn, table_name, column_index, daemon_client, db_filename)? {
         Some(idx) => idx,
         None => return Ok(()),
     };

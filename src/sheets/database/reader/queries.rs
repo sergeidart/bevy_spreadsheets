@@ -98,9 +98,10 @@ pub fn insert_orphaned_column_metadata(
     column_index: i32,
     column_name: &str,
     data_type: &str,
+    db_name: Option<&str>,
 ) -> DbResult<()> {
     daemon_client
-        .exec_insert_metadata(meta_table, column_index, column_name, data_type, None)
+        .exec_insert_metadata(meta_table, column_index, column_name, data_type, db_name)
         .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
             std::io::ErrorKind::Other,
             e,

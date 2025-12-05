@@ -12,6 +12,7 @@ pub fn populate_structure_schemas_from_child_tables(
     parent_table_name: &str,
     mut columns: Vec<ColumnDefinition>,
     daemon_client: &super::super::daemon_client::DaemonClient,
+    db_name: Option<&str>,
     read_metadata_fn: impl Fn(&Connection, &str, &super::super::daemon_client::DaemonClient, Option<&str>) -> DbResult<crate::sheets::definitions::SheetMetadata>,
 ) -> DbResult<Vec<ColumnDefinition>> {
     bevy::log::info!(
@@ -54,7 +55,7 @@ pub fn populate_structure_schemas_from_child_tables(
         );
 
         // Read child table metadata
-        match read_metadata_fn(conn, &child_table_name, daemon_client, None) {
+        match read_metadata_fn(conn, &child_table_name, daemon_client, db_name) {
             Ok(child_metadata) => {
                 // Convert child columns to structure fields
                 let structure_fields: Vec<crate::sheets::structure_field::StructureFieldDefinition> = child_metadata

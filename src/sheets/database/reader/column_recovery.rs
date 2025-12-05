@@ -15,6 +15,7 @@ pub fn recover_orphaned_columns(
     meta_table: &str,
     mut columns: Vec<ColumnDefinition>,
     daemon_client: &super::super::daemon_client::DaemonClient,
+    db_name: Option<&str>,
 ) -> DbResult<Vec<ColumnDefinition>> {
     let physical_columns = queries::get_physical_columns(conn, table_name)?;
 
@@ -83,6 +84,7 @@ pub fn recover_orphaned_columns(
             insert_index,
             col_name,
             &format!("{:?}", data_type),
+            db_name,
         ) {
             Ok(_) => {
                 if let Some(phys_idx) = physical_position {

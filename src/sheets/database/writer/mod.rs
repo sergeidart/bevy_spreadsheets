@@ -307,9 +307,10 @@ impl DbWriter {
         table_name: &str,
         column_index: usize,
         include: bool,
+        db_filename: Option<&str>,
         daemon_client: &super::daemon_client::DaemonClient,
     ) -> DbResult<()> {
-        metadata::update_column_ai_include(conn, table_name, column_index, include, daemon_client)
+        metadata::update_column_ai_include(conn, table_name, column_index, include, db_filename, daemon_client)
     }
 
     /// Update a column's validator and optional AI flags

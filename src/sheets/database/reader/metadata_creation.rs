@@ -64,5 +64,10 @@ pub fn create_metadata_from_physical_table(
     };
 
     create_metadata_table(table_name, &sheet_meta, daemon_client, db_name)?;
+    
+    // Checkpoint WAL so the reader connection can see the newly created table
+    let _ = conn.query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |_| Ok(()))
+        .map_err(|e| bevy::log::warn!("Failed to checkpoint WAL after metadata creation: {}", e));
+    
     Ok(())
 }

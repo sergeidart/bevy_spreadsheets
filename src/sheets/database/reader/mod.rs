@@ -73,7 +73,7 @@ impl DbReader {
         columns = Self::prepend_technical_columns(columns, is_structure)?;
 
         // Auto-recover orphaned columns
-        columns = column_recovery::recover_orphaned_columns(conn, table_name, &meta_table, columns, daemon_client)?;
+        columns = column_recovery::recover_orphaned_columns(conn, table_name, &meta_table, columns, daemon_client, db_name)?;
 
         // Populate structure_schema from child tables for Structure columns
         columns = structure_population::populate_structure_schemas_from_child_tables(
@@ -81,6 +81,7 @@ impl DbReader {
             table_name,
             columns,
             daemon_client,
+            db_name,
             Self::read_metadata,
         )?;
 

@@ -27,9 +27,10 @@ pub fn runtime_to_persisted_column_index(
     table_name: &str,
     runtime_column_index: usize,
     daemon_client: &super::super::daemon_client::DaemonClient,
+    db_name: Option<&str>,
 ) -> DbResult<Option<i32>> {
     // Read the full metadata to get the visual column list
-    let metadata = crate::sheets::database::reader::DbReader::read_metadata(conn, table_name, daemon_client, None)?;
+    let metadata = crate::sheets::database::reader::DbReader::read_metadata(conn, table_name, daemon_client, db_name)?;
     
     // Get the column at the runtime index
     let Some(column) = metadata.columns.get(runtime_column_index) else {
