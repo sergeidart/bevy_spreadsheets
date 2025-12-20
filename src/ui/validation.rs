@@ -84,6 +84,7 @@ pub(crate) fn validate_basic_cell(
     let mut parse_error = false;
     match basic_type {
         ColumnDataType::String => {}
+        ColumnDataType::Link => {} // Links are text-based URLs, no parse validation needed
         ColumnDataType::Bool => {
             if !matches!(
                 current_cell_string.to_lowercase().as_str(),

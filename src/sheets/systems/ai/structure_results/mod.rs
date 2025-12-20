@@ -278,6 +278,9 @@ pub fn process_structure_partition(
         schema_headers,
         // Use original_count, not original_rows_aligned.len() which includes AI-added rows
         original_rows_count: original_count,
+        orphaned_ai_rows: Vec::new(),
+        orphaned_claimed_ancestries: Vec::new(),
+        orphaned_decided: Vec::new(),
     });
 
     // Issue #5 fix: Populate cache for structure parent row so previews work
@@ -373,6 +376,9 @@ pub fn handle_structure_error(
             differences: Vec::new(),
             schema_headers: Vec::new(),
             original_rows_count: original_count,
+            orphaned_ai_rows: Vec::new(),
+            orphaned_claimed_ancestries: Vec::new(),
+            orphaned_decided: Vec::new(),
         });
 
         if new_row_context.is_some() {

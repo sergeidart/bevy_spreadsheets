@@ -10,6 +10,7 @@ use crate::ui::elements::editor::state::EditorWindowState;
 use crate::sheets::systems::ai::structure_results::{
     handle_structure_error, process_structure_partition,
 };
+use crate::sheets::systems::ai::utils::extract_structure_settings;
 
 /// Handle structure batch results with validation and partition processing
 pub fn handle_structure_batch_result(
@@ -109,23 +110,41 @@ pub fn handle_structure_batch_result(
     let schema_len = schema_fields.len();
     let included = ev.included_non_structure_columns.clone();
 
+    // Extract key_col_index for proper parent_key lookup (same as task_executor)
+    let (key_col_index, _allow_add) = extract_structure_settings(&structure_path, meta, Some(registry), &root_category);
+
     match &ev.result {
         Ok(rows) => {
             info!(
-                "Structure batch result: rows.len()={}, target_rows.len()={}",
+                "Structure batch result: rows.len()={}, target_rows.len()={}, ancestor_count={}",
                 rows.len(),
-                target_rows.len()
+                target_rows.len(),
+                context.ancestor_count
             );
             
-            // Group AI rows by parent key (first column)
+            // Default key column: use configured index, or column 2 for structure tables, column 1 for root tables
+            let default_key_idx = if meta.is_structure_table() { 2 } else { 1 };
+            
+            // For deep structures, ancestor columns are prepended to each row.
+            // The parent key is at index ancestor_count (after all ancestor columns).
+            // Example with ancestor_count=1: [grandparent, parent, field1, field2, ...]
+            //   - ancestor columns: [grandparent] (indices 0..ancestor_count)
+            //   - parent key: index ancestor_count (= 1)
+            //   - data columns: indices ancestor_count+1..
+            let ancestor_count = context.ancestor_count;
+            let parent_key_index = ancestor_count; // parent key is right after ancestors
+            
+            // Group AI rows by parent key (at index parent_key_index, after ancestor columns)
             // Map: parent_key -> Vec<Row>
             let mut rows_by_parent: std::collections::HashMap<String, Vec<Vec<String>>> = std::collections::HashMap::new();
             let mut unkeyed_rows: Vec<Vec<String>> = Vec::new();
             
             for row in rows {
-                if let Some(parent_key) = row.first() {
-                    let content = if row.len() > 1 {
-                        row[1..].to_vec()
+                if let Some(parent_key) = row.get(parent_key_index) {
+                    // Data content starts after parent key (skip ancestors + parent key)
+                    let data_start = ancestor_count + 1;
+                    let content = if row.len() > data_start {
+                        row[data_start..].to_vec()
                     } else {
                         vec![String::new(); schema_len]
                     };
@@ -133,7 +152,9 @@ pub fn handle_structure_batch_result(
                         .or_default()
                         .push(content);
                 } else {
-                    unkeyed_rows.push(if row.len() > 1 { row[1..].to_vec() } else { vec![String::new(); schema_len] });
+                    // No parent key found, still extract data if possible
+                    let data_start = ancestor_count + 1;
+                    unkeyed_rows.push(if row.len() > data_start { row[data_start..].to_vec() } else { vec![String::new(); schema_len] });
                 }
             }
 
@@ -150,27 +171,43 @@ pub fn handle_structure_batch_result(
             for (idx, &parent_row_index) in target_rows.iter().enumerate() {
                 // Determine parent key for this target row to look up in response
                 let parent_key = if let Some(context) = state.ai_structure_new_row_contexts.get(&parent_row_index) {
-                    // New row: extract key from full_ai_row (Phase 1 data)
+                    // New row: extract key from full_ai_row or review data using key_col_index
                     if let Some(full_row) = &context.full_ai_row {
-                        // Calculate dynamic prefix (same logic as task_executor)
-                        let dynamic_prefix = if let Some(new_row_review) = state.ai_new_row_reviews.get(context.new_row_index) {
-                            full_row.len().saturating_sub(new_row_review.ai.len())
-                        } else {
-                            0
-                        };
-                        full_row.get(dynamic_prefix).cloned().unwrap_or_default()
+                        // Use key_col_index for full_row lookup
+                        let key_idx = key_col_index.unwrap_or(default_key_idx);
+                        full_row.get(key_idx).cloned().unwrap_or_default()
                     } else if let Some(new_row_review) = state.ai_new_row_reviews.get(context.new_row_index) {
-                        new_row_review.ai.first().cloned().unwrap_or_default()
+                        // For AI review data, map key_col_index through non_structure_columns
+                        let key_idx = key_col_index.unwrap_or(default_key_idx);
+                        let position = new_row_review.non_structure_columns
+                            .iter()
+                            .position(|&col| col == key_idx)
+                            .unwrap_or(0);
+                        new_row_review.ai.get(position).cloned().unwrap_or_default()
                     } else {
                         String::new()
                     }
                 } else {
-                    // Existing row: use first data column (typically Name at index 1)
-                    // This matches task_executor logic
-                    sheet.grid.get(parent_row_index)
-                        .and_then(|r| r.get(1))
-                        .cloned()
-                        .unwrap_or_default()
+                    // Existing row: check AI review data first, then fall back to grid
+                    let key_idx = key_col_index.unwrap_or(default_key_idx);
+                    // IMPORTANT: Use AI review data if available for this row
+                    if let Some(review) = state.ai_row_reviews.iter().find(|r| r.row_index == parent_row_index) {
+                        if let Some(pos) = review.non_structure_columns.iter().position(|&col| col == key_idx) {
+                            review.ai.get(pos).cloned().unwrap_or_default()
+                        } else {
+                            // Key column not in review, fall back to grid
+                            sheet.grid.get(parent_row_index)
+                                .and_then(|r| r.get(key_idx))
+                                .map(|s| s.clone())
+                                .unwrap_or_default()
+                        }
+                    } else {
+                        // No review, use grid
+                        sheet.grid.get(parent_row_index)
+                            .and_then(|r| r.get(key_idx))
+                            .map(|s| s.clone())
+                            .unwrap_or_default()
+                    }
                 };
 
                 // Get rows for this parent from the map

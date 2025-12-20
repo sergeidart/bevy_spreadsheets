@@ -1,48 +1,47 @@
 // src/sheets/systems/ai/results/root_handlers.rs
-// Root batch result handlers (Phase 1)
+// Root batch result handlers - single-phase iterative processing
 
 use bevy::prelude::*;
 
 use crate::sheets::events::{AiBatchTaskResult, SheetOperationFeedback};
 use crate::sheets::resources::SheetRegistry;
-use crate::ui::elements::editor::state::EditorWindowState;
+use crate::ui::elements::editor::state::{
+    BatchProcessingContext, EditorWindowState, NewRowReview, RowReview,
+};
 
-use crate::sheets::systems::ai::phase2_helpers;
+use crate::sheets::systems::ai::row_helpers::{
+    create_row_snapshots, extract_ai_snapshot_from_new_row, generate_review_choices,
+    skip_key_prefix,
+};
+use crate::sheets::systems::ai::column_helpers::calculate_dynamic_prefix;
+use crate::sheets::systems::ai::duplicate_map_helpers::build_duplicate_map_for_parents;
+use crate::sheets::systems::ai::original_cache::cache_original_row_for_review;
+use crate::sheets::systems::ai::phase2_helpers::detect_duplicate_indices;
+use crate::sheets::systems::ai::structure_jobs::enqueue_structure_jobs_for_batch;
 
-/// Handle root batch results - Phase 1: Initial discovery call
-/// Detects duplicates and triggers Phase 2 deep review automatically
-///
-/// # Phase Logic based on Layers
-///
-/// The two-phase logic applies differently depending on how many layers are being sent:
-///
-/// ## One Layer (current level only - no child structures):
-/// - Send Phase 1, receive results
-/// - **Skip Phase 2** - use Phase 1 results directly for review
-/// - This applies at ANY level (parent, child, grandchild, etc.)
-/// - When a level has no children to process, it becomes "one layer"
-///
-/// ## Multi-Layer (current level + child structures):
-/// - **Current Level**: Send Phase 1, receive, send Phase 2, receive updated → use Phase 2 for review and child calls
-/// - **Child Level**: Send Phase 1 with latest parent data, receive, send Phase 2, receive updated → use Phase 2 for review and grandchild calls
-/// - **Deepest Level** (no more children below): Send Phase 1, receive → use directly (becomes "one layer")
-///
-/// Key insight: At each level, if there are child structures below (`ai_planned_structure_paths` not empty),
-/// do two phases. If no children below (empty paths), skip Phase 2 and use Phase 1 directly.
-pub fn handle_root_batch_result_phase1(
+/// Handle root batch results - single-phase processing
+/// 
+/// Processes AI results in one pass:
+/// 1. Detect duplicates in new rows (use original indices for duplicates)
+/// 2. Process original rows → RowReview
+/// 3. Process duplicate rows → NewRowReview with projected_row_index = matched original
+/// 4. Process new rows → NewRowReview with projected_row_index = max + sequence
+/// 5. Enqueue structure jobs for child tables
+#[allow(clippy::too_many_arguments)]
+pub fn handle_batch_result(
     ev: &AiBatchTaskResult,
     state: &mut EditorWindowState,
     registry: &SheetRegistry,
     feedback_writer: &mut EventWriter<SheetOperationFeedback>,
-    commands: &mut Commands,
-    runtime: &bevy_tokio_tasks::TokioTasksRuntime,
-    session_api_key: &crate::SessionApiKey,
+    _commands: &mut Commands,
+    _runtime: &bevy_tokio_tasks::TokioTasksRuntime,
+    _session_api_key: &crate::SessionApiKey,
 ) {
     match &ev.result {
         Ok(rows) => {
             let originals = ev.original_row_indices.len();
             info!(
-                "PHASE 1: Received {} rows ({} originals, {} new)",
+                "AI Batch: Received {} rows ({} originals, {} new)",
                 rows.len(),
                 originals,
                 rows.len().saturating_sub(originals)
@@ -63,20 +62,21 @@ pub fn handle_root_batch_result_phase1(
             if let Some(raw) = &ev.raw_response {
                 state.ai_raw_output_display = raw.clone();
                 let status = format!(
-                    "Phase 1 complete - {} row(s) received, analyzing...",
+                    "Processing {} row(s)...",
                     rows.len()
                 );
                 state.add_ai_call_log(status, Some(raw.clone()), None, false);
             }
 
-            // Detect duplicates in new rows
-            let (_orig_slice, extra_slice) = if originals == 0 {
+            // Split into original and new rows
+            let (orig_slice, extra_slice) = if originals == 0 {
                 (&[][..], &rows[..])
             } else {
                 rows.split_at(originals)
             };
 
-            let duplicate_indices = phase2_helpers::detect_duplicate_indices(
+            // Detect duplicates in new rows BEFORE processing
+            let duplicate_indices = detect_duplicate_indices(
                 extra_slice,
                 &ev.included_non_structure_columns,
                 ev.key_prefix_count,
@@ -85,80 +85,231 @@ pub fn handle_root_batch_result_phase1(
             );
 
             info!(
-                "PHASE 1: Detected {} duplicates out of {} new rows",
+                "AI Batch: Detected {} duplicates out of {} new rows",
                 duplicate_indices.len(),
                 extra_slice.len()
             );
 
-            // Store Phase 1 intermediate data
+            // Get context for processing
             let (cat_ctx, sheet_ctx) = state.current_sheet_context();
-            let sheet_name = sheet_ctx.unwrap_or_default();
+            let sheet_name = sheet_ctx.clone().unwrap_or_default();
+            let included = &ev.included_non_structure_columns;
 
-            state.ai_phase1_intermediate =
-                Some(crate::ui::elements::editor::state::Phase1IntermediateData {
-                    all_ai_rows: rows.clone(),
-                    duplicate_indices: duplicate_indices.clone(),
-                    original_count: originals,
-                    included_columns: ev.included_non_structure_columns.clone(),
-                    category: cat_ctx.clone(),
-                    sheet_name: sheet_name.clone(),
-                    key_prefix_count: ev.key_prefix_count,
-                    original_row_indices: ev.original_row_indices.clone(),
-                });
+            // Setup context prefixes
+            super::setup_context_prefixes(state, registry, ev);
 
-            // OPTIMIZATION: Skip Phase 2 in two cases:
-            // 1. No child structures to process (ai_planned_structure_paths is empty)
-            // 2. AI returned no NEW rows (only originals) - nothing new to review at parent level
-            let skip_phase2_one_layer = state.ai_planned_structure_paths.is_empty();
-            let skip_phase2_no_new_rows = extra_slice.is_empty();
+            // Clear previous reviews before populating
+            state.ai_row_reviews.clear();
+            state.ai_new_row_reviews.clear();
+            state.ai_structure_reviews.clear();
 
-            if skip_phase2_one_layer || skip_phase2_no_new_rows {
-                if skip_phase2_one_layer {
-                    info!(
-                        "ONE-LAYER OPTIMIZATION: Skipping Phase 2 (no child structures to process), using Phase 1 results directly"
-                    );
-                } else {
-                    info!(
-                        "NO-NEW-ROWS OPTIMIZATION: Skipping Phase 2 (AI returned no new rows), using Phase 1 data for structures"
-                    );
+            // Calculate max existing row_index for projected index assignment
+            let max_existing_row_index = ev.original_row_indices.iter().copied().max().unwrap_or(0);
+            let mut next_projected_index = max_existing_row_index + 1;
+
+            // Process original rows → RowReview
+            for (i, suggestion_full) in orig_slice.iter().enumerate() {
+                let row_index = ev.original_row_indices.get(i).copied().unwrap_or(i);
+                let dynamic_prefix = calculate_dynamic_prefix(suggestion_full.len(), included.len());
+                let parent_prefix_values: Vec<String> = suggestion_full
+                    .iter()
+                    .take(dynamic_prefix)
+                    .cloned()
+                    .collect();
+                let suggestion = skip_key_prefix(suggestion_full, dynamic_prefix);
+
+                if suggestion.len() < included.len() {
+                    warn!("Skipping malformed original row suggestion");
+                    continue;
                 }
 
-                // Phase 1 complete (and skipping Phase 2)
-                state.ai_completed_tasks += 1;
-
-                // Process Phase 1 results directly as final results
-                let established_row_count = originals + duplicate_indices.len();
-                phase2_helpers::handle_deep_review_result_phase2(
-                    ev,
-                    &duplicate_indices,
-                    established_row_count,
-                    state,
-                    registry,
-                    feedback_writer,
-                );
-            } else {
-                // Phase 1 complete, will trigger Phase 2
-                state.ai_completed_tasks += 1;
-                // Update total to include Phase 2
-                state.ai_total_tasks += 1;
-
-                // Trigger Phase 2: Deep review call
-                phase2_helpers::trigger_phase2_deep_review(
-                    state,
-                    registry,
-                    commands,
-                    runtime,
-                    session_api_key,
-                    rows,
-                    &duplicate_indices,
-                    originals,
-                    &ev.included_non_structure_columns,
-                    ev.key_prefix_count,
+                let (original_snapshot, ai_snapshot) = create_row_snapshots(
+                    registry, &cat_ctx, &sheet_name, row_index, suggestion, included,
                 );
 
-                // Do NOT enqueue structure jobs yet - wait for Phase 2 to complete
-                // Structure jobs will be enqueued in handle_deep_review_result_phase2
+                let choices = generate_review_choices(&original_snapshot, &ai_snapshot);
+
+                state.ai_row_reviews.push(RowReview {
+                    row_index,
+                    original: original_snapshot,
+                    ai: ai_snapshot,
+                    choices,
+                    non_structure_columns: included.clone(),
+                    key_overrides: std::collections::HashMap::new(),
+                    ancestor_key_values: parent_prefix_values,
+                    ancestor_dropdown_cache: std::collections::HashMap::new(),
+                    is_orphan: false,
+                });
+
+                cache_original_row_for_review(
+                    state,
+                    registry,
+                    &cat_ctx,
+                    &Some(sheet_name.clone()),
+                    Some(row_index),
+                    None,
+                );
             }
+
+            // Build duplicate map for new row processing
+            let key_actual_col_opt = included
+                .iter()
+                .copied()
+                .find(|&c| c != 1)
+                .or_else(|| included.first().copied());
+            let sheet_ctx_opt = Some(sheet_name.clone());
+
+            // Process new rows - split into duplicates and genuinely new
+            for (new_idx, suggestion_full) in extra_slice.iter().enumerate() {
+                let dynamic_prefix = calculate_dynamic_prefix(suggestion_full.len(), included.len());
+                let parent_prefix_values: Vec<String> = suggestion_full
+                    .iter()
+                    .take(dynamic_prefix)
+                    .cloned()
+                    .collect();
+                let suggestion = skip_key_prefix(suggestion_full, dynamic_prefix);
+
+                if suggestion.len() < included.len() {
+                    continue;
+                }
+
+                let ai_snapshot = extract_ai_snapshot_from_new_row(suggestion, included);
+
+                let is_duplicate = duplicate_indices.contains(&new_idx);
+
+                if is_duplicate {
+                    // Duplicate row - find the matched original and use its row_index
+                    let first_col_value_to_row = build_duplicate_map_for_parents(
+                        &parent_prefix_values,
+                        key_actual_col_opt,
+                        &cat_ctx,
+                        &sheet_ctx_opt,
+                        registry,
+                        state,
+                        included,
+                    );
+
+                    let (duplicate_match_row, choices, original_for_merge, merge_selected) =
+                        super::check_for_duplicate(
+                            &ai_snapshot,
+                            &first_col_value_to_row,
+                            included,
+                            key_actual_col_opt,
+                            &cat_ctx,
+                            &sheet_ctx_opt,
+                            registry,
+                        );
+
+                    // For duplicates, projected_row_index = matched original's row_index
+                    let projected_row_index = duplicate_match_row.unwrap_or(next_projected_index);
+
+                    state.ai_new_row_reviews.push(NewRowReview {
+                        ai: ai_snapshot,
+                        non_structure_columns: included.clone(),
+                        duplicate_match_row,
+                        choices,
+                        merge_selected,
+                        merge_decided: false,
+                        original_for_merge,
+                        key_overrides: std::collections::HashMap::new(),
+                        ancestor_key_values: parent_prefix_values,
+                        ancestor_dropdown_cache: std::collections::HashMap::new(),
+                        projected_row_index,
+                        is_orphan: false,
+                    });
+
+                    let new_row_idx = state.ai_new_row_reviews.len() - 1;
+                    cache_original_row_for_review(
+                        state,
+                        registry,
+                        &cat_ctx,
+                        &sheet_ctx_opt,
+                        duplicate_match_row,
+                        Some(new_row_idx),
+                    );
+                } else {
+                    // Genuinely new row - assign next projected index
+                    let projected_row_index = next_projected_index;
+                    next_projected_index += 1;
+
+                    state.ai_new_row_reviews.push(NewRowReview {
+                        ai: ai_snapshot,
+                        non_structure_columns: included.clone(),
+                        duplicate_match_row: None,
+                        choices: None,
+                        merge_selected: false,
+                        merge_decided: false,
+                        original_for_merge: None,
+                        key_overrides: std::collections::HashMap::new(),
+                        ancestor_key_values: parent_prefix_values,
+                        ancestor_dropdown_cache: std::collections::HashMap::new(),
+                        projected_row_index,
+                        is_orphan: false,
+                    });
+
+                    let new_row_idx = state.ai_new_row_reviews.len() - 1;
+                    cache_original_row_for_review(
+                        state,
+                        registry,
+                        &cat_ctx,
+                        &sheet_ctx_opt,
+                        None,
+                        Some(new_row_idx),
+                    );
+                }
+            }
+
+            // Store batch context for structure job enqueueing
+            let batch_context = BatchProcessingContext {
+                duplicate_indices: duplicate_indices.clone(),
+                original_count: originals,
+                included_columns: included.clone(),
+                category: cat_ctx.clone(),
+                sheet_name: sheet_name.clone(),
+                original_row_indices: ev.original_row_indices.clone(),
+            };
+
+            // Restore original row indices for structure processing
+            state.ai_last_send_root_rows = ev.original_row_indices.clone();
+
+            // Enqueue structure jobs (pass batch_context before storing in state)
+            let expected_structure_jobs = enqueue_structure_jobs_for_batch(
+                state,
+                registry,
+                Some(&batch_context),
+            );
+
+            // Store batch context after using it
+            state.ai_batch_context = Some(batch_context);
+
+            // Mark task complete
+            state.ai_completed_tasks += 1;
+
+            state.ai_batch_has_undecided_merge = state
+                .ai_new_row_reviews
+                .iter()
+                .any(|nr| nr.duplicate_match_row.is_some() && !nr.merge_decided);
+
+            state.ai_mode = crate::ui::elements::editor::state::AiModeState::ResultsReady;
+            state.refresh_structure_waiting_state();
+
+            if let Some(_raw) = &ev.raw_response {
+                let status = format!(
+                    "Complete - {} original(s), {} new row(s), {} structure job(s)",
+                    state.ai_row_reviews.len(),
+                    state.ai_new_row_reviews.len(),
+                    expected_structure_jobs
+                );
+                // Don't include raw response here - already logged in "Processing..." entry
+                state.add_ai_call_log(status, None, None, false);
+            }
+
+            info!(
+                "AI Batch Complete: {} originals, {} new rows, {} structures",
+                state.ai_row_reviews.len(),
+                state.ai_new_row_reviews.len(),
+                expected_structure_jobs
+            );
         }
         Err(err) => {
             handle_root_batch_error(state, ev, err, feedback_writer);
@@ -182,7 +333,6 @@ pub fn handle_root_batch_error(
         state.add_ai_call_log(format!("Error: {}", err), None, None, true);
     }
 
-    // Don't auto-open log panel - user will open manually if needed
     feedback_writer.write(SheetOperationFeedback {
         message: format!("AI batch error: {}", err),
         is_error: true,

@@ -21,6 +21,7 @@ pub fn decorate_context_with_type(
         ColumnDataType::Bool => Some("Bool"),
         ColumnDataType::I64 => Some("Integer"),
         ColumnDataType::F64 => Some("Float"),
+        ColumnDataType::Link => Some("Link/URL"),
     };
 
     if let Some(label) = type_label {

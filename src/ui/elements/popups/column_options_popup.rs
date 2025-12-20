@@ -59,7 +59,7 @@ pub fn show_column_options_popup(
         let col_index = state.options_column_target_index;
         let mut rename_sent = false;
         let mut validator_sent = false;
-        let (current_name, current_filter, current_context, current_validator) = {
+        let (current_name, current_filter, current_context, current_validator, current_hidden) = {
             let maybe_col_def = registry
                 .get_sheet(category, sheet_name)
                 .and_then(|s| s.metadata.as_ref())
@@ -75,9 +75,10 @@ pub fn show_column_options_popup(
                     col_def.filter.clone(),
                     col_def.ai_context.clone(),
                     col_def.validator.clone(),
+                    col_def.hidden,
                 )
             } else {
-                (None, None, None, None)
+                (None, None, None, None, false)
             }
         };
         if current_name.is_none() {
@@ -154,8 +155,9 @@ pub fn show_column_options_popup(
 
             let filter_changed = current_filter != filter_to_store;
             let context_changed = current_context != context_to_store;
+            let hidden_changed = current_hidden != state.options_column_hidden_input;
 
-            if filter_changed || context_changed {
+            if filter_changed || context_changed || hidden_changed {
                 non_event_change_occurred = true;
                 if let Some(sheet_data) = registry.get_sheet_mut(category, sheet_name) {
                     if let Some(meta) = &mut sheet_data.metadata {
@@ -189,6 +191,7 @@ pub fn show_column_options_popup(
                                             if let Some(s) = col_def.filter.as_deref() { Some(s) } else { Some("") },
                                             None,
                                             None,
+                                            None,
                                             daemon_client,
                                         ) {
                                             error!("Persist column metadata (filter) failed: {}", e);
@@ -218,6 +221,7 @@ pub fn show_column_options_popup(
                                             // Pass empty string when clearing to force DB NULL
                                             if let Some(s) = col_def.ai_context.as_deref() { Some(s) } else { Some("") },
                                             None,
+                                            None,
                                             daemon_client,
                                         ) {
                                             error!("Persist column metadata (AI context) failed: {}", e);
@@ -225,16 +229,45 @@ pub fn show_column_options_popup(
                                     }
                                 }
                             }
+                            if hidden_changed {
+                                info!(
+                                    "Updating hidden flag for col {} of '{:?}/{}': {} -> {}.",
+                                    col_index + 1,
+                                    category,
+                                    sheet_name,
+                                    current_hidden,
+                                    state.options_column_hidden_input
+                                );
+                                col_def.hidden = state.options_column_hidden_input;
+                                // Persist hidden flag to DB if this is DB-backed
+                                if meta.category.is_some() {
+                                    if let Some(cat) = category {
+                                        let table_name = &meta.sheet_name;
+                                        if let Err(e) = crate::sheets::database::persist_column_metadata(
+                                            cat,
+                                            table_name,
+                                            col_index,
+                                            None,
+                                            None,
+                                            None,
+                                            Some(col_def.hidden),
+                                            daemon_client,
+                                        ) {
+                                            error!("Persist column metadata (hidden) failed: {}", e);
+                                        }
+                                    }
+                                }
+                            }
                         } else {
-                            warn!("Filter/Context update failed: Index out of bounds.");
+                            warn!("Filter/Context/Hidden update failed: Index out of bounds.");
                             actions_ok = false;
                         }
                     } else {
-                        warn!("Filter/Context update failed: Metadata missing.");
+                        warn!("Filter/Context/Hidden update failed: Metadata missing.");
                         actions_ok = false;
                     }
                 } else {
-                    warn!("Filter/Context update failed: Sheet not found.");
+                    warn!("Filter/Context/Hidden update failed: Sheet not found.");
                     actions_ok = false;
                 }
             }
@@ -437,6 +470,8 @@ fn initialize_popup_state(state: &mut EditorWindowState, registry: &SheetRegistr
             state.options_column_filter_terms.push(String::new());
         }
         state.options_column_ai_context_input = col_def.ai_context.clone().unwrap_or_default();
+        // Initialize hidden checkbox from column definition
+        state.options_column_hidden_input = col_def.hidden;
 
         match &col_def.validator {
             Some(ColumnValidator::Basic(data_type)) => {

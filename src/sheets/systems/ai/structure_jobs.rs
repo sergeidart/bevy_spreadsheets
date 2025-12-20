@@ -5,14 +5,14 @@ use bevy::prelude::*;
 
 use crate::sheets::resources::SheetRegistry;
 use crate::ui::elements::editor::state::{
-    EditorWindowState, Phase1IntermediateData, StructureNewRowContext, StructureSendJob,
+    EditorWindowState, BatchProcessingContext, StructureNewRowContext, StructureSendJob,
 };
 
 /// Enqueue structure jobs for a batch result, preparing tokens for new rows
 pub fn enqueue_structure_jobs_for_batch(
     state: &mut EditorWindowState,
     registry: &SheetRegistry,
-    phase1_data: Option<&Phase1IntermediateData>,
+    _batch_context: Option<&BatchProcessingContext>,
 ) -> usize {
     state.ai_pending_structure_jobs.clear();
     state.ai_active_structure_job = None;
@@ -75,7 +75,7 @@ pub fn enqueue_structure_jobs_for_batch(
         }
 
         if !state.ai_new_row_reviews.is_empty() {
-            let new_row_context_inputs: Vec<(usize, Vec<(usize, String)>, Option<Vec<String>>)> =
+            let new_row_context_inputs: Vec<(usize, Vec<(usize, String)>, Option<Vec<String>>, usize)> =
                 state
                     .ai_new_row_reviews
                     .iter()
@@ -88,17 +88,19 @@ pub fn enqueue_structure_jobs_for_batch(
                             .map(|(col_idx, value)| (*col_idx, value.clone()))
                             .collect();
 
-                        // Extract full AI row from phase1_data if available
-                        let full_ai_row = phase1_data.and_then(|phase1| {
-                            let row_index_in_phase1 = phase1.original_count + new_idx;
-                            phase1.all_ai_rows.get(row_index_in_phase1).cloned()
-                        });
+                        // Build full AI row from NewRowReview data
+                        // This includes ancestor key values + ai column values
+                        let mut full_ai_row = nr.ancestor_key_values.clone();
+                        full_ai_row.extend(nr.ai.iter().cloned());
+                        
+                        // Use projected_row_index for structure job target
+                        let projected_index = nr.projected_row_index;
 
-                        (new_idx, non_structure_values, full_ai_row)
+                        (new_idx, non_structure_values, Some(full_ai_row), projected_index)
                     })
                     .collect();
 
-            for (new_idx, non_structure_values, full_ai_row) in new_row_context_inputs {
+            for (new_idx, non_structure_values, full_ai_row, _projected_index) in new_row_context_inputs {
                 let token = state.allocate_structure_new_row_token();
                 let context = StructureNewRowContext {
                     new_row_index: new_idx,

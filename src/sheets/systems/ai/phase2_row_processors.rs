@@ -1,5 +1,8 @@
 // src/sheets/systems/ai/phase2_row_processors.rs
-// Phase 2 row processing - specialized processors for original, duplicate, and new rows
+// Row processing - specialized processors for original, duplicate, and new rows
+// NOTE: These functions are modular alternatives to inline processing in root_handlers.rs
+
+#![allow(dead_code)]
 
 use bevy::prelude::*;
 
@@ -14,23 +17,23 @@ use super::column_helpers::calculate_dynamic_prefix;
 use super::duplicate_map_helpers::build_duplicate_map_for_parents;
 use super::original_cache::cache_original_row_for_review;
 
-/// Process original rows from Phase 2 results
+/// Process original rows from batch results
 /// 
-/// These are existing rows that were included in the Phase 2 request for deep review.
+/// These are existing rows that were included in the batch request.
 /// They already exist in the database and will be shown in the RowReview UI.
-pub fn process_original_rows_from_phase2(
+pub fn process_original_rows(
     state: &mut EditorWindowState,
     registry: &SheetRegistry,
-    phase1: &crate::ui::elements::editor::state::Phase1IntermediateData,
+    ctx: &crate::ui::elements::editor::state::BatchProcessingContext,
     orig_slice: &[Vec<String>],
 ) {
-    let included = &phase1.included_columns;
-    let cat_ctx = &phase1.category;
-    let sheet_ctx = &phase1.sheet_name;
+    let included = &ctx.included_columns;
+    let cat_ctx = &ctx.category;
+    let sheet_ctx = &ctx.sheet_name;
 
     for (i, suggestion_full) in orig_slice.iter().enumerate() {
-        // Use actual original row index from Phase 1
-        let row_index = phase1.original_row_indices.get(i).copied().unwrap_or(i);
+        // Use actual original row index from context
+        let row_index = ctx.original_row_indices.get(i).copied().unwrap_or(i);
         // Infer prefix count from inbound row: total_len - included_len
         let dynamic_prefix = calculate_dynamic_prefix(suggestion_full.len(), included.len());
         let parent_prefix_values: Vec<String> = suggestion_full
@@ -60,6 +63,7 @@ pub fn process_original_rows_from_phase2(
             key_overrides: std::collections::HashMap::new(),
             ancestor_key_values: parent_prefix_values.clone(),
             ancestor_dropdown_cache: std::collections::HashMap::new(),
+            is_orphan: false,
         });
 
         // Cache original row using helper
@@ -74,20 +78,21 @@ pub fn process_original_rows_from_phase2(
     }
 }
 
-/// Process duplicate rows from Phase 2 as merge candidates
+/// Process duplicate rows as merge candidates
 /// 
 /// These are AI-suggested rows that match existing rows in the database.
 /// They will be shown in the NewRowReview UI with merge options.
-pub fn process_duplicate_rows_from_phase2(
+/// duplicate_match_row contains the row_index of the matched original.
+pub fn process_duplicate_rows(
     state: &mut EditorWindowState,
     registry: &SheetRegistry,
-    phase1: &crate::ui::elements::editor::state::Phase1IntermediateData,
+    ctx: &crate::ui::elements::editor::state::BatchProcessingContext,
     dup_slice: &[Vec<String>],
     _duplicate_indices: &[usize],
 ) {
-    let included = &phase1.included_columns;
-    let cat_ctx = &phase1.category;
-    let sheet_ctx = &phase1.sheet_name;
+    let included = &ctx.included_columns;
+    let cat_ctx = &ctx.category;
+    let sheet_ctx = &ctx.sheet_name;
 
     // Choose a key column that isn't the technical parent_key (1)
     let key_actual_col_opt = included
@@ -137,6 +142,10 @@ pub fn process_duplicate_rows_from_phase2(
                 registry,
             );
 
+        // For duplicates, projected_row_index is the matched original's row_index
+        // until the user decides to keep as new (then it gets a fresh projected index)
+        let projected_row_index = duplicate_match_row.unwrap_or(0);
+
         state.ai_new_row_reviews.push(NewRowReview {
             ai: ai_snapshot.clone(),
             non_structure_columns: included.clone(),
@@ -148,6 +157,8 @@ pub fn process_duplicate_rows_from_phase2(
             key_overrides: std::collections::HashMap::new(),
             ancestor_key_values: parent_prefix_values.clone(),
             ancestor_dropdown_cache: std::collections::HashMap::new(),
+            projected_row_index,
+            is_orphan: false,
         });
 
         // Cache original for duplicate using helper
@@ -163,21 +174,24 @@ pub fn process_duplicate_rows_from_phase2(
     }
 }
 
-/// Process new AI-added rows from Phase 2 (these had minimal data in Phase 2 request)
+/// Process new AI-added rows (these are genuinely new suggestions)
 /// 
 /// These are genuinely new rows suggested by AI that don't match existing rows.
 /// They will be shown in the NewRowReview UI for approval.
-pub fn process_new_rows_from_phase2(
+/// projected_row_index is assigned based on max existing + 1 + position.
+pub fn process_new_rows(
     state: &mut EditorWindowState,
     registry: &SheetRegistry,
-    phase1: &crate::ui::elements::editor::state::Phase1IntermediateData,
+    ctx: &crate::ui::elements::editor::state::BatchProcessingContext,
     new_slice: &[Vec<String>],
+    max_row_index: usize,
+    new_start_offset: usize,
 ) {
-    let included = &phase1.included_columns;
-    let cat_ctx = &phase1.category;
-    let sheet_ctx = &phase1.sheet_name;
+    let included = &ctx.included_columns;
+    let cat_ctx = &ctx.category;
+    let sheet_ctx = &ctx.sheet_name;
 
-    for suggestion_full in new_slice.iter() {
+    for (pos, suggestion_full) in new_slice.iter().enumerate() {
         let dynamic_prefix = calculate_dynamic_prefix(suggestion_full.len(), included.len());
         let parent_prefix_values: Vec<String> = suggestion_full
             .iter()
@@ -192,6 +206,9 @@ pub fn process_new_rows_from_phase2(
 
         let ai_snapshot = extract_ai_snapshot_from_new_row(suggestion, included);
 
+        // Calculate projected row index for this new row
+        let projected_row_index = max_row_index + 1 + new_start_offset + pos;
+
         state.ai_new_row_reviews.push(NewRowReview {
             ai: ai_snapshot,
             non_structure_columns: included.clone(),
@@ -203,6 +220,8 @@ pub fn process_new_rows_from_phase2(
             key_overrides: std::collections::HashMap::new(),
             ancestor_key_values: parent_prefix_values.clone(),
             ancestor_dropdown_cache: std::collections::HashMap::new(),
+            projected_row_index,
+            is_orphan: false,
         });
 
         // Cache empty original for new rows using helper

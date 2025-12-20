@@ -1,6 +1,7 @@
 // src/ui/elements/editor/editor_mode_panels.rs
 use super::main_editor::SheetEventWriters; // Assuming SheetEventWriters is made public or moved
 use crate::sheets::resources::SheetRegistry;
+use crate::sheets::systems::ai::processor::DirectorSession;
 use crate::ui::elements::ai_review::ai_batch_review_ui::draw_ai_batch_review_panel;
 use crate::ui::elements::ai_review::ai_panel::draw_ai_panel;
 use crate::ui::elements::editor::state::{AiModeState, EditorWindowState, SheetInteractionState};
@@ -22,6 +23,7 @@ pub(super) fn show_active_mode_panel(
     commands: &mut Commands,
     session_api_key: &SessionApiKey,
     sheet_writers: &mut SheetEventWriters, // For cell updates during review & delete mode
+    director_session: &mut DirectorSession,
 ) -> bool {
     // Returns true if any panel was shown that might need a separator
     let mut panel_shown = false;
@@ -47,6 +49,7 @@ pub(super) fn show_active_mode_panel(
             &mut sheet_writers.rename_ai_schema_group,
             &mut sheet_writers.select_ai_schema_group,
             &mut sheet_writers.delete_ai_schema_group,
+            director_session,
         );
         panel_shown = true;
     }

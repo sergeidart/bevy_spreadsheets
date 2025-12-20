@@ -98,6 +98,7 @@ pub struct EditorMiscParams<'w> {
     pub copier_manager: ResMut<'w, VisualCopierManager>,
     pub request_app_exit_writer: EventWriter<'w, RequestAppExit>,
     pub daemon_client: Res<'w, SharedDaemonClient>,
+    pub director_session: ResMut<'w, crate::sheets::systems::ai::processor::DirectorSession>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -184,7 +185,10 @@ pub fn generic_sheet_editor_ui(
 
     // Render central panel (main content)
     egui::CentralPanel::default().show(ctx, |ui| {
-        if keys.just_pressed(KeyCode::Escape) {
+        // Prevent general back navigation (ESC) if inside AI Review
+        let is_ai_reviewing = state.ai_mode == AiModeState::Reviewing;
+
+        if !is_ai_reviewing && keys.just_pressed(KeyCode::Escape) {
             if let Some(nav_ctx) = state.structure_navigation_stack.pop() {
                 // Navigate back to parent sheet in real navigation
                 state.selected_category = nav_ctx.parent_category;
@@ -204,6 +208,7 @@ pub fn generic_sheet_editor_ui(
             &misc.runtime,
             &misc.session_api_key_res,
             &mut commands,
+            &mut *misc.director_session,
         );
 
         ui.add_space(10.0);

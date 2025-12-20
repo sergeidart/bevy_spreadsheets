@@ -12,6 +12,8 @@ pub enum ColumnDataType {
     Bool,
     I64,
     F64,
+    /// Link type - displays as clickable URL that opens in browser, with edit mode toggle
+    Link,
 }
 
 impl fmt::Display for ColumnDataType {
@@ -56,6 +58,7 @@ pub fn parse_column_data_type(s: &str) -> Option<ColumnDataType> {
         | "Option<int>" => Some(ColumnDataType::I64),
         "F64" | "f64" | "Float" | "float" | "OptionF64" | "optionf64" | "Option<Float>"
         | "Option<float>" => Some(ColumnDataType::F64),
+        "Link" | "link" | "URL" | "url" | "Url" => Some(ColumnDataType::Link),
         // Legacy integer widths map to I64
         "U8" | "u8" | "U16" | "u16" | "U32" | "u32" | "U64" | "u64" | "I8" | "i8" | "I16"
         | "i16" | "I32" | "i32" => Some(ColumnDataType::I64),

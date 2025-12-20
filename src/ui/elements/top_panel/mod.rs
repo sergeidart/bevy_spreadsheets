@@ -53,6 +53,7 @@ mod orchestrator {
         runtime: &TokioTasksRuntime,
         session_api_key: &crate::SessionApiKey,
         commands: &mut Commands,
+        director_session: &mut crate::sheets::systems::ai::processor::DirectorSession,
     ) {
         egui::TopBottomPanel::top("main_top_controls_panel_refactored")
             .show_inside(ui, |ui| {
@@ -63,7 +64,11 @@ mod orchestrator {
                     // Back button (reserve width when hidden to prevent jumps)
                     let back_width = calc_button_width(ui_row, "⬅ Back");
                     let interact_h = ui_row.style().spacing.interact_size.y;
-                    let has_navigation = !state.structure_navigation_stack.is_empty();
+                    
+                    // Hide general back button if inside AI Review
+                    let is_ai_reviewing = state.ai_mode == AiModeState::Reviewing;
+                    let has_navigation = !state.structure_navigation_stack.is_empty() && !is_ai_reviewing;
+                    
                     if has_navigation {
                         if ui_row.add_sized([back_width, interact_h], egui::Button::new("⬅ Back")).clicked() {
                             // Navigate back using structure navigation stack
@@ -269,6 +274,7 @@ mod orchestrator {
                             &mut sheet_writers.rename_ai_schema_group,
                             &mut sheet_writers.select_ai_schema_group,
                             &mut sheet_writers.delete_ai_schema_group,
+                            director_session,
                         );
                     }
                     if state.current_interaction_mode == SheetInteractionState::DeleteModeActive {

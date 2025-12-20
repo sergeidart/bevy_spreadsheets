@@ -225,9 +225,10 @@ fn render_ai_regular_cell(
                             }
                         }
                     } else {
-                        // Show parent_key value directly (green text)
-                        // Don't look up in parent table - the value is already the parent identifier
-                        ui.label(RichText::new(&value).color(PARENT_KEY_COLOR));
+                        // Show parent_key value - use red for orphaned rows, green for normal
+                        let is_orphan = ctx.state.ai_row_reviews.get(data_idx).map(|rr| rr.is_orphan).unwrap_or(false);
+                        let color = if is_orphan { super::row_render::ORPHAN_ANCESTOR_COLOR } else { PARENT_KEY_COLOR };
+                        ui.label(RichText::new(&value).color(color));
                     }
                     return;
                 }
@@ -292,9 +293,10 @@ fn render_ai_regular_cell(
                             }
                         }
                     } else {
-                        // Show parent_key value directly (green text)
-                        // Don't look up in parent table - the value is already the parent identifier
-                        ui.label(RichText::new(&value).color(PARENT_KEY_COLOR));
+                        // Show parent_key value - use red for orphaned rows, green for normal
+                        let is_orphan = ctx.state.ai_new_row_reviews.get(data_idx).map(|nr| nr.is_orphan).unwrap_or(false);
+                        let color = if is_orphan { super::row_render::ORPHAN_ANCESTOR_COLOR } else { PARENT_KEY_COLOR };
+                        ui.label(RichText::new(&value).color(color));
                     }
                     return;
                 }
@@ -346,9 +348,10 @@ fn render_ai_regular_cell(
                             }
                         }
                     } else {
-                        // Show parent_key value directly (green text)
-                        // Don't look up in parent table - the value is already the parent identifier
-                        ui.label(RichText::new(&value).color(PARENT_KEY_COLOR));
+                        // Show parent_key value - use red for orphaned rows, green for normal
+                        let is_orphan = ctx.state.ai_new_row_reviews.get(data_idx).map(|nr| nr.is_orphan).unwrap_or(false);
+                        let color = if is_orphan { super::row_render::ORPHAN_ANCESTOR_COLOR } else { PARENT_KEY_COLOR };
+                        ui.label(RichText::new(&value).color(color));
                     }
                     return;
                 }

@@ -33,7 +33,10 @@ fn is_whitelisted(path: &Path) -> bool {
     p.contains("/database/systems/upload_handler.rs") || p.contains("\\database\\systems\\upload_handler.rs") ||
     p.contains("/validation.rs") || // contains inline tests with direct writes
     p.contains("\\validation.rs") ||
-    p.contains("/build.rs") || p.contains("\\build.rs")
+    p.contains("/build.rs") || p.contains("\\build.rs") ||
+    // CLI tools are standalone utilities that run outside the main app
+    p.contains("_cli.rs") ||
+    p.contains("/cli/") || p.contains("\\cli\\")
 }
 
 #[test]

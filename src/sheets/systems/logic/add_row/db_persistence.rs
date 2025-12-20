@@ -430,6 +430,7 @@ pub(super) fn update_column_metadata_db(
         None,
         None,
         ai_include_in_send,
+        None, // hidden
         db_path.file_name().and_then(|n| n.to_str()),
         daemon_client,
     )

@@ -41,6 +41,8 @@ pub struct EditorWindowState {
     // Multi-term OR filter terms (each term 'contains' OR). Joined when stored.
     pub options_column_filter_terms: Vec<String>,
     pub options_column_ai_context_input: String,
+    /// Ephemeral hidden checkbox state for Column Options popup
+    pub options_column_hidden_input: bool,
     pub options_validator_type: Option<ValidatorTypeChoice>,
     pub options_basic_type_select: ColumnDataType,
     pub options_link_target_sheet: Option<String>,
@@ -120,10 +122,8 @@ pub struct EditorWindowState {
     pub ai_last_send_root_category: Option<String>,
     pub ai_last_send_root_sheet: Option<String>,
     pub ai_planned_structure_paths: Vec<Vec<usize>>,
-    /// Phase 1 intermediate data - stored after initial AI call, before Phase 2 deep review
-    pub ai_phase1_intermediate: Option<Phase1IntermediateData>,
-    /// Flag indicating that the next AI result should be processed as Phase 2 deep review
-    pub ai_expecting_phase2_result: bool,
+    /// Batch processing context - stored when processing AI results for structure job enqueueing
+    pub ai_batch_context: Option<BatchProcessingContext>,
     pub ai_structure_results_expected: usize,
     pub ai_structure_results_received: usize,
     pub ai_waiting_for_structure_results: bool,
@@ -225,6 +225,10 @@ pub struct EditorWindowState {
     // App-wide FPS setting controlled from Settings popup
     pub fps_setting: FpsSetting,
     pub show_hidden_sheets: bool,
+    /// AI depth limit: how many levels of structure tables to process (default: 2)
+    pub ai_depth_limit: usize,
+    /// AI width limit: how many rows to send in one batch (default: 32)
+    pub ai_width_limit: usize,
     pub ai_throttled_apply_queue: VecDeque<ThrottledAiAction>,
     pub ai_throttled_batch_add_queue: VecDeque<(Option<String>, String, Vec<Vec<(usize, String)>>)>,
     pub ai_batch_has_undecided_merge: bool,

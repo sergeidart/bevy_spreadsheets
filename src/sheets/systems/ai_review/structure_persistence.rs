@@ -162,7 +162,17 @@ pub fn structure_row_apply_new(
     // New rows in entry start after original_rows.len()
     let base = entry.original_rows.len();
     let target_idx = base + new_row_local_idx;
+    
+    info!(
+        "structure_row_apply_new: new_row_local_idx={}, base={}, target_idx={}, merged_rows.len()={}, ai_rows.len()={}, accept={}",
+        new_row_local_idx, base, target_idx, entry.merged_rows.len(), entry.ai_rows.len(), accept
+    );
+    
     if target_idx >= entry.merged_rows.len() {
+        warn!(
+            "structure_row_apply_new: SKIPPING - target_idx {} >= merged_rows.len() {}!",
+            target_idx, entry.merged_rows.len()
+        );
         return;
     }
     if accept {

@@ -31,6 +31,16 @@ pub(super) fn has_undecided_structures_in_context(
     parent_new_row_index: Option<usize>,
 ) -> bool {
     ai_structure_reviews.iter().any(|sr| {
+        // First check: structure review must be for the same sheet context
+        // If we have a detail_ctx (in navigation drilldown or structure detail mode),
+        // the structure review must match the root_sheet from that context
+        if let Some(ctx) = detail_ctx {
+            // In drilldown/detail mode: only consider structures from same root sheet
+            if sr.root_sheet != ctx.root_sheet || sr.root_category != ctx.root_category {
+                return false;
+            }
+        }
+        
         let row_matches = match (parent_row_index, parent_new_row_index) {
             (Some(row_idx), None) => {
                 sr.parent_row_index == row_idx && sr.parent_new_row_index.is_none()

@@ -22,6 +22,8 @@ use crate::ui::elements::editor::state::EditorWindowState;
 
 const ROW_HEIGHT: f32 = 26.0;
 pub(super) const PARENT_KEY_COLOR: Color32 = Color32::from_rgb(0, 150, 0);
+/// Red color for orphaned row ancestors (parent prefix didn't match any known parent)
+pub(super) const ORPHAN_ANCESTOR_COLOR: Color32 = Color32::from_rgb(200, 50, 50);
 
 /// Trait for review entries that support ancestor dropdown caching
 trait AncestorDropdownSupport {
@@ -268,7 +270,9 @@ impl<'a> RowContext<'a> {
                                     let cell_id = egui::Id::new(("ancestor_dropdown", "existing", data_idx, key_idx));
                                     render_ancestor_dropdown(ui, &mut rr.ancestor_key_values[key_idx], &options, cell_id);
                                 } else {
-                                    ui.label(RichText::new(&rr.ancestor_key_values[key_idx]).color(PARENT_KEY_COLOR));
+                                    // Use red for orphaned rows, green for normal rows
+                                    let color = if rr.is_orphan { ORPHAN_ANCESTOR_COLOR } else { PARENT_KEY_COLOR };
+                                    ui.label(RichText::new(&rr.ancestor_key_values[key_idx]).color(color));
                                 }
                             });
                         } else {
@@ -310,7 +314,9 @@ impl<'a> RowContext<'a> {
                                     let cell_id = egui::Id::new(("ancestor_dropdown", "new_dup", data_idx, key_idx));
                                     render_ancestor_dropdown(ui, &mut nr.ancestor_key_values[key_idx], &options, cell_id);
                                 } else {
-                                    ui.label(RichText::new(&nr.ancestor_key_values[key_idx]).color(PARENT_KEY_COLOR));
+                                    // Use red for orphaned rows, green for normal rows
+                                    let color = if nr.is_orphan { ORPHAN_ANCESTOR_COLOR } else { PARENT_KEY_COLOR };
+                                    ui.label(RichText::new(&nr.ancestor_key_values[key_idx]).color(color));
                                 }
                             });
                         } else {
@@ -339,7 +345,9 @@ impl<'a> RowContext<'a> {
                                     // Editable text box without green color
                                     ui.add(egui::TextEdit::singleline(&mut nr.ancestor_key_values[key_idx]).desired_width(120.0));
                                 } else {
-                                    ui.label(RichText::new(&nr.ancestor_key_values[key_idx]).color(PARENT_KEY_COLOR));
+                                    // Use red for orphaned rows, green for normal rows
+                                    let color = if nr.is_orphan { ORPHAN_ANCESTOR_COLOR } else { PARENT_KEY_COLOR };
+                                    ui.label(RichText::new(&nr.ancestor_key_values[key_idx]).color(color));
                                 }
                             });
                         } else {

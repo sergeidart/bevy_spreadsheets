@@ -182,7 +182,7 @@ pub fn update_table_ai_settings(
     exec_daemon_stmt(sql, params, db_filename, daemon_client)
 }
 
-/// Update a column's filter, ai_context, and include flag in the table's metadata table
+/// Update a column's filter, ai_context, include flag, and hidden flag in the table's metadata table
 /// Note: column_index is the RUNTIME index (includes technical columns like row_index)
 pub fn update_column_metadata(
     conn: &Connection,
@@ -191,6 +191,7 @@ pub fn update_column_metadata(
     filter_expr: Option<&str>,
     ai_context: Option<&str>,
     ai_include_in_send: Option<bool>,
+    hidden: Option<bool>,
     db_filename: Option<&str>,
     daemon_client: &DaemonClient,
 ) -> DbResult<()> {
@@ -225,6 +226,10 @@ pub fn update_column_metadata(
     }
     if let Some(v) = ai_include_in_send {
         sets.push("ai_include_in_send = ?");
+        params.push(bool_to_json(v));
+    }
+    if let Some(v) = hidden {
+        sets.push("hidden = ?");
         params.push(bool_to_json(v));
     }
     

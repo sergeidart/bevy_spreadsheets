@@ -266,7 +266,7 @@ impl DbWriter {
         )
     }
 
-    /// Update a column's metadata (filter, ai_context, ai_include)
+    /// Update a column's metadata (filter, ai_context, ai_include, hidden)
     pub fn update_column_metadata(
         conn: &Connection,
         table_name: &str,
@@ -274,6 +274,7 @@ impl DbWriter {
         filter_expr: Option<&str>,
         ai_context: Option<&str>,
         ai_include_in_send: Option<bool>,
+        hidden: Option<bool>,
         db_filename: Option<&str>,
         daemon_client: &super::daemon_client::DaemonClient,
     ) -> DbResult<()> {
@@ -284,6 +285,7 @@ impl DbWriter {
             filter_expr,
             ai_context,
             ai_include_in_send,
+            hidden,
             db_filename,
             daemon_client,
         )

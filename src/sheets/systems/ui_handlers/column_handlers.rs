@@ -21,6 +21,8 @@ pub fn calculate_column_width(
         // Numbers: keep compact
         (_, ColumnDataType::I64) => (70.0, 36.0),
         (_, ColumnDataType::F64) => (78.0, 36.0),
+        // Link: wider to accommodate URLs and edit toggle button
+        (_, ColumnDataType::Link) => (180.0, 60.0),
         // Default/text: a bit wider than base to improve readability
         _ => (120.0, 48.0),
     }

@@ -62,17 +62,18 @@ pub enum AiSuggestedPlan {
 fn structure_button_placeholder(
     parent_row_index: Option<usize>,
     parent_new_row_index: Option<usize>,
+    col_idx: usize,
 ) -> StructureButtonPlan {
     StructureButtonPlan {
-        text: "(no changes)".to_string(),
-        text_color: None,
+        text: "→ View".to_string(),
+        text_color: Some(Color32::from_rgb(100, 150, 255)),
         fill_color: None,
-        decided: true,
+        decided: false, // Allow clicking to navigate
         parent_row_index,
         parent_new_row_index,
-        path: Vec::new(),
+        path: vec![col_idx],
         allow_quick_accept: false,
-        tooltip: None,
+        tooltip: Some("Click to view child table data"),
     }
 }
 
@@ -89,7 +90,17 @@ fn build_structure_button_plan(
         preview_rows,
         Some(&sr.schema_headers),
     );
-    let mut text = preview;
+    // Fallback to row count if preview is empty
+    let mut text = if preview.is_empty() {
+        let row_count = preview_rows.len();
+        if row_count > 0 {
+            format!("({} rows)", row_count)
+        } else {
+            "(empty)".to_string()
+        }
+    } else {
+        preview
+    };
     let mut text_color = None;
     let mut fill_color = None;
 
@@ -170,7 +181,7 @@ pub fn prepare_ai_suggested_plan(
                                 )
                             })
                             .unwrap_or_else(|| {
-                                structure_button_placeholder(Some(rr.row_index), None)
+                                structure_button_placeholder(Some(rr.row_index), None, *col_idx)
                             });
                         columns.push((*entry, AiSuggestedCellPlan::Structure(plan)));
                     }
@@ -224,7 +235,7 @@ pub fn prepare_ai_suggested_plan(
                                     && matches_detail_path(sr, detail_ctx, *col_idx)
                             })
                             .map(|sr| build_structure_button_plan(sr, detail_ctx, None, Some(idx)))
-                            .unwrap_or_else(|| structure_button_placeholder(None, Some(idx)));
+                            .unwrap_or_else(|| structure_button_placeholder(None, Some(idx), *col_idx));
                         columns.push((*entry, AiSuggestedCellPlan::Structure(plan)));
                     }
                     ColumnEntry::Regular(actual_col) => {
@@ -289,7 +300,7 @@ pub fn prepare_ai_suggested_plan(
                                     && matches_detail_path(sr, detail_ctx, *col_idx)
                             })
                             .map(|sr| build_structure_button_plan(sr, detail_ctx, None, Some(idx)))
-                            .unwrap_or_else(|| structure_button_placeholder(None, Some(idx)));
+                            .unwrap_or_else(|| structure_button_placeholder(None, Some(idx), *col_idx));
                         columns.push((*entry, AiSuggestedCellPlan::Structure(plan)));
                     }
                     ColumnEntry::Regular(actual_col) => {

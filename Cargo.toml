@@ -38,6 +38,7 @@ rusqlite = { version = "0.32", features = ["bundled", "serde_json"] }
 uuid = { version = "1.11", features = ["v4"] }
 base64 = "0.22"
 reqwest = { version = "0.12", features = ["blocking"] }
+open = "5.3"
 
 [target.'cfg(windows)'.dependencies]
 winapi = { version = "0.3", features = ["winbase", "fileapi", "handleapi", "namedpipeapi", "synchapi", "errhandlingapi", "winnt", "winerror"] }

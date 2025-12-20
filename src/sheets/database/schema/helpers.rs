@@ -85,6 +85,7 @@ pub fn sql_type_for_column(data_type: ColumnDataType) -> &'static str {
         ColumnDataType::Bool => "INTEGER",
         ColumnDataType::I64 => "INTEGER",
         ColumnDataType::F64 => "REAL",
+        ColumnDataType::Link => "TEXT",
     }
 }
 
@@ -106,6 +107,7 @@ pub fn metadata_type_to_column_data_type(type_str: &str) -> ColumnDataType {
         "Bool" => ColumnDataType::Bool,
         "I64" => ColumnDataType::I64,
         "F64" => ColumnDataType::F64,
+        "Link" => ColumnDataType::Link,
         _ => ColumnDataType::String,
     }
 }

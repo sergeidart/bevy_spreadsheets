@@ -38,23 +38,22 @@ pub struct AiCallLogEntry {
     pub is_error: bool,
 }
 
-/// Phase 1 intermediate data - stored after initial discovery call, before Phase 2 deep review
+/// Batch processing context - stored when processing AI results
+/// Fields are retained for debugging and future use even if not currently accessed
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
-pub struct Phase1IntermediateData {
-    /// All rows from Phase 1 AI response
-    pub all_ai_rows: Vec<Vec<String>>,
-    /// Indices of rows that are duplicates (in all_ai_rows, after originals)
+pub struct BatchProcessingContext {
+    /// Indices of rows that are duplicates (potential merges)
     pub duplicate_indices: Vec<usize>,
     /// Number of original rows sent
     pub original_count: usize,
     /// Included column indices
     pub included_columns: Vec<usize>,
-    /// Context for sending Phase 2
+    /// Category context
     pub category: Option<String>,
+    /// Sheet name context
     pub sheet_name: String,
-    #[allow(dead_code)] // Used in other modules but compiler doesn't track cross-module usage
-    pub key_prefix_count: usize,
-    /// Original row indices from Phase 1 (for structure processing)
+    /// Original row indices (for mapping)
     pub original_row_indices: Vec<usize>,
 }
 
@@ -130,6 +129,16 @@ pub struct StructureReviewEntry {
     pub schema_headers: Vec<String>,
     #[allow(dead_code)]
     pub original_rows_count: usize,
+    /// Orphaned rows that belong to this child table but have unmatched parent prefix.
+    /// These are duplicated across all parent entries so they're always visible.
+    /// Each inner Vec is the row data (column values).
+    pub orphaned_ai_rows: Vec<Vec<String>>,
+    /// The claimed ancestry for each orphaned row (what the AI said the parent was).
+    /// Parallel array to orphaned_ai_rows.
+    pub orphaned_claimed_ancestries: Vec<Vec<String>>,
+    /// Track which orphaned rows have been decided (accepted/declined).
+    /// Parallel array to orphaned_ai_rows. True = decided, False = pending.
+    pub orphaned_decided: Vec<bool>,
 }
 
 impl StructureReviewEntry {

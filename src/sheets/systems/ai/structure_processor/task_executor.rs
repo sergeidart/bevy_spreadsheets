@@ -109,6 +109,15 @@ pub fn process_structure_ai_jobs(
     info!("Built {} parent groups with {} total rows for structure batch",
         parent_groups.len(), parent_groups.iter().map(|g| g.rows.len()).sum::<usize>());
 
+    // Build ancestor lineage from navigation stack (for deep hierarchy support)
+    // Order: root-to-leaf, e.g., ["Su-7B", "Underfuselage Pylon"] when at grandchild level
+    let ancestor_display_values: Vec<String> = state.ai_navigation_stack
+        .iter()
+        .filter_map(|ctx| ctx.parent_display_name.clone())
+        .collect();
+    
+    info!("Ancestor lineage from navigation stack: {:?}", ancestor_display_values);
+
     // Build and send AI payload
     let payload = build_payload(
         &job,
@@ -116,6 +125,7 @@ pub fn process_structure_ai_jobs(
         column_contexts,
         parent_groups,
         allow_row_additions,
+        &ancestor_display_values,
     );
 
     let payload_json = match serde_json::to_string(&payload) {
@@ -136,6 +146,7 @@ pub fn process_structure_ai_jobs(
     python_executor::rewrite_python_processor();
 
     // Spawn background AI task
+    let ancestor_count = ancestor_display_values.len();
     spawn_ai_task(
         runtime,
         commands,
@@ -144,6 +155,7 @@ pub fn process_structure_ai_jobs(
         job,
         included_indices,
         row_partitions,
+        ancestor_count,
     );
 }
 
@@ -157,44 +169,61 @@ fn build_payload(
     column_contexts: Vec<Option<String>>,
     parent_groups: Vec<ParentGroup>,
     allow_row_additions: bool,
+    ancestor_display_values: &[String],
 ) -> BatchPayload {
     let structure_label = job.label.as_deref().unwrap_or("structure");
     
-    // Build rows_data by prepending parent key to each child row
-    // Format: [parent_key, child_col1, child_col2, ...]
-    // This matches the regular AI call format - parent key is just another visible column
+    // Build rows_data by prepending ancestor lineage + parent key to each child row
+    // Format: [ancestor1, ancestor2, ..., parent_key, child_col1, child_col2, ...]
+    // This provides full context for deep hierarchy (e.g., "Su-7B" > "Underfuselage Pylon" > grandchild data)
     let mut rows_data = Vec::new();
     for group in &parent_groups {
         let parent_key_value = &group.parent_key.key;
         if group.rows.is_empty() {
-            // No existing child rows - send one row with just the parent key
-            // This tells the AI what parent to generate rows for
+            // No existing child rows - send one row with ancestors + parent key
             let schema_len = column_contexts.len();
-            let mut empty_row = vec![parent_key_value.clone()];
+            let mut empty_row: Vec<String> = ancestor_display_values.iter().cloned().collect();
+            empty_row.push(parent_key_value.clone());
             empty_row.extend(vec![String::new(); schema_len]);
             rows_data.push(empty_row);
         } else {
-            // Send all existing child rows with parent key prepended
+            // Send all existing child rows with ancestors + parent key prepended
             for child_row in &group.rows {
-                let mut full_row = vec![parent_key_value.clone()];
+                let mut full_row: Vec<String> = ancestor_display_values.iter().cloned().collect();
+                full_row.push(parent_key_value.clone());
                 full_row.extend(child_row.iter().cloned());
                 rows_data.push(full_row);
             }
         }
     }
     
-    // Add parent key column context as first element
+    // Build column contexts with ancestor contexts + parent key context + data columns
+    // Ancestor contexts are None for now (could be enhanced later with actual AI contexts)
+    let ancestor_contexts: Vec<Option<String>> = ancestor_display_values
+        .iter()
+        .map(|_| None) // TODO: Could walk lineage to get AI contexts for ancestors
+        .collect();
+    
     let parent_key_context = parent_groups
         .first()
         .and_then(|g| g.parent_key.context.clone());
     
-    let mut full_column_contexts = vec![parent_key_context];
+    let mut full_column_contexts = ancestor_contexts;
+    full_column_contexts.push(parent_key_context);
     full_column_contexts.extend(column_contexts);
     
-    let user_prompt = format!(
-        "Fill in or correct the '{}' rows. The first column is the parent identifier - do not modify it. Fill in the remaining columns for each row.",
-        structure_label
-    );
+    let ancestor_count = ancestor_display_values.len();
+    let user_prompt = if ancestor_count > 0 {
+        format!(
+            "Fill in or correct the '{}' rows. The first {} columns are the ancestor lineage, followed by the parent identifier - do not modify them. Fill in the remaining columns for each row.",
+            structure_label, ancestor_count + 1
+        )
+    } else {
+        format!(
+            "Fill in or correct the '{}' rows. The first column is the parent identifier - do not modify it. Fill in the remaining columns for each row.",
+            structure_label
+        )
+    };
 
     // Use exact same format as regular AI calls - no special metadata
     BatchPayload {
@@ -227,6 +256,7 @@ fn spawn_ai_task(
     job: crate::ui::elements::editor::state::StructureSendJob,
     included_indices: Vec<usize>,
     row_partitions: Vec<usize>,
+    ancestor_count: usize,
 ) {
     let commands_entity = commands.spawn_empty().id();
     let api_key_for_task = api_key;
@@ -239,7 +269,7 @@ fn spawn_ai_task(
             Some(k) if !k.is_empty() => k,
             _ => {
                 send_error_result(ctx, commands_entity, "API Key not set".to_string(),
-                    &job_clone, &included_cols_clone, &row_partitions_clone).await;
+                    &job_clone, &included_cols_clone, &row_partitions_clone, ancestor_count).await;
                 return;
             }
         };
@@ -265,6 +295,7 @@ fn spawn_ai_task(
                             target_rows: job_clone.target_rows.clone(),
                             original_row_partitions: original_partitions,
                             generation_id: job_clone.generation_id,
+                            ancestor_count,
                         }),
                     },
                 },
@@ -281,6 +312,7 @@ async fn send_error_result(
     job: &crate::ui::elements::editor::state::StructureSendJob,
     included_cols: &[usize],
     row_partitions: &[usize],
+    ancestor_count: usize,
 ) {
     let job_clone = job.clone();
     let included_cols_clone = included_cols.to_vec();
@@ -302,6 +334,7 @@ async fn send_error_result(
                         target_rows: job_clone.target_rows.clone(),
                         original_row_partitions: row_partitions_clone.clone(),
                         generation_id: job_clone.generation_id,
+                        ancestor_count,
                     }),
                 },
             },

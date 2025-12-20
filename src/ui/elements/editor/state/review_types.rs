@@ -22,6 +22,9 @@ pub struct RowReview {
     /// Cached dropdown options for each ancestor level
     /// Key: ancestor index, Value: (cached_ancestors_snapshot, options)
     pub ancestor_dropdown_cache: HashMap<usize, (Vec<String>, Vec<String>)>,
+    /// Whether this row is orphaned (parent prefix didn't match any known parent)
+    /// Orphaned rows should have their ancestor text rendered in red for re-parenting
+    pub is_orphan: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -41,4 +44,11 @@ pub struct NewRowReview {
     /// Cached dropdown options for each ancestor level
     /// Key: ancestor index, Value: (cached_ancestors_snapshot, options)
     pub ancestor_dropdown_cache: HashMap<usize, (Vec<String>, Vec<String>)>,
+    /// Projected row_index this new row would receive if accepted.
+    /// For duplicates (merge candidates), this is the matched original's row_index.
+    /// For genuinely new rows, this is max(existing) + sequence_number.
+    pub projected_row_index: usize,
+    /// Whether this row is orphaned (parent prefix didn't match any known parent)
+    /// Orphaned rows should have their ancestor text rendered in red for re-parenting
+    pub is_orphan: bool,
 }

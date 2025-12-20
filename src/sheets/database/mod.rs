@@ -77,7 +77,7 @@ pub fn open_or_create_db_for_category(category: &str) -> Result<rusqlite::Connec
     }
 }
 
-/// Convenience helper to persist column-level metadata: filter, ai_context, include flag.
+/// Convenience helper to persist column-level metadata: filter, ai_context, include flag, hidden flag.
 pub fn persist_column_metadata(
     category: &str,
     table_name: &str,
@@ -85,6 +85,7 @@ pub fn persist_column_metadata(
     filter_expr: Option<&str>,
     ai_context: Option<&str>,
     ai_include: Option<bool>,
+    hidden: Option<bool>,
     daemon_client: &daemon_client::DaemonClient,
 ) -> Result<(), String> {
     let db_filename = format!("{}.db", category);
@@ -99,6 +100,7 @@ pub fn persist_column_metadata(
                 filter_expr,
                 ai_context,
                 ai_include,
+                hidden,
                 Some(&db_filename),
                 daemon_client,
             )

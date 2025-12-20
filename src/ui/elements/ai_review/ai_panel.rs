@@ -187,22 +187,14 @@ pub fn send_selected_rows(
     state.ai_last_send_root_category = root_category.clone();
     state.ai_last_send_root_sheet = root_sheet_opt.clone();
 
-    // Plan structure paths from root metadata ONLY if we're NOT already inside a structure sheet
-    // When inside a structure sheet, we're sending a single-row request and don't want to trigger
-    // additional structure processing jobs (which would cause duplicate requests)
-    if !in_structure_sheet {
-        if let Some(root_sheet_name) = &root_sheet_opt {
-            if let Some(root_meta_ref) = registry
-                .get_sheet(&root_category, root_sheet_name)
-                .and_then(|s| s.metadata.as_ref())
-            {
-                state.ai_planned_structure_paths = root_meta_ref.ai_included_structure_paths();
-            }
-        }
-    } else {
-        // Clear planned structure paths when inside a structure to prevent duplicate jobs
-        state.ai_planned_structure_paths.clear();
-        // Also clear any existing structure reviews since we're doing a direct review
+    // Plan structure paths from the CURRENT sheet's metadata
+    // This allows structure columns to be shown in review even when starting from a child table
+    // The Director handles multi-step processing, so we just need to plan paths from current sheet
+    // Use `category` (not root_category) since we already verified the sheet exists with this category
+    state.ai_planned_structure_paths = meta.ai_included_structure_paths();
+    
+    // Clear any existing structure reviews since we're starting fresh
+    if in_structure_sheet {
         state.ai_structure_reviews.clear();
     }
 
@@ -249,6 +241,7 @@ pub fn draw_ai_panel(
     rename_group_writer: &mut EventWriter<RequestRenameAiSchemaGroup>,
     select_group_writer: &mut EventWriter<RequestSelectAiSchemaGroup>,
     delete_group_writer: &mut EventWriter<RequestDeleteAiSchemaGroup>,
+    director_session: &mut crate::sheets::systems::ai::processor::DirectorSession,
 ) {
     // NEW: Show navigation breadcrumb with back button when in child table drill-down
     if !state.ai_navigation_stack.is_empty() {
@@ -278,8 +271,11 @@ pub fn draw_ai_panel(
             ui.label(egui::RichText::new(breadcrumb).color(egui::Color32::from_rgb(100, 150, 255)));
             
             if let Some(ref parent_filter) = state.ai_parent_filter {
+                let display = parent_filter.parent_display_name.as_ref()
+                    .map(|n| n.as_str())
+                    .unwrap_or_else(|| "?");
                 ui.label(
-                    egui::RichText::new(format!("(filtered by parent_key={})", parent_filter.parent_row_index))
+                    egui::RichText::new(format!("(parent: {})", display))
                         .italics()
                         .color(egui::Color32::GRAY)
                 );
@@ -306,6 +302,7 @@ pub fn draw_ai_panel(
             session_api_key,
             Some(runtime),
             Some(commands),
+            Some(director_session),
         );
 
         // Add Rows toggle - properly resolve from structure context if inside virtual sheet
@@ -416,5 +413,6 @@ pub fn draw_ai_panel(
         runtime,
         commands,
         session_api_key,
+        director_session,
     );
 }

@@ -291,6 +291,24 @@ def execute_ai_query(api_key: str, payload_json: str) -> str:  # noqa: D401
             pass  # URL context metadata not available
         
         raw_text = (response.text or "").strip()
+        
+        if not raw_text:
+            # Check for safety blocks or other reasons
+            error_details = "Empty response from model."
+            try:
+                if response.candidates:
+                    candidate = response.candidates[0]
+                    if hasattr(candidate, 'finish_reason'):
+                        error_details += f" Finish reason: {candidate.finish_reason}."
+                    if hasattr(candidate, 'safety_ratings'):
+                        error_details += f" Safety ratings: {candidate.safety_ratings}."
+                if hasattr(response, 'prompt_feedback'):
+                    error_details += f" Prompt feedback: {response.prompt_feedback}."
+            except Exception as e:
+                error_details += f" (Failed to extract details: {e})"
+            
+            return make_err(error_details)
+
         if raw_text.startswith("```json"):
             raw_text = raw_text[7:].strip()
         if raw_text.startswith("```"):

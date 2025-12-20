@@ -1,6 +1,9 @@
 // src/sheets/systems/ai/mod.rs
 // AI systems extracted from ui::systems
 
+// New unified processor (replacing multi-step logic)
+pub mod processor;
+
 // Result handlers
 pub mod legacy;
 pub mod results; // Batch result handlers (split into submodules)

@@ -9,6 +9,22 @@ pub struct AppSettings {
     /// Whether to show hidden sheets (override metadata.hidden) in lists
     /// Default: false (respect hidden flags)
     pub show_hidden_sheets: bool,
+    /// AI depth limit: how many levels of structure tables to process
+    /// Default: 2
+    #[serde(default = "default_ai_depth_limit")]
+    pub ai_depth_limit: usize,
+    /// AI width limit: how many rows to send in one batch
+    /// Default: 32
+    #[serde(default = "default_ai_width_limit")]
+    pub ai_width_limit: usize,
+}
+
+fn default_ai_depth_limit() -> usize {
+    2
+}
+
+fn default_ai_width_limit() -> usize {
+    32
 }
 
 impl Default for AppSettings {
@@ -16,6 +32,8 @@ impl Default for AppSettings {
         Self {
             fps_setting: FpsSetting::default(),
             show_hidden_sheets: false,
+            ai_depth_limit: default_ai_depth_limit(),
+            ai_width_limit: default_ai_width_limit(),
         }
     }
 }

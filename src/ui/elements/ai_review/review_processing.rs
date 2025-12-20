@@ -177,12 +177,21 @@ pub fn process_structure_review_changes(
         // Navigation drilldown mode - use parent filter and navigation stack
         let parent_ctx = state.ai_navigation_stack.last();
         let parent_review_index = parent_ctx.and_then(|ctx| ctx.parent_review_index);
+        let is_parent_new_row = parent_ctx.map(|ctx| ctx.is_parent_new_row).unwrap_or(false);
 
         if let (Some(parent_ctx), Some(parent_review_idx)) = (parent_ctx, parent_review_index) {
             state.ai_structure_reviews.iter().position(|sr| {
-                sr.root_category == parent_ctx.category
-                    && sr.root_sheet == parent_ctx.sheet_name
-                    && sr.parent_row_index == parent_review_idx
+                let category_matches = sr.root_category == parent_ctx.category;
+                let sheet_matches = sr.root_sheet == parent_ctx.sheet_name;
+                
+                // Match based on whether parent is a new row or existing row
+                let parent_matches = if is_parent_new_row {
+                    sr.parent_new_row_index == Some(parent_review_idx)
+                } else {
+                    sr.parent_row_index == parent_review_idx && sr.parent_new_row_index.is_none()
+                };
+                
+                category_matches && sheet_matches && parent_matches
             })
         } else {
             None
@@ -192,13 +201,17 @@ pub fn process_structure_review_changes(
     };
 
     if let Some(entry_index) = entry_index {
-        if !new_accept.is_empty()
+        // Only process if there are actual actions to perform
+        let has_actions = !new_accept.is_empty()
             || !new_cancel.is_empty()
             || !existing_accept.is_empty()
-            || !existing_cancel.is_empty()
-        {
-            info!("Found entry_index: {}", entry_index);
+            || !existing_cancel.is_empty();
+        
+        if !has_actions {
+            return; // No actions, nothing to do
         }
+        
+        info!("Found entry_index: {}", entry_index);
         let entry_ptr: *mut _ = &mut state.ai_structure_reviews[entry_index];
         // Safe because we don't move state.ai_structure_reviews while using entry_ptr
         unsafe {
@@ -246,21 +259,68 @@ pub fn process_structure_review_changes(
                     rr.row_index = new_idx;
                 }
             }
-            // New rows
-            if !new_accept.is_empty() {
-                info!("Child table: Processing {} new accepts", new_accept.len());
-            }
+            // New rows - separate orphans from regular new rows
+            // Orphans have projected_row_index >= 1000 and is_orphan = true
+            let mut orphan_accepts: Vec<usize> = Vec::new();
+            let mut orphan_cancels: Vec<usize> = Vec::new();
+            let mut regular_new_accept: Vec<usize> = Vec::new();
+            let mut regular_new_cancel: Vec<usize> = Vec::new();
+            
             for &idx in new_accept {
+                if let Some(nr) = state.ai_new_row_reviews.get(idx) {
+                    if nr.is_orphan && nr.projected_row_index >= 1000 {
+                        // This is an orphan - compute the orphan index
+                        let orphan_idx = nr.projected_row_index - 1000;
+                        orphan_accepts.push(orphan_idx);
+                        info!("Child table: Orphan accept at idx={}, orphan_idx={}", idx, orphan_idx);
+                    } else {
+                        regular_new_accept.push(idx);
+                    }
+                }
+            }
+            for &idx in new_cancel {
+                if let Some(nr) = state.ai_new_row_reviews.get(idx) {
+                    if nr.is_orphan && nr.projected_row_index >= 1000 {
+                        // This is an orphan - compute the orphan index
+                        let orphan_idx = nr.projected_row_index - 1000;
+                        orphan_cancels.push(orphan_idx);
+                        info!("Child table: Orphan decline at idx={}, orphan_idx={}", idx, orphan_idx);
+                    } else {
+                        regular_new_cancel.push(idx);
+                    }
+                }
+            }
+            
+            // Process regular new rows
+            if !regular_new_accept.is_empty() {
+                info!("Child table: Processing {} new accepts", regular_new_accept.len());
+            }
+            for &idx in &regular_new_accept {
                 info!("Child table: Applying accept for new row {}", idx);
                 structure_row_apply_new(entry, idx, &state.ai_new_row_reviews, true);
             }
-            if !new_cancel.is_empty() {
-                info!("Child table: Processing {} new cancels", new_cancel.len());
+            if !regular_new_cancel.is_empty() {
+                info!("Child table: Processing {} new cancels", regular_new_cancel.len());
             }
-            for &idx in new_cancel {
+            for &idx in &regular_new_cancel {
                 info!("Child table: Applying decline for new row {}", idx);
                 structure_row_apply_new(entry, idx, &state.ai_new_row_reviews, false);
             }
+            
+            // Mark orphans as decided in the entry
+            // Note: orphans are duplicated across all entries, so we mark them decided in THIS entry
+            // They'll remain visible in other parent entries until decided there too
+            for orphan_idx in orphan_accepts.iter().chain(orphan_cancels.iter()) {
+                if *orphan_idx < entry.orphaned_decided.len() {
+                    entry.orphaned_decided[*orphan_idx] = true;
+                    info!("Child table: Marked orphan_idx={} as decided", orphan_idx);
+                }
+            }
+            
+            // For accepted orphans, we could potentially add them to the parent's child rows
+            // But for now, just mark them decided (declined orphans just disappear)
+            // TODO: If user re-parented an orphan via dropdown, apply that change here
+            
             // Remove accepted/declined new rows from temp view to mimic top-level behavior
             if !new_accept.is_empty() || !new_cancel.is_empty() {
                 let mut to_remove: Vec<usize> = Vec::new();

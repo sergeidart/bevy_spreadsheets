@@ -193,6 +193,9 @@ pub struct StructureProcessingContext {
     /// Original structure row counts per parent (before AI adds rows)
     pub original_row_partitions: Vec<usize>,
     pub generation_id: u64,
+    /// Number of ancestor columns prepended to each row (for deep hierarchy support)
+    /// This count does NOT include the immediate parent key (which is always 1)
+    pub ancestor_count: usize,
 }
 
 #[derive(Event, Debug, Clone)]

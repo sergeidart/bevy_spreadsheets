@@ -4,6 +4,7 @@ use bevy::prelude::*;
 use bevy_egui::egui;
 
 use super::ai_panel::send_selected_rows;
+use crate::sheets::systems::ai::processor::{DirectorSession, start_director_session_v2};
 use crate::{
     sheets::resources::SheetRegistry,
     ui::elements::editor::state::{AiModeState, EditorWindowState},
@@ -22,6 +23,7 @@ pub(crate) fn draw_left_panel_impl(
     session_api_key: &SessionApiKey,
     runtime: Option<&TokioTasksRuntime>,
     commands: Option<&mut bevy::prelude::Commands>,
+    director_session: Option<&mut DirectorSession>,
 ) {
     let selection_allowed = matches!(
         state.ai_mode,
@@ -71,7 +73,21 @@ pub(crate) fn draw_left_panel_impl(
     // Perform batch send once if triggered
     if trigger_batch_send {
         if let (Some(rt), Some(mut_cmds)) = (runtime, commands) {
-            send_selected_rows(state, registry, rt, mut_cmds, session_api_key, None);
+            // Use the new Director-based v2 processing if director_session is available
+            if let Some(session) = director_session {
+                start_director_session_v2(
+                    state,
+                    registry,
+                    session_api_key,
+                    rt,
+                    mut_cmds,
+                    session,
+                    None,
+                );
+            } else {
+                // Fallback to legacy send_selected_rows
+                send_selected_rows(state, registry, rt, mut_cmds, session_api_key, None);
+            }
             ui.ctx().request_repaint();
         }
     }

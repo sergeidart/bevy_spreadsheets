@@ -64,6 +64,8 @@ pub fn show_settings_popup(
             if let Ok(loaded) = load_settings_from_file::<AppSettings>() {
                 state.fps_setting = loaded.fps_setting;
                 state.show_hidden_sheets = loaded.show_hidden_sheets;
+                state.ai_depth_limit = loaded.ai_depth_limit;
+                state.ai_width_limit = loaded.ai_width_limit;
             }
         }
     }
@@ -165,7 +167,7 @@ pub fn show_settings_popup(
                         if fps_choice != state.fps_setting {
                             state.fps_setting = fps_choice;
                             // Persist the change (and current structure sheets toggle)
-                            let settings_to_save = AppSettings { fps_setting: state.fps_setting, show_hidden_sheets: state.show_hidden_sheets };
+                            let settings_to_save = AppSettings { fps_setting: state.fps_setting, show_hidden_sheets: state.show_hidden_sheets, ai_depth_limit: state.ai_depth_limit, ai_width_limit: state.ai_width_limit };
                             if let Err(e) = save_settings_to_file(&settings_to_save) {
                                 info!("Failed to save AppSettings: {}", e);
                             }
@@ -178,12 +180,38 @@ pub fn show_settings_popup(
                 if ui_h.checkbox(&mut show_hidden, "Show hidden sheets").on_hover_text("Temporarily show all sheets regardless of their hidden flag").changed() {
                     state.show_hidden_sheets = show_hidden;
                     // Persist both settings together
-                    let settings_to_save = AppSettings { fps_setting: state.fps_setting, show_hidden_sheets: state.show_hidden_sheets };
+                    let settings_to_save = AppSettings { fps_setting: state.fps_setting, show_hidden_sheets: state.show_hidden_sheets, ai_depth_limit: state.ai_depth_limit, ai_width_limit: state.ai_width_limit };
                     if let Err(e) = save_settings_to_file(&settings_to_save) {
                         info!("Failed to save AppSettings: {}", e);
                     }
                 }
                     });
+            ui.separator();
+            ui.heading("AI Settings");
+            ui.horizontal_wrapped(|ui_h| {
+                ui_h.label("Depth limit:");
+                let mut depth = state.ai_depth_limit;
+                let depth_drag = egui::DragValue::new(&mut depth).range(1..=10).speed(0.1);
+                if ui_h.add(depth_drag).on_hover_text("How many levels of structure tables to process (default: 2)").changed() {
+                    state.ai_depth_limit = depth;
+                    let settings_to_save = AppSettings { fps_setting: state.fps_setting, show_hidden_sheets: state.show_hidden_sheets, ai_depth_limit: state.ai_depth_limit, ai_width_limit: state.ai_width_limit };
+                    if let Err(e) = save_settings_to_file(&settings_to_save) {
+                        info!("Failed to save AppSettings: {}", e);
+                    }
+                }
+            });
+            ui.horizontal_wrapped(|ui_h| {
+                ui_h.label("Width limit (rows per batch):");
+                let mut width = state.ai_width_limit;
+                let width_drag = egui::DragValue::new(&mut width).range(1..=256).speed(1.0);
+                if ui_h.add(width_drag).on_hover_text("How many rows to send in one AI batch (default: 32)").changed() {
+                    state.ai_width_limit = width;
+                    let settings_to_save = AppSettings { fps_setting: state.fps_setting, show_hidden_sheets: state.show_hidden_sheets, ai_depth_limit: state.ai_depth_limit, ai_width_limit: state.ai_width_limit };
+                    if let Err(e) = save_settings_to_file(&settings_to_save) {
+                        info!("Failed to save AppSettings: {}", e);
+                    }
+                }
+            });
             // Quick Copy section hidden in DB-focused mode.
              if ui.button("Close").clicked(){
                   close_requested = true;

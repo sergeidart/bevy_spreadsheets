@@ -144,7 +144,7 @@ pub fn build_parent_groups(
             row_partitions.push(partition_size);
             parent_groups.push(ParentGroup { parent_key, rows: group_rows });
         } else {
-            // Existing row - read from database directly
+            // Existing row - check if we have AI review data first, then fall back to grid
             let root_row = match root_sheet.grid.get(target_row) {
                 Some(r) => r,
                 None => {
@@ -153,12 +153,53 @@ pub fn build_parent_groups(
                 }
             };
             
-            // Get the key column value for this row - use first data column (typically Name at index 1)
-            let key_value = root_row.get(1).cloned().unwrap_or_default();
+            // Get the key column value for this row
+            // Use configured key_col_index if available, otherwise:
+            // - For root tables: default to column 1 (Name)
+            // - For structure tables: default to column 2 (first data column after row_index, parent_key)
+            let default_key_idx = if root_meta.is_structure_table() { 2 } else { 1 };
+            let effective_key_idx = key_col_index.unwrap_or(default_key_idx);
+            
+            // Debug: log available reviews
+            info!(
+                "Looking for review: target_row={}, ai_row_reviews count={}, review row_indices={:?}",
+                target_row,
+                state.ai_row_reviews.len(),
+                state.ai_row_reviews.iter().map(|r| r.row_index).collect::<Vec<_>>()
+            );
+            
+            // IMPORTANT: Check if this row has AI review data - use AI values instead of original grid
+            // This ensures structure calls use the AI-modified parent identifiers from the root batch
+            let key_value = if let Some(review) = state.ai_row_reviews.iter().find(|r| r.row_index == target_row) {
+                // Find the key column in the review's non_structure_columns mapping
+                info!(
+                    "Found review for row {}: non_structure_columns={:?}, ai={:?}",
+                    target_row, review.non_structure_columns, review.ai
+                );
+                if let Some(pos) = review.non_structure_columns.iter().position(|&col| col == effective_key_idx) {
+                    let ai_val = review.ai.get(pos).cloned().unwrap_or_default();
+                    info!(
+                        "Existing row {}: using AI review key_value='{}' from position {} (col {})",
+                        target_row, ai_val, pos, effective_key_idx
+                    );
+                    ai_val
+                } else {
+                    // Key column not in AI review, fall back to grid
+                    let grid_val = root_row.get(effective_key_idx).cloned().unwrap_or_default();
+                    info!(
+                        "Existing row {}: key col {} not in review, using grid key_value='{}'",
+                        target_row, effective_key_idx, grid_val
+                    );
+                    grid_val
+                }
+            } else {
+                // No AI review for this row, use original grid
+                root_row.get(effective_key_idx).cloned().unwrap_or_default()
+            };
             
             info!(
-                "Existing row {}: extracted parent key_value='{}' from column 1 (Name)",
-                target_row, key_value
+                "Existing row {}: final parent key_value='{}' from column {} (key_col_index={:?})",
+                target_row, key_value, effective_key_idx, key_col_index
             );
             
             // Build parent key info

@@ -35,11 +35,35 @@ pub fn handle_cell_update(
     for event in events.read() {
         let category = event.category.clone();
         let sheet_name = event.sheet_name.clone();
-        let row_idx = event.row_index;
         let col_idx = event.col_index;
         let new_value = &event.new_value;
 
         // Virtual structures deprecated - all sheets are now real DB-backed tables
+
+        // Resolve row_idx: first try as grid index, then as DB row_index
+        let row_idx = {
+            let event_row_idx = event.row_index;
+            // Check if event.row_index is valid as grid index
+            if let Some(sheet_data) = registry.get_sheet(&category, &sheet_name) {
+                if event_row_idx < sheet_data.grid.len() {
+                    // Valid grid index
+                    event_row_idx
+                } else {
+                    // Try to find grid index by DB row_index
+                    if let Some(grid_idx) = sheet_data.row_indices
+                        .iter()
+                        .position(|&ri| ri == event_row_idx as i64)
+                    {
+                        grid_idx
+                    } else {
+                        // Neither valid - will fail validation
+                        event_row_idx
+                    }
+                }
+            } else {
+                event_row_idx
+            }
+        };
 
         // Validate cell location
         let validation_result = validation::validate_cell_location(

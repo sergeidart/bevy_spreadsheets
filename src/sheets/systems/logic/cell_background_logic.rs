@@ -64,7 +64,7 @@ fn get_validation_based_background(
     match validation_state {
         ValidationState::Empty => {
             match basic_type {
-                ColumnDataType::String => text_cell_fill,
+                ColumnDataType::String | ColumnDataType::Link => text_cell_fill,
                 ColumnDataType::I64 | ColumnDataType::F64 => dark_cell_fill,
                 _ => Color32::TRANSPARENT,
             }
@@ -75,8 +75,8 @@ fn get_validation_based_background(
             {
                 // numeric and linked columns use standard dark fill
                 dark_cell_fill
-            } else if basic_type == ColumnDataType::String {
-                // text columns darker fill
+            } else if matches!(basic_type, ColumnDataType::String | ColumnDataType::Link) {
+                // text and link columns darker fill
                 text_cell_fill
             } else {
                 Color32::TRANSPARENT

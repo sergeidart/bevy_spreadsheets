@@ -72,7 +72,7 @@ fn show_basic_type_selector(ui: &mut egui::Ui, state: &mut EditorWindowState) {
             .selected_text(format!("{:?}", state.options_basic_type_select))
             .show_ui(ui, |ui| {
                 use ColumnDataType::*;
-                let all_types = [String, Bool, I64, F64];
+                let all_types = [String, Bool, I64, F64, Link];
                 for t in all_types.iter() {
                     ui.selectable_value(
                         &mut state.options_basic_type_select,

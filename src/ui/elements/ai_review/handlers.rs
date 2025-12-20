@@ -134,7 +134,7 @@ pub fn process_existing_accept(
     selected_category: &Option<String>,
     active_sheet_name: &str,
     cell_update_writer: &mut EventWriter<UpdateCellEvent>,
-    _registry: &SheetRegistry,
+    registry: &SheetRegistry,
 ) {
     let mut sorted = indices.to_vec();
     if sorted.is_empty() {
@@ -146,55 +146,68 @@ pub fn process_existing_accept(
     for idx in sorted {
         if idx < state.ai_row_reviews.len() {
             let rr = state.ai_row_reviews.remove(idx);
-            for (pos, actual_col) in rr.non_structure_columns.iter().enumerate() {
-                let choice = rr
-                    .choices
-                    .get(pos)
-                    .copied()
-                    .unwrap_or(ReviewChoice::Original);
-                // Skip parent_key column (non-editable) to avoid overriding it during merge
-                if *actual_col == 1 {
-                    continue;
+
+            // Find grid index for this DB row index
+            // AI reviews store DB row_index (stable index), but UpdateCellEvent expects grid index
+            let grid_row_index = if let Some(sheet) = registry.get_sheet(selected_category, active_sheet_name) {
+                sheet.row_indices.iter().position(|&ri| ri == rr.row_index as i64)
+            } else {
+                None
+            };
+
+            if let Some(grid_idx) = grid_row_index {
+                for (pos, actual_col) in rr.non_structure_columns.iter().enumerate() {
+                    let choice = rr
+                        .choices
+                        .get(pos)
+                        .copied()
+                        .unwrap_or(ReviewChoice::Original);
+                    // Skip parent_key column (non-editable) to avoid overriding it during merge
+                    if *actual_col == 1 {
+                        continue;
+                    }
+                    if matches!(choice, ReviewChoice::AI) {
+                        if let Some(ai_val) = rr.ai.get(pos).cloned() {
+                            cell_update_writer.write(UpdateCellEvent {
+                                category: selected_category.clone(),
+                                sheet_name: active_sheet_name.to_string(),
+                                row_index: grid_idx,
+                                col_index: *actual_col,
+                                new_value: ai_val,
+                            });
+                        }
+                    }
                 }
-                if matches!(choice, ReviewChoice::AI) {
-                    if let Some(ai_val) = rr.ai.get(pos).cloned() {
+
+                // Apply ancestor overrides: virtual structures deprecated; skip this logic
+
+                // Write structure cells to parent cell as JSON for database persistence
+                let structure_entries = take_structure_entries_for_existing(state, rr.row_index);
+                for entry in structure_entries {
+                    // Skip rejected structures
+                    if entry.rejected {
+                        state.ai_structure_reviews.push(entry);
+                        continue;
+                    }
+
+                    // Serialize structure rows to JSON and write to parent cell
+                    if let Some(col_idx) = entry.structure_path.first() {
+                        let rows_to_write = get_rows_to_serialize(&entry);
+                        let json_string = serialize_structure_rows_to_json(rows_to_write, &entry.schema_headers);
+                        
+                        // Write JSON to parent row's structure column
+                        // This will trigger database persistence in update_cell system
                         cell_update_writer.write(UpdateCellEvent {
                             category: selected_category.clone(),
                             sheet_name: active_sheet_name.to_string(),
-                            row_index: rr.row_index,
-                            col_index: *actual_col,
-                            new_value: ai_val,
+                            row_index: grid_idx,
+                            col_index: *col_idx,
+                            new_value: json_string,
                         });
                     }
                 }
-            }
-
-            // Apply ancestor overrides: virtual structures deprecated; skip this logic
-
-            // Write structure cells to parent cell as JSON for database persistence
-            let structure_entries = take_structure_entries_for_existing(state, rr.row_index);
-            for entry in structure_entries {
-                // Skip rejected structures
-                if entry.rejected {
-                    state.ai_structure_reviews.push(entry);
-                    continue;
-                }
-
-                // Serialize structure rows to JSON and write to parent cell
-                if let Some(col_idx) = entry.structure_path.first() {
-                    let rows_to_write = get_rows_to_serialize(&entry);
-                    let json_string = serialize_structure_rows_to_json(rows_to_write, &entry.schema_headers);
-                    
-                    // Write JSON to parent row's structure column
-                    // This will trigger database persistence in update_cell system
-                    cell_update_writer.write(UpdateCellEvent {
-                        category: selected_category.clone(),
-                        sheet_name: active_sheet_name.to_string(),
-                        row_index: rr.row_index,
-                        col_index: *col_idx,
-                        new_value: json_string,
-                    });
-                }
+            } else {
+                bevy::prelude::warn!("Could not find grid index for DB row index {} in sheet {}", rr.row_index, active_sheet_name);
             }
 
             state.ai_selected_rows.remove(&rr.row_index);
@@ -355,7 +368,15 @@ pub fn process_new_accept(
                 for entry in structure_entries {
                     if entry.rejected { continue; }
                     let rows_to_serialize = get_rows_to_serialize(&entry);
+                    info!(
+                        "Serializing structure for new parent row: decided={}, rejected={}, rows_to_serialize.len()={}, merged_rows.len()={}, ai_rows.len()={}, schema_headers={:?}",
+                        entry.decided, entry.rejected, rows_to_serialize.len(), entry.merged_rows.len(), entry.ai_rows.len(), entry.schema_headers
+                    );
+                    if !rows_to_serialize.is_empty() {
+                        info!("  First row to serialize: {:?}", rows_to_serialize.first());
+                    }
                     let json_string = serialize_structure_rows_to_json(rows_to_serialize, &entry.schema_headers);
+                    info!("  Serialized JSON: {}", json_string);
                     let col_index = *entry.structure_path.first().unwrap_or(&0);
                     init_vals.push((col_index, json_string));
                 }

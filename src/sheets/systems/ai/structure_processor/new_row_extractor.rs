@@ -23,29 +23,47 @@ pub fn extract_from_new_row_context(
     key_header: &Option<String>,
     root_meta: &crate::sheets::sheet_metadata::SheetMetadata,
 ) -> (ParentKeyInfo, Vec<Vec<String>>, usize) {
-    // Extract key column value from Phase 1 data (full_ai_row)
-    // This allows us to use Phase 1 parent data for structure calls without needing Phase 2
-    let key_value = if let Some(full_row) = &context.full_ai_row {
-        // Calculate dynamic prefix to skip parent keys from ancestor levels
-        let dynamic_prefix = if let Some(new_row_review) = state.ai_new_row_reviews.get(context.new_row_index) {
-            full_row.len().saturating_sub(new_row_review.ai.len())
-        } else {
-            // If review not available yet, assume root level (no prefix)
-            0
-        };
+    // Extract key column value from NewRowReview data
+    // key_col_index is the grid column index for the key (e.g., 1 for Name column)
+    // We need to find the corresponding position in non_structure_columns to get the value from ai array
+    
+    let key_value = if let Some(new_row_review) = state.ai_new_row_reviews.get(context.new_row_index) {
+        // Determine which key column to use:
+        // - For root tables: default to column 1 (Name)
+        // - For structure tables: default to column 2 (first data column after row_index, parent_key)
+        let default_key_col = if root_meta.is_structure_table() { 2 } else { 1 };
+        let effective_key_col = key_col_index.unwrap_or(default_key_col);
         
-        // Extract first data column value (after any parent prefixes) as parent key
-        full_row.get(dynamic_prefix).cloned().unwrap_or_default()
-    } else if let Some(new_row_review) = state.ai_new_row_reviews.get(context.new_row_index) {
-        // Fallback: Use Phase 2 data if Phase 1 data not available
-        new_row_review.ai.first().cloned().unwrap_or_default()
+        // Find the position of the key column in non_structure_columns
+        let key_position = new_row_review.non_structure_columns
+            .iter()
+            .position(|&col| col == effective_key_col);
+        
+        if let Some(pos) = key_position {
+            // Extract from ai array at the found position
+            new_row_review.ai.get(pos).cloned().unwrap_or_default()
+        } else {
+            // Key column not in non_structure_columns, try first ai value as fallback
+            warn!(
+                "Key column {} not found in non_structure_columns {:?}, using first ai value",
+                effective_key_col, new_row_review.non_structure_columns
+            );
+            new_row_review.ai.first().cloned().unwrap_or_default()
+        }
     } else {
-        String::new()
+        // Fallback: try full_ai_row if available
+        if let Some(full_row) = &context.full_ai_row {
+            // Calculate dynamic prefix to skip parent keys from ancestor levels
+            let dynamic_prefix = 0; // No review available, assume no prefix
+            full_row.get(dynamic_prefix).cloned().unwrap_or_default()
+        } else {
+            String::new()
+        }
     };
 
     info!(
-        "New row context {}: extracted parent key_value='{}' from Phase 1 data (full_ai_row)",
-        target_row, key_value
+        "New row context {}: extracted parent key_value='{}' (key_col_index={:?})",
+        target_row, key_value, key_col_index
     );
 
     // Build parent key info for this new row context

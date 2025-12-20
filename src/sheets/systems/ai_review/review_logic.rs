@@ -168,10 +168,13 @@ pub fn build_merged_columns(
 
                         // Only show columns that were actually sent
                         if is_structure {
-                            // Structure columns: Check if this structure path was planned for sending
-                            // Structure data is sent separately via ai_planned_structure_paths
+                            // Structure columns: Show if marked for AI inclusion
+                            // These display as navigate buttons, not data columns
+                            // Check ai_planned_structure_paths OR ai_include_in_send=true
                             let structure_path = vec![col_idx];
-                            if state.ai_planned_structure_paths.contains(&structure_path) {
+                            let in_planned = state.ai_planned_structure_paths.contains(&structure_path);
+                            let is_included = matches!(col_def.ai_include_in_send, Some(true));
+                            if in_planned || is_included {
                                 result.push(ColumnEntry::Structure(col_idx));
                             }
                         } else if union_cols.contains(&col_idx) {
@@ -197,47 +200,83 @@ pub fn build_merged_columns(
 }
 
 /// Gathers ancestor key columns for display
-/// For navigation drill-down mode, builds from navigation stack
+/// For navigation drill-down mode, builds from navigation stack - ALL ancestors in order
 /// For legacy structure detail mode, returns empty (deprecated)
 pub fn gather_ancestor_key_columns(
     state: &EditorWindowState,
     in_structure_mode: bool,
-    active_sheet_name: &str,
-    selected_category_clone: &Option<String>,
+    _active_sheet_name: &str,
+    _selected_category_clone: &Option<String>,
     registry: &SheetRegistry,
 ) -> Vec<(String, String)> {
     if in_structure_mode {
-        // Navigation drill-down mode: build ancestor keys from navigation stack
+        // Navigation drill-down mode: build ancestor keys from ENTIRE navigation stack
         if !state.ai_navigation_stack.is_empty() {
-            // We're in a child table - show parent_key column as ancestor
-            let parent_ctx = state.ai_navigation_stack.last().unwrap();
+            let mut ancestor_columns = Vec::new();
             
-            // Get parent_key display value from cached parent display name
-            let parent_key_value = parent_ctx.parent_display_name.clone()
-                .unwrap_or_else(|| "?".to_string());
-            
-            // Get child sheet metadata to get parent_key column header
-            if let Some(child_sheet) = registry.get_sheet(selected_category_clone, active_sheet_name) {
-                if let Some(metadata) = &child_sheet.metadata {
-                    // parent_key is always at column index 1 in structure tables
-                    if let Some(col_def) = metadata.columns.get(1) {
-                        return vec![(col_def.header.clone(), parent_key_value)];
+            // Walk through entire navigation stack, building ancestor columns in order
+            for (level_idx, nav_ctx) in state.ai_navigation_stack.iter().enumerate() {
+                // Get display value from this navigation context
+                let display_value = nav_ctx.parent_display_name.clone()
+                    .unwrap_or_else(|| "?".to_string());
+                
+                // Try to get a meaningful header name for this ancestor level
+                // For first level (root), use the first data column name from the parent sheet
+                // For subsequent levels, use "parent_key" label for that sheet
+                let header = if level_idx == 0 {
+                    // First ancestor: get first data column from root sheet
+                    if let Some(parent_sheet) = registry.get_sheet(&nav_ctx.category, &nav_ctx.sheet_name) {
+                        if let Some(metadata) = &parent_sheet.metadata {
+                            // Find first non-technical column (skip row_index and parent_key)
+                            metadata.columns.iter()
+                                .find(|col| !col.header.eq_ignore_ascii_case("row_index") 
+                                          && !col.header.eq_ignore_ascii_case("parent_key"))
+                                .map(|col| col.header.clone())
+                                .unwrap_or_else(|| "Name".to_string())
+                        } else {
+                            "Name".to_string()
+                        }
+                    } else {
+                        "Name".to_string()
                     }
-                }
+                } else {
+                    // Subsequent ancestors: use first data column from that parent sheet
+                    if let Some(parent_sheet) = registry.get_sheet(&nav_ctx.category, &nav_ctx.sheet_name) {
+                        if let Some(metadata) = &parent_sheet.metadata {
+                            // Find first non-technical column (skip row_index and parent_key)
+                            metadata.columns.iter()
+                                .find(|col| !col.header.eq_ignore_ascii_case("row_index") 
+                                          && !col.header.eq_ignore_ascii_case("parent_key"))
+                                .map(|col| col.header.clone())
+                                .unwrap_or_else(|| format!("Parent {}", level_idx + 1))
+                        } else {
+                            format!("Parent {}", level_idx + 1)
+                        }
+                    } else {
+                        format!("Parent {}", level_idx + 1)
+                    }
+                };
+                
+                ancestor_columns.push((header, display_value));
             }
             
-            // Fallback
-            return vec![("parent_key".to_string(), parent_key_value)];
+            return ancestor_columns;
         }
         
         // Old structure detail mode - deprecated, returns empty
         Vec::new()
     } else {
         // Fallback: if we have stored context prefixes for the current reviews, use them
+        // First try to look up by a row index from existing row reviews
         if let Some(rr) = state.ai_row_reviews.first() {
             if let Some(pairs) = state.ai_context_prefix_by_row.get(&rr.row_index) {
                 return pairs.clone();
             }
+        }
+        // If no existing row reviews, just take any entry from the prefix map
+        // (all rows should have the same prefix pairs in a given session)
+        if let Some(pairs) = state.ai_context_prefix_by_row.values().next() {
+            return pairs.clone();
         }
         Vec::new()
     }
@@ -324,7 +363,7 @@ pub fn process_accept_all_normal_mode(
         add_row_writer,
         registry,
     );
-    cancel_batch(state);
+    cancel_batch(state, None);
 }
 
 /// Processes decline all action in structure mode

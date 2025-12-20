@@ -31,6 +31,7 @@ mod visual_copier;
 mod cli;
 
 use sheets::SheetsPlugin;
+use sheets::systems::ai::processor::{DirectorSession, poll_director_results};
 use ui::EditorUiPlugin;
 use visual_copier::VisualCopierPlugin;
 use clap::Parser;
@@ -140,6 +141,7 @@ fn run_gui_app() {
         .insert_resource(IpcReceiver(std::sync::Arc::new(std::sync::Mutex::new(ipc_receiver))))
         .init_resource::<ApiKeyDisplayStatus>()
         .init_resource::<SessionApiKey>()
+        .init_resource::<DirectorSession>()
         .add_plugins(
             DefaultPlugins
                 .set(WindowPlugin {
@@ -170,6 +172,7 @@ fn run_gui_app() {
         ))
         .add_systems(Update, fps_limit)
         .add_systems(Update, handle_ipc_focus_request)
+        .add_systems(Update, poll_director_results)
         .run();
     
     // Keep the instance guard alive until the app exits

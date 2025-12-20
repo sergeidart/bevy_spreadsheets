@@ -40,7 +40,7 @@ pub(crate) fn draw_ai_batch_review_panel(
 
     // Auto-exit if nothing left
     if should_auto_exit(state, state.ai_structure_detail_context.is_some()) {
-        cancel_batch(state);
+        cancel_batch(state, None);
         return;
     }
 
@@ -305,13 +305,13 @@ pub(crate) fn draw_ai_batch_review_panel(
                     {
                         use crate::ui::elements::ai_review::navigation;
                         
-                        // Determine the row index to drill from
-                        if let Some(row_idx) = parent_row_idx.or(parent_new_row_idx) {
-                            // Call drill_into_structure to set up navigation and load child reviews
+                        // Call drill_into_structure with both indices to properly handle existing vs new rows
+                        if parent_row_idx.is_some() || parent_new_row_idx.is_some() {
                             navigation::drill_into_structure(
                                 state,
                                 structure_path[0],  // column_index is first element of path
-                                row_idx,
+                                parent_row_idx,
+                                parent_new_row_idx,
                                 registry,
                             );
                         } else {
@@ -326,6 +326,6 @@ pub(crate) fn draw_ai_batch_review_panel(
 
     finalize_if_empty(state);
     if !state.ai_batch_review_active {
-        cancel_batch(state);
+        cancel_batch(state, None);
     }
 }

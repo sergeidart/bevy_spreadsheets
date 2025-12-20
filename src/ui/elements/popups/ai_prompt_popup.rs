@@ -1,5 +1,6 @@
 // src/ui/elements/popups/ai_prompt_popup.rs
 use crate::sheets::resources::SheetRegistry;
+use crate::sheets::systems::ai::processor::{DirectorSession, start_director_session_v2};
 use crate::ui::elements::editor::state::EditorWindowState;
 use crate::SessionApiKey;
 use bevy::prelude::*;
@@ -12,6 +13,7 @@ pub fn show_ai_prompt_popup(
     runtime: &TokioTasksRuntime,
     commands: &mut Commands,
     session_api_key: &SessionApiKey,
+    director_session: &mut DirectorSession,
 ) {
     if !state.show_ai_prompt_popup {
         return;
@@ -58,14 +60,14 @@ pub fn show_ai_prompt_popup(
 
     if do_send {
         state.show_ai_prompt_popup = false;
-        // Call the shared send_selected_rows function with the user prompt
-        use crate::ui::elements::ai_review::ai_panel::send_selected_rows;
-        send_selected_rows(
+        // Use the new Director-based v2 processing
+        start_director_session_v2(
             state,
             registry,
+            session_api_key,
             runtime,
             commands,
-            session_api_key,
+            director_session,
             Some(state.ai_prompt_input.clone()),
         );
     }

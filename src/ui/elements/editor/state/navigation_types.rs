@@ -37,6 +37,8 @@ pub struct NavigationContext {
     /// Parent review index (position in ai_row_reviews or ai_new_row_reviews)
     /// This is what StructureReviewEntry uses for parent_row_index matching
     pub parent_review_index: Option<usize>,
+    /// Whether the parent is a new row (from ai_new_row_reviews) vs existing row
+    pub is_parent_new_row: bool,
     /// Parent row display name (cached for breadcrumb)
     pub parent_display_name: Option<String>,
     /// Cached review state at this level (to restore when navigating back)
@@ -48,8 +50,8 @@ pub struct NavigationContext {
 /// Filter context for child table reviews
 #[derive(Debug, Clone)]
 pub struct ParentFilter {
-    /// Filter child rows where parent_key equals this row_index
-    pub parent_row_index: usize,
+    /// Human-readable display name of the parent row (e.g., the Name column value)
+    pub parent_display_name: Option<String>,
 }
 
 /// Status indicator for structure column drill-down buttons

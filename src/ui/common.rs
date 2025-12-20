@@ -292,6 +292,74 @@ pub fn edit_cell_widget(
                                         );
                                         response_opt = Some(resp);
                                     }
+                                    ColumnDataType::Link => {
+                                        // Link type: clickable URL with edit mode toggle
+                                        let edit_mode_id = id.with("link_edit_mode");
+                                        let is_edit_mode = widget_ui.memory(|mem| {
+                                            mem.data.get_temp::<bool>(edit_mode_id).unwrap_or(false)
+                                        });
+                                        
+                                        let resp = widget_ui.horizontal(|ui_h| {
+                                            // Toggle button (pencil icon or checkmark)
+                                            let toggle_text = if is_edit_mode { "✓" } else { "✎" };
+                                            let toggle_tooltip = if is_edit_mode { "Finish editing" } else { "Edit URL" };
+                                            if ui_h.small_button(toggle_text).on_hover_text(toggle_tooltip).clicked() {
+                                                ui_h.memory_mut(|mem| {
+                                                    mem.data.insert_temp(edit_mode_id, !is_edit_mode);
+                                                });
+                                            }
+                                            
+                                            if is_edit_mode {
+                                                // Edit mode: show text input
+                                                let mut temp_string = current_display_text.to_string();
+                                                let edit_resp = ui_h.add_sized(
+                                                    egui::vec2(ui_h.available_width(), ui_h.style().spacing.interact_size.y),
+                                                    egui::TextEdit::singleline(&mut temp_string)
+                                                        .frame(false)
+                                                        .hint_text("Enter URL..."),
+                                                );
+                                                if edit_resp.changed() {
+                                                    temp_new_value = Some(temp_string);
+                                                }
+                                                edit_resp
+                                            } else {
+                                                // View mode: show clickable link
+                                                let trimmed = current_display_text.trim();
+                                                if trimmed.is_empty() {
+                                                    ui_h.label(egui::RichText::new("(empty)").italics().weak())
+                                                } else {
+                                                    let link_resp = ui_h.add(
+                                                        egui::Label::new(
+                                                            egui::RichText::new(trimmed)
+                                                                .color(egui::Color32::from_rgb(100, 149, 237))
+                                                                .underline()
+                                                        )
+                                                        .sense(egui::Sense::click())
+                                                    );
+                                                    if link_resp.clicked() {
+                                                        // Open URL in default browser
+                                                        if let Err(e) = open::that(trimmed) {
+                                                            warn!("Failed to open URL '{}': {}", trimmed, e);
+                                                        }
+                                                    }
+                                                    link_resp.on_hover_text(format!("Click to open: {}", trimmed))
+                                                }
+                                            }
+                                        }).inner;
+                                        
+                                        let resp = add_cell_context_menu(
+                                            resp,
+                                            category,
+                                            sheet_name,
+                                            row_index,
+                                            col_index,
+                                            copy_events,
+                                            paste_events,
+                                            clipboard_buffer,
+                                            &mut temp_new_value,
+                                        );
+                                        response_opt = Some(resp);
+                                    }
                                 }
                             }
                         }
